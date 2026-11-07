@@ -46,7 +46,7 @@ A drag of frames, or of a whole group by its grip. While the pointer is down it 
 _Avoid_: Drag state
 
 **Proposal**:
-Where a gesture's drop would land: into a group at a slot, onto a loose frame (to make a group), onto the canvas, or, for a group, to a new place. It is never written into the layout. The canvas shows the layout as it would be if the proposal were dropped (the **view**), so there is nothing to put back when it is thrown away.
+Where a gesture's drop would land: into a group at a slot, onto a loose frame (to make a group), onto the canvas, or, for a group, to a new place. It is never written into the layout. The canvas is drawn from the layout as it would be if the proposal were dropped, so there is nothing to put back when it is thrown away.
 _Avoid_: Preview (that is how it is drawn), pending change
 
 **Drop**:

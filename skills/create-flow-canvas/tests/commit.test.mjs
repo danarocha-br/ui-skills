@@ -102,7 +102,7 @@ test("since(before) commits a change that already happened live: one undo step b
   assert.equal(layout.undo(), false);
 });
 
-test("since(before) still redraws when nothing changed, because the live gesture moved things on screen", () => {
+test("since(before) still redraws when nothing changed, because the edit was typed live and the page may show it", () => {
   const { layout, commit, calls } = setup();
   const before = layout.snapshot();
   commit.since(before, { redraw: ["layout"] });

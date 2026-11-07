@@ -266,17 +266,55 @@ test("a group drag is shown as a group drag", () => {
   assert.equal(shown.at(-1).regrouped, true);
 });
 
+test("a frame held over its own slot proposes nothing: no group lights up and the arrangement is not redrawn", () => {
+  const { gesture, shown } = setup();
+  gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2", pointer: { x: 0, y: 0 } });
+  eq(gesture.move(at(170, 100)), { kind: "stay" });
+  assert.equal(shown.at(-1).regrouped, false);
+  assert.equal(shown.at(-1).dropGroup, null);
+  eq(gesture.view().groups.map((g) => g.screens), [["s1", "s2", "s3"], ["s4", "s5"], ["s6"]]);
+  /* once it has been somewhere else, coming back to its own slot is a proposal like any other */
+  gesture.move(at(170, 450));
+  assert.equal(shown.at(-1).dropGroup, "g2");
+  eq(gesture.move(at(170, 100)), { kind: "lane", id: "g1", idx: 1 });
+  assert.equal(shown.at(-1).regrouped, true);
+  assert.equal(shown.at(-1).dropGroup, "g1");
+});
+
+test("a loose frame dragged over empty canvas is a free proposal that follows the pointer without a redraw", () => {
+  const { gesture, shown } = setup();
+  gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7", pointer: { x: 0, y: 0 } });
+  eq(gesture.move({ x: 2600, y: 900 }), { kind: "free", at: { s7: { x: 2600, y: 900 } } });
+  assert.equal(shown.at(-1).regrouped, false);
+  eq(gesture.move({ x: 2700, y: 950 }), { kind: "free", at: { s7: { x: 2700, y: 950 } } });
+});
+
+test("if the layout changes under a live drag (undo, group), the drop is discarded instead of applied to stale data", () => {
+  const { layout, gesture, log } = setup();
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
+  gesture.move(at(170, 450)); /* over g2 */
+  layout.mark();
+  layout.lanes = layout.lanes.filter((l) => l.id !== "g2"); /* ⌘Z or ⌘⇧G took the group away meanwhile */
+  const changed = layout.snapshot();
+  log.length = 0;
+  const out = gesture.end();
+  assert.equal(out.kind, "stay");
+  assert.equal(layout.snapshot(), changed, "the drop did not write anything");
+  assert.deepEqual(log, ["settle:s1", "redraw:layout"]);
+  assert.equal(gesture.active(), false);
+});
+
 test("a drop with no change is no undo step, but the page still settles and draws (frames slide home)", () => {
   const { layout, gesture, log } = setup();
   gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(170, 100)), { kind: "lane", id: "g1", idx: 1 });
+  eq(gesture.move(at(170, 100)), { kind: "stay" });
   log.length = 0;
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
   assert.equal(layout.undo(), false);
   assert.ok(!log.includes("save"));
   assert.deepEqual(log, ["settle:s2", "redraw:layout"]);
-  assert.equal(out.moved, false);
+  assert.equal(out.kind, "stay", "it never left its own slot, so there is nothing to say was moved or reordered");
 });
 
 test("pressing and letting go without moving changes nothing and does not move the frames", () => {

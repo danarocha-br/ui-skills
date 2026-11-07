@@ -6420,7 +6420,9 @@
                           { kind: "merge", ids, group }         dropped onto a loose frame: `group` is the new one
                           { kind: "move", id }                  a group moved
                           { kind: "stay", ids }                 let go without moving
-           gesture.cancel() -> true, or false when no gesture was live. Commits nothing.
+           gesture.cancel() -> true, or false when no gesture was live. Changes nothing and makes no undo step; the
+                          page is drawn from the layout again (a commit with nothing to record, so frames slide home).
+                          A drop is discarded the same way if the layout changed under the drag (undo, ⌘G).
            gesture.view() -> { groups, pos }   what to arrange now. The layout's own groups and positions when no
                           proposal is live; with one, the groups as they would be and the group's new place.
                           groups: [{ id, group, open, screens }]  (`group` is the layout's group, for its title etc.)
@@ -6430,7 +6432,7 @@
                     { kind: "merge", id }        onto the loose frame `id`
                     { kind: "free", at }         on the canvas; at: { [frameId]: { x, y } }
                     { kind: "move", id, at }     group `id` to `at`
-                    { kind: "stay" }             nothing yet
+                    { kind: "stay" }             nothing: not moved yet, or held over the slot it started in
          Preview    { kind: "frame"|"group", proposal, held: { [frameId]: { x, y } }, regrouped, dropGroup, mergeFrame }
                     regrouped: the arrangement changed (draw the whole layout), not only where the held frames are
                     dropGroup: the group to light up; mergeFrame: the loose frame to light up (or null)
@@ -6441,7 +6443,7 @@
         const keyOf = (p) => p.kind + "|" + (p.id || "") + "|" + (p.idx === undefined ? "" : p.idx);
 
         function create({ layout, commit, device, metrics, adapter }) {
-          let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal } */
+          let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal, last, base } */
           const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
 
           /* where a drop at this point (the centre of the frame under the pointer) would land */
@@ -6542,7 +6544,16 @@
               if (g) throw new Error("FlowGesture: a gesture is already live");
               if (press.kind === "group") {
                 const b = adapter.box(press.id);
-                g = { kind: "group", ids: [], id: press.id, start: { x: b.x, y: b.top }, w0: press.pointer, held: {}, proposal: { kind: "stay" } };
+                g = {
+                  kind: "group",
+                  ids: [],
+                  id: press.id,
+                  start: { x: b.x, y: b.top },
+                  w0: press.pointer,
+                  held: {},
+                  proposal: { kind: "stay" },
+                  base: layout.snapshot(),
+                };
               } else {
                 const off = {},
                   held = {};
@@ -6551,6 +6562,8 @@
                   off[i] = { x: press.pointer.x - r.x, y: press.pointer.y - r.y };
                   held[i] = { x: r.x, y: r.y };
                 });
+                /* where the frame under the pointer is now: holding it there proposes nothing */
+                const L0 = laneOf(press.pid);
                 g = {
                   kind: "frame",
                   ids: press.ids,
@@ -6559,6 +6572,8 @@
                   held,
                   was: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
                   proposal: { kind: "stay" },
+                  last: keyOf(L0 ? { kind: "lane", id: L0.id, idx: L0.screens.indexOf(press.pid) } : { kind: "free" }),
+                  base: layout.snapshot(),
                 };
               }
               announce(false);
@@ -6582,20 +6597,25 @@
                 p0 = held[g.pid];
               const t = targetAt({ x: p0.x + M.colW / 2, y: p0.y + M.phTop + M.phH / 2 }, g.ids);
               const next = t.kind === "free" ? { kind: "free", at: held } : t;
-              const regrouped = keyOf(next) !== keyOf(g.proposal);
+              const key = keyOf(next),
+                same = key === g.last;
               g.held = held;
-              g.proposal = next;
-              announce(regrouped);
-              return next;
+              g.last = key;
+              /* still where it started: no proposal (a loose frame's own spot is a proposal, it carries where it is) */
+              if (next.kind === "free" || !same) g.proposal = next;
+              announce(!same);
+              return g.proposal;
             },
             end() {
               if (!g) return null;
               const d = g;
               g = null;
               adapter.settle(d.ids);
-              let result;
+              let result = { kind: "stay", ids: d.ids };
+              /* the layout changed under the drag (undo, group): the proposal was made against data that is gone */
+              const stale = layout.snapshot() !== d.base;
               /* force: the preview moved things on screen, so the page is drawn from the layout whether or not it changed */
-              commit(() => (result = apply(d)), { redraw: ["layout"], force: true });
+              commit(() => !stale && (result = apply(d)), { redraw: ["layout"], force: true });
               return result;
             },
             cancel() {
