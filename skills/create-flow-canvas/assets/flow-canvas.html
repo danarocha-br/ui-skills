@@ -6607,6 +6607,7 @@
              loosePitch       loose frames in a row stand a column and this much apart (loosePlace, frames let out of a group)
              looseRowGap/Top  rows of loose frames: this far below the previous row; the first, this far below the groups
              titlePad         a closed group's title starts this far right of its deck
+             titleRise        and this far above the middle of the collapsed height
              band             where a dragged frame joins a group: how far past the group's corner and slots it reaches
                open  left, top (px); right (column widths past the last slot); bottom (px below the frames' column)
                closed  left, right (px past the deck's widest fan), top, bottom (px below the collapsed height)
@@ -6621,6 +6622,7 @@
           looseRowGap: 100,
           looseTop: 140,
           titlePad: 60,
+          titleRise: 100,
           band: Object.freeze({
             open: Object.freeze({ left: 90, right: 1.4, top: 30, bottom: 70 }),
             closed: Object.freeze({ left: 30, right: 70, top: 30, bottom: 20 }),
@@ -6650,10 +6652,12 @@
         /* the corner a group takes so its first frame lands at `place` (the frame it replaces) */
         const groupCornerFor = (place) => ({ x: place.x, y: place.y - WORLD.head });
         /* frame i of an open group whose box is `box` */
+        /* the widest fan a deck's band and exit allow for, whatever it holds */
+        const widestDeck = (m) => deckSpread(EDGES.deckPeeks + 1, m);
         const slotIn = (box, i, m) => ({ x: box.x + i * slotPitch(m), y: box.top + WORLD.head });
         const exitIn = (box, k, m) =>
           box.x +
-          (box.open ? box.n * slotPitch(m) + EDGES.exit.open : deckSpread(EDGES.deckPeeks + 1, m) + EDGES.exit.closed) +
+          (box.open ? box.n * slotPitch(m) + EDGES.exit.open : widestDeck(m) + EDGES.exit.closed) +
           k * (m.colW + EDGES.loosePitch);
         /* the area where a dragged frame joins a group, when `count` frames stay in it */
         function bandIn(box, count, m) {
@@ -6669,7 +6673,7 @@
           const b = EDGES.band.closed;
           return {
             x0: box.x - b.left,
-            x1: box.x + deckSpread(EDGES.deckPeeks + 1, m) + b.right,
+            x1: box.x + widestDeck(m) + b.right,
             y0: box.top - b.top,
             y1: box.top + m.collH + b.bottom,
           };
@@ -6881,7 +6885,7 @@
             dropBand: (id, { count }) => bandIn(arr.boxes[id], count, m),
             closedTitle: (id) => ({
               x: deckSpread(Math.max(arr.boxes[id].n, 1), m) + EDGES.titlePad,
-              y: Math.max(0, Math.round(m.collH / 2 - 100)),
+              y: Math.max(0, Math.round(m.collH / 2 - EDGES.titleRise)),
             }),
             /* the group a dragged frame would join at this point, and the slot it would take among the frames that
                stay (skip: the ones being dragged). A closed group always wins, an open one when its row's centre is
@@ -6905,6 +6909,7 @@
                   continue;
                 }
                 const idx = Math.max(0, Math.min(count, Math.round((pt.x - box.x - m.colW / 2) / slotPitch(m)))),
+                  /* the row's centre, counted a pitch a frame (no gap trimmed: this is how the nearest group has always been picked) */
                   dist = Math.abs(pt.x - (box.x + (Math.max(1, count) * slotPitch(m)) / 2));
                 if (!best || dist < best.dist) best = { group: id, idx, dist };
               }
@@ -7641,7 +7646,6 @@
          ====================================================================== */
       var FlowGesture = (function () {
         "use strict";
-        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
         const keyOf = (p) => p.kind + "|" + (p.id || "") + "|" + (p.idx === undefined ? "" : p.idx);
 
         function create({ layout, commit, device, geo, frames, now, adapter }) {

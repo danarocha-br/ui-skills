@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowDevice, FlowGeometry } from "./modules.mjs";
 
-const { WORLD, EDGES, frame, slotPitch, rowW, deckSpread, groupCornerFor, create } = FlowGeometry;
+const { WORLD, EDGES, frame, slotPitch, rowW, deckSpread, groupCornerFor, loosePlace, create } = FlowGeometry;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const DEVICES = FlowDevice.ids();
 const metricsOf = (dev) => FlowDevice.describe(dev).metrics;
@@ -33,6 +33,7 @@ test("every offset an extent is built from has a name, and the table is frozen",
     looseRowGap: 100,
     looseTop: 140,
     titlePad: 60,
+    titleRise: 100,
     band: {
       open: { left: 90, right: 1.4, top: 30, bottom: 70 },
       closed: { left: 30, right: 70, top: 30, bottom: 20 },
@@ -74,8 +75,8 @@ each("a deck is as wide as its card and the peeks of the cards behind it", (dev,
 
 each("an open group's box is its row and the padding, never narrower than the minimum; the arrangement agrees", (dev, M) => {
   const g = live(dev, [group("a", ids(1)), group("b", ids(5, "b"))]);
-  assert.equal(g.box("a").w, Math.max(rowW(1, M) + EDGES.rowPad, EDGES.rowMin), "a short row still has room to drop a frame into");
-  assert.equal(g.box("b").w, rowW(5, M) + EDGES.rowPad);
+  assert.equal(g.box("a").w, Math.max(M.colW + 60, 460), "a short row still has room to drop a frame into");
+  assert.equal(g.box("b").w, 5 * M.colW + 4 * WORLD.gap + 60);
 });
 
 test("a group is placed so its first frame lands where the frame it replaces was", () => {
@@ -89,6 +90,16 @@ each("where frame i of an open group sits, and where it is when a group is disso
     assert.equal(g.slotPlace("a", i).x, g.place(`s${i}`).x, "the arrangement puts it there too");
     assert.equal(g.slotPlace("a", i).y, g.place(`s${i}`).y);
   });
+});
+
+/* ---------- loose frames: rows of five below the groups ---------- */
+
+each("loose frames stand in rows of five, a column and 70 apart, the first row 140 below the groups", (dev, M) => {
+  const rowH = M.phTop + M.phH + M.cap + 100;
+  assert.deepEqual(plain(loosePlace(0, 1000, M)), { x: WORLD.groupLeft, y: 1000 + 140 });
+  assert.deepEqual(plain(loosePlace(3, 1000, M)), { x: WORLD.groupLeft + 3 * (M.colW + 70), y: 1000 + 140 });
+  assert.deepEqual(plain(loosePlace(5, 1000, M)), { x: WORLD.groupLeft, y: 1000 + 140 + rowH }, "the sixth starts the next row");
+  assert.deepEqual(plain(loosePlace(7, 1000, M)), { x: WORLD.groupLeft + 2 * (M.colW + 70), y: 1000 + 140 + rowH });
 });
 
 /* ---------- where frames taken out of a group land ---------- */
@@ -144,6 +155,7 @@ each("an empty group's drop zone is one slot wide when open and one card wide wh
 each("a closed group's title sits right of its deck, and half-way down the collapsed height less the head's offset", (dev, M) => {
   const g = live(dev, [group("a", ids(3), false), group("e", [], false)]);
   assert.deepEqual(plain(g.closedTitle("a")), { x: M.deckW + M.peekX * 2 + 60, y: Math.max(0, Math.round(M.collH / 2 - 100)) });
+  assert.equal(live(dev, [group("t", [], false)]).closedTitle("t").y >= 0, true, "never above the group's corner");
   assert.equal(g.closedTitle("e").x, M.deckW + 60, "an empty deck still has one card");
 });
 

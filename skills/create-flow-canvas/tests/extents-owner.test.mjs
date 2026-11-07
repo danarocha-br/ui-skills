@@ -23,7 +23,7 @@ const blocks = () => {
 };
 
 /* what only a measurement would name */
-const METRIC = /\b(colW|phTop|phH|collH|deckW|peekX|peekY|closedW)\b|[\w\])]\.cap\b|\b(WORLD|GAP)\b|\bM\.(gap|head)\b/;
+const METRIC = /\b(colW|phTop|phH|collH|deckW|peekX|peekY|closedW)\b|[\w\])]\.cap\b|\b(WORLD|GAP)\b|\b[mM]\.(gap|head)\b/;
 const lines = (src) => src.split("\n").map((text, i) => ({ text: text.trim(), n: i + 1 }));
 
 /* line (trimmed) -> why it is allowed. These are not measurements. */
@@ -43,7 +43,8 @@ test("no module but the geometry and the device measures a frame, a row, a deck 
     found,
     [],
     "ask FlowGeometry for the extent (frame, rowW, deckSpread, slotPlace, exitX, dropZone, dropBand, slotAt, closedTitle, groupCornerFor); " +
-      "if the question is new, answer it there, with a test in extents.test.mjs",
+      "if the question is new, answer it there, with a test in extents.test.mjs. Allowed lines (not measurements): " +
+      JSON.stringify(ALLOWED),
   );
 });
 
@@ -54,6 +55,7 @@ test("the allowed lines are still there (an exception for a line that is gone is
 
 test("the guard itself sees a copy of a formula (so a green run means something)", () => {
   const sample = [
+    "const t = m.gap + m.head;",
     "const w = Math.max(1, n) * (m.colW + GAP) - GAP;",
     "height: m.phTop + m.phH + m.cap + 60 + 'px',",
     "x: box.x + M.deckW + M.peekX * 3 + 120,",
@@ -72,4 +74,5 @@ test("the geometry module is where the extents are: it names every one of the of
   /* the pixel offsets live in the EDGES table; the formulas below it use the table, not the literal */
   const body = geo.slice(geo.indexOf("const groupH"));
   assert.ok(!/\b(460|1\.4)\b/.test(body), "a bare 460 or 1.4 in a formula: use EDGES");
+  assert.ok(!/[-+*/(]\s*(10|20|28|30|34|40|60|68|70|90|100|120|140)\b/.test(strip(geo.slice(geo.indexOf("const slotIn"), geo.indexOf("function arrange")))), "a bare pixel offset in an extent: use EDGES");
 });
