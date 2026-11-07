@@ -29,6 +29,18 @@ _Avoid_: Demo data, seed, fixture
 One route or view of the product, as the scan found it. A **frame** is how a screen is drawn on the canvas.
 _Avoid_: Page, artboard
 
+**Frame**:
+A screen as drawn on the canvas: the device screen with its caption under it. It is in a group, or **loose** (in no group). In a closed group a frame is drawn small, in the deck.
+_Avoid_: Card, tile, artboard
+
+**Place**:
+Where a frame is meant to be. A frame in a group takes its slot in the row or the deck; a loose frame is where the user put it on this device, or, when they have not, in the next free spot below the groups. A place is worked out from the layout each time and is not saved, apart from the positions the user chose.
+_Avoid_: Slot (that is one place in a row), coordinates
+
+**Slide**:
+A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Someone who asks for reduced motion gets no slide: frames are simply at their places.
+_Avoid_: Transition, animation (those name the browser mechanism, not the thing the user sees)
+
 **State**:
 One way a screen can look (empty, denied, error). A state is **reachable** when something in the product's UI leads to it, and **only reachable in code** when nothing does.
 _Avoid_: Variant, mode

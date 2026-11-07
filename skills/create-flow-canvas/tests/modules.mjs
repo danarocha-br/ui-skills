@@ -8,7 +8,14 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const html = fs.readFileSync(path.join(here, "../assets/flow-canvas.html"), "utf8");
-export const ENGINE_BLOCKS = ["scan-module", "layout-module", "commit-module", "annotations-module"];
+export const ENGINE_BLOCKS = [
+  "scan-module",
+  "layout-module",
+  "commit-module",
+  "annotations-module",
+  "routing-module",
+  "geometry-module",
+];
 /* the text of one <script id="..."> block (attributes after the id are allowed) */
 export const block = (id) => {
   const m = html.match(new RegExp(`^\\s*<script\\b[^>]*\\bid="${id}"[^>]*>([\\s\\S]*?)</script>`, "m"));
@@ -17,6 +24,6 @@ export const block = (id) => {
 };
 const sandbox = {};
 for (const id of ENGINE_BLOCKS) vm.runInNewContext(block(id), sandbox);
-export const { FlowScan, FlowLayout, FlowCommit, FlowAnnotations } = sandbox;
+export const { FlowScan, FlowLayout, FlowCommit, FlowAnnotations, FlowRouting, FlowGeometry } = sandbox;
 /* "" when the canvas has no sample yet, so the module tests still load and the sample's own test says why */
 export const sampleScan = html.match(/^\s*<script\b[^>]*\bid="flow-scan"/m) ? block("flow-scan") : "";

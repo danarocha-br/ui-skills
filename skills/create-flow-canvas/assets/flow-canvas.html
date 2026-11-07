@@ -531,7 +531,10 @@
         white-space: pre-wrap;
       }
 
-      /* a frame (one screen). In a group it takes a slot or a place in the deck; free, it goes where you put it. One transform, so every move is a transition. */
+      /* a frame (one screen). In a group it takes a slot or a place in the deck; free, it goes where you put it.
+         Where it is, and how big, belong to the page's geometry, which moves it by setting `translate` and `scale` as it
+         slides. The tilt and the fan are only looks, so they stay here, eased with the same time and curve the geometry
+         slides with (--open-*, --deck-*, set from it). */
       .col {
         position: absolute;
         left: 0;
@@ -540,22 +543,28 @@
         pointer-events: auto;
         transform-origin: 0 0;
         z-index: var(--z, 1);
-        transform: translate(var(--x, 0px), var(--y, 0px));
+        transform: none;
         transition:
-          transform 0.8s cubic-bezier(0.22, 1.12, 0.36, 1) var(--d, 0ms),
+          transform var(--open-dur, 800ms) var(--open-ease, cubic-bezier(0.22, 1.12, 0.36, 1)) var(--d, 0ms),
           opacity 0.35s;
       }
       .col.deck {
         cursor: pointer;
+        /* the fan is drawn inside the frame's scale, so its offset is divided by it to land at full size */
         transform: translate(
-            calc(var(--x) + var(--fx, 0px) * var(--fan, 0)),
-            calc(var(--y) + var(--fy, 0px) * var(--fan, 0))
+            calc(var(--fx, 0px) * var(--fan, 0) / var(--ds)),
+            calc(var(--fy, 0px) * var(--fan, 0) / var(--ds))
           )
-          scale(var(--ds))
           rotate(calc(var(--r, 0deg) * (1 + var(--fan, 0) * 0.9)));
         transition:
-          transform 0.6s cubic-bezier(0.5, 0, 0.15, 1) var(--d, 0ms),
+          transform var(--deck-dur, 600ms) var(--deck-ease, cubic-bezier(0.5, 0, 0.15, 1)) var(--d, 0ms),
           opacity 0.35s;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .col,
+        .col.deck {
+          transition: opacity 0.35s;
+        }
       }
       .col.fan {
         --fan: 1;
@@ -5487,7 +5496,7 @@
             layout.notes = state.notes;
           }
           /* what is saved and snapshotted: lanes keep id, screens and open; the page keeps its own
-             geometry on the same objects (x, top, pinned, el) and none of it is persisted */
+             DOM handle on the same objects (el), which is not persisted */
           const persisted = () => ({
             lanes: layout.lanes.map(groupRecord),
             pos: layout.pos,
@@ -5868,6 +5877,498 @@
       })();
     </script>
 
+    <script id="geometry-module">
+      /* ======================================================================
+         GEOMETRY MODULE
+         The one place that knows where a frame is. Two questions, answered together:
+         where it is meant to be (its place, from the groups, the saved positions and the device), and
+         where it is right now (the place it is sliding to, and the time it set off). Connectors, note
+         homing, hit-tests and the camera all ask here; nobody reads the page to find out.
+
+         The slide is the module's, not the stylesheet's: it holds each frame's start, destination, wait,
+         duration and curve, so "is it there yet" has an answer (restsAt, settled) that follows the flow's
+         length instead of a timeout. The page runs one frame loop while something is moving: step(now),
+         write what moved, redraw. It knows nothing about the page: no DOM, no clock, no layout object.
+         "now" is a number the caller hands in.
+
+         Interface
+           FlowGeometry.metrics(device)  -> m   the numbers one device gives the arrangement:
+                                                colW phH cap laneH collH deckS deckW peekX peekY closedW edge
+           FlowGeometry.WORLD            laneLeft top0 gap head phTop laneGap (world px)
+           FlowGeometry.MOVES            { open, deck }: { dur ms, curve [x1,y1,x2,y2] } the slide the stylesheet
+                                         eases its tilt and scale with, too
+           FlowGeometry.arrange(input, m) -> { places, boxes, bottom }    pure; nothing is written back
+             input  { groups: [{ id, screens, open }], screens: [every frame id, in order],
+                      pos: { [group or loose frame id]: { x, y } } }   the saved positions on this device
+             place  { x, y, r, s, d, z, fx, fy, deck, lane, i }   s = drawn scale; d = ms it waits before it slides
+             box    { x, top, w, h, n, open }                  one per group; empty ones too
+           FlowGeometry.slot(k, bottom, m) -> { x, y }          the k-th default place of a loose frame
+           FlowGeometry.bezier(x1, y1, x2, y2) -> (t) => y      the CSS cubic-bezier curve
+
+           const geo = FlowGeometry.create({ reduceMotion })
+           geo.setMetrics(m)    geo.setReduceMotion(bool)    geo.reset()
+           geo.retarget(input, now, { snap }) -> arrangement   new places; frames slide there from where they
+                                                are now. A frame seen for the first time, or any frame under
+                                                reduced motion or { snap }, is simply there.
+           geo.place(id)  geo.box(groupId)  geo.isDeck(id)     where it is meant to be; deck unless held
+           geo.rect(id, now) -> { x, y, s }                    the frame's corner and the scale it is drawn at, now; without now, its place
+           geo.screenRect(id, now)  geo.frameBox(id, now)      the screen area / the whole frame with its caption
+           geo.frameAt(point, now, { margin, skip }) -> id|null  the frame whose screen is under the point
+           geo.bounds()                                        everything on the canvas, with room round it
+           geo.hold(id, x, y)  geo.release(ids)                a frame under the pointer; it stays put, then slides home
+           geo.step(now) -> [ids that moved]    geo.restsAt()    geo.settled(now)
+         ====================================================================== */
+      var FlowGeometry = (function () {
+        const WORLD = Object.freeze({ laneLeft: 96, top0: 150, gap: 104, head: 220, phTop: 28, laneGap: 64 });
+        const ROTS = [-2, 1.6, -1.2, 2.2];
+        const PER_ROW = 5;
+
+        /* the CSS cubic-bezier: solve x(t) = progress for t (Newton, then bisection), return y(t) */
+        function bezier(x1, y1, x2, y2) {
+          const cx = 3 * x1,
+            bx = 3 * (x2 - x1) - cx,
+            ax = 1 - cx - bx,
+            cy = 3 * y1,
+            by = 3 * (y2 - y1) - cy,
+            ay = 1 - cy - by;
+          const X = (t) => ((ax * t + bx) * t + cx) * t,
+            Y = (t) => ((ay * t + by) * t + cy) * t,
+            dX = (t) => (3 * ax * t + 2 * bx) * t + cx;
+          return (x) => {
+            if (x <= 0) return 0;
+            if (x >= 1) return 1;
+            let t = x;
+            for (let i = 0; i < 8; i++) {
+              const err = X(t) - x,
+                d = dX(t);
+              if (Math.abs(err) < 1e-6) return Y(t);
+              if (Math.abs(d) < 1e-6) break;
+              t -= err / d;
+            }
+            let lo = 0,
+              hi = 1;
+            t = x;
+            for (let i = 0; i < 40; i++) {
+              if (X(t) < x) lo = t;
+              else hi = t;
+              t = (lo + hi) / 2;
+            }
+            return Y(t);
+          };
+        }
+        const MOVES = Object.freeze({
+          open: Object.freeze({ dur: 800, curve: Object.freeze([0.22, 1.12, 0.36, 1]) }),
+          deck: Object.freeze({ dur: 600, curve: Object.freeze([0.5, 0, 0.15, 1]) }),
+        });
+        const EASE = { open: bezier(...MOVES.open.curve), deck: bezier(...MOVES.deck.curve) };
+
+        function metrics(d) {
+          return {
+            colW: d.cw,
+            phH: d.ch,
+            cap: d.cap,
+            laneH: WORLD.head + d.body + d.cap,
+            collH: d.collH,
+            deckS: d.ds,
+            deckW: d.deckW,
+            peekX: d.peekX,
+            peekY: d.peekY,
+            closedW: d.closedW,
+            edge: d.edge,
+          };
+        }
+
+        /* loose frames with nowhere saved line up in rows of five below the groups */
+        function slot(k, bottom, m) {
+          return {
+            x: WORLD.laneLeft + (k % PER_ROW) * (m.colW + 70),
+            y: bottom + 140 + Math.floor(k / PER_ROW) * (WORLD.phTop + m.phH + m.cap + 100),
+          };
+        }
+
+        function arrange(input, m) {
+          const { groups, screens, pos } = input;
+          const places = {},
+            boxes = {};
+          let top = WORLD.top0,
+            bottom = WORLD.top0;
+          groups.forEach((g) => {
+            const n = g.screens.length,
+              h = g.open ? m.laneH : m.collH,
+              w = g.open ? Math.max(Math.max(1, n) * m.colW + (Math.max(1, n) - 1) * WORLD.gap + 60, 460) : m.closedW;
+            const p = pos[g.id];
+            let box;
+            if (p) box = { x: p.x, top: p.y, w, h, n, open: g.open };
+            else {
+              box = { x: WORLD.laneLeft, top, w, h, n, open: g.open };
+              if (n) top += h + WORLD.laneGap;
+            }
+            boxes[g.id] = box;
+            if (n) bottom = Math.max(bottom, box.top + h);
+            g.screens.forEach((id, i) => {
+              places[id] = g.open
+                ? {
+                    x: box.x + i * (m.colW + WORLD.gap),
+                    y: box.top + WORLD.head,
+                    r: 0,
+                    s: 1,
+                    d: i * 60,
+                    z: n - i,
+                    fx: 0,
+                    fy: 0,
+                    deck: false,
+                    lane: g.id,
+                    i,
+                  }
+                : {
+                    x: box.x + m.peekX * i,
+                    y: box.top + 10 + m.peekY * (n - 1 - i) - WORLD.phTop * m.deckS,
+                    r: ROTS[i % 4],
+                    s: m.deckS,
+                    d: (n - 1 - i) * 40,
+                    z: n - i,
+                    fx: 22 * i,
+                    fy: -10 * i,
+                    deck: true,
+                    lane: g.id,
+                    i,
+                  };
+            });
+          });
+          let k = 0;
+          screens.forEach((id) => {
+            if (places[id]) return;
+            const p = pos[id] || slot(k++, bottom, m);
+            places[id] = { x: p.x, y: p.y, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, lane: null, i: -1 };
+          });
+          return { places, boxes, bottom };
+        }
+
+        function create(opts = {}) {
+          let m = null,
+            reduce = !!opts.reduceMotion,
+            arr = { places: {}, boxes: {}, bottom: WORLD.top0 },
+            order = [];
+          const cur = {} /* where each frame was last reported to be */,
+            tw = {} /* id -> the slide it is on: { from, to, start, dur, ease } */,
+            held = new Set();
+
+          const posAt = (t, now) => {
+            const p = t.dur > 0 ? Math.min(1, Math.max(0, (now - t.start) / t.dur)) : 1;
+            if (p <= 0) return t.from;
+            if (p >= 1) return t.to;
+            const e = t.ease(p),
+              lerp = (a, b) => a + (b - a) * e;
+            return { x: lerp(t.from.x, t.to.x), y: lerp(t.from.y, t.to.y), s: lerp(t.from.s, t.to.s) };
+          };
+          const rect = (id, now) => {
+            const pl = arr.places[id];
+            if (!pl) return undefined;
+            if (now === undefined) return { x: pl.x, y: pl.y, s: pl.s };
+            const t = tw[id];
+            const p = t ? posAt(t, now) : cur[id] || pl;
+            return { x: p.x, y: p.y, s: p.s };
+          };
+          /* a frame is drawn from its corner, scaled about it: a deck frame is small, and grows as it fans out */
+          const screenRect = (id, now) => {
+            const r = rect(id, now);
+            return r && { x: r.x, y: r.y + WORLD.phTop * r.s, w: m.colW * r.s, h: m.phH * r.s };
+          };
+          const frameBox = (id, now) => {
+            const r = rect(id, now);
+            return r && { x: r.x, y: r.y, w: m.colW * r.s, h: (WORLD.phTop + m.phH + m.cap) * r.s };
+          };
+
+          function retarget(input, now, o = {}) {
+            if (!m) throw new Error("FlowGeometry: setMetrics before retarget");
+            const next = arrange(input, m);
+            order = input.screens.slice();
+            const keep = new Set(order);
+            Object.keys(cur).forEach((id) => {
+              if (!keep.has(id)) {
+                delete cur[id];
+                delete tw[id];
+                held.delete(id);
+              }
+            });
+            order.forEach((id) => {
+              let pl = next.places[id];
+              if (held.has(id)) {
+                pl = next.places[id] = { ...pl, x: cur[id].x, y: cur[id].y, s: 1 };
+                return;
+              }
+              if (!cur[id] || o.snap || reduce) {
+                cur[id] = { x: pl.x, y: pl.y, s: pl.s };
+                delete tw[id];
+                return;
+              }
+              const old = tw[id],
+                to = { x: pl.x, y: pl.y, s: pl.s };
+              const same = (a, b) => a.x === b.x && a.y === b.y && a.s === b.s;
+              if (old && same(old.to, to)) return;
+              const from = old ? posAt(old, now) : cur[id];
+              if (!old && same(from, to)) return;
+              const kind = pl.deck ? "deck" : "open";
+              /* it waits its turn only when it was at rest. Told again while still waiting it keeps the turn it
+                 was promised; told again on its way it carries on, so a group dragged along keeps trailing */
+              const start = old ? Math.max(now, old.start) : now + pl.d;
+              tw[id] = { from: { x: from.x, y: from.y, s: from.s }, to, start, dur: MOVES[kind].dur, ease: EASE[kind] };
+            });
+            arr = next;
+            return arr;
+          }
+
+          function step(now) {
+            const moved = [];
+            Object.keys(tw).forEach((id) => {
+              const t = tw[id],
+                p = posAt(t, now),
+                c = cur[id];
+              if (!c || c.x !== p.x || c.y !== p.y || c.s !== p.s) {
+                cur[id] = { x: p.x, y: p.y, s: p.s };
+                moved.push(id);
+              }
+              if (now >= t.start + t.dur) delete tw[id];
+            });
+            return moved;
+          }
+
+          return {
+            setMetrics(next) {
+              m = next;
+            },
+            setReduceMotion(on) {
+              reduce = !!on;
+              if (reduce)
+                Object.keys(tw).forEach((id) => {
+                  cur[id] = { x: tw[id].to.x, y: tw[id].to.y, s: tw[id].to.s };
+                  delete tw[id];
+                });
+            },
+            reset() {
+              Object.keys(cur).forEach((id) => delete cur[id]);
+              Object.keys(tw).forEach((id) => delete tw[id]);
+              held.clear();
+              arr = { places: {}, boxes: {}, bottom: WORLD.top0 };
+              order = [];
+            },
+            retarget,
+            step,
+            place: (id) => arr.places[id],
+            box: (id) => arr.boxes[id],
+            isDeck: (id) => !!arr.places[id] && arr.places[id].deck && !held.has(id),
+            rect,
+            screenRect,
+            frameBox,
+            frameAt(pt, now, o = {}) {
+              const margin = o.margin || 0;
+              for (const id of order) {
+                if (id === o.skip || !arr.places[id] || (arr.places[id].deck && !held.has(id))) continue;
+                const r = screenRect(id, now);
+                if (pt.x > r.x - margin && pt.x < r.x + r.w + margin && pt.y > r.y - margin && pt.y < r.y + r.h + margin)
+                  return id;
+              }
+              return null;
+            },
+            bounds() {
+              let x0 = 1e9,
+                y0 = 1e9,
+                x1 = -1e9,
+                y1 = -1e9;
+              const add = (x, y, w, h) => {
+                x0 = Math.min(x0, x);
+                y0 = Math.min(y0, y);
+                x1 = Math.max(x1, x + w);
+                y1 = Math.max(y1, y + h);
+              };
+              Object.values(arr.boxes).forEach((b) => b.n && add(b.x - 20, b.top - 20, b.w + 40, b.h + 40));
+              order.forEach((id) => {
+                if (arr.places[id].lane) return;
+                const b = frameBox(id);
+                add(b.x - 20, b.y - 20, b.w + 40, b.h + 40);
+              });
+              if (x0 > x1) return { x: 0, y: 0, w: 900, h: 600 };
+              return { x: x0 - 40, y: y0 - 60, w: x1 - x0 + 80, h: y1 - y0 + 120 };
+            },
+            hold(id, x, y) {
+              held.add(id);
+              cur[id] = { x, y, s: 1 };
+              delete tw[id];
+              if (arr.places[id]) arr.places[id] = { ...arr.places[id], x, y, s: 1 };
+            },
+            release(ids) {
+              ids.forEach((id) => held.delete(id));
+            },
+            restsAt() {
+              return Object.values(tw).reduce((a, t) => Math.max(a, t.start + t.dur), 0);
+            },
+            settled(now) {
+              return Object.values(tw).every((t) => now >= t.start + t.dur);
+            },
+          };
+        }
+
+        return { WORLD, MOVES, metrics, arrange, slot, bezier, create };
+      })();
+    </script>
+
+    <script id="routing-module">
+      /* ======================================================================
+         ROUTING MODULE
+         The line a connector draws between two frames: which sides it leaves and enters by, the
+         right-angle path between them, and the rounded shape with its arrowhead. Pure geometry on rects
+         handed in; it knows nothing about the page, the animation, or where a rect came from.
+
+         Interface
+           FlowRouting.route(a, b, edge)  -> { p0, pts }   from frame rect a to frame rect b
+             a, b   { x, y, w, h } the screen areas, in world px
+             edge   how far down a screen its side ports sit (the device's)
+           FlowRouting.shape({ pts })     -> { d, arr, mid }  svg path, arrowhead points, midpoint
+           FlowRouting.sidePt(rect, side, edge)  -> { x, y, nx, ny }   a port and the way it faces
+           FlowRouting.pickSides(a, b)    -> [fromSide, toSide]
+           FlowRouting.ortho(a, b)        a, b: { x, y, nx, ny }; b may be a free point (nx = ny = 0)
+           FlowRouting.rounded(pts, r)    svg path through pts with rounded corners
+         ====================================================================== */
+      var FlowRouting = (function () {
+        function sidePt(r, side, edge) {
+          const eo = Math.min(edge, r.h - 6);
+          return side === "R"
+            ? { x: r.x + r.w, y: r.y + eo, nx: 1, ny: 0 }
+            : side === "L"
+              ? { x: r.x, y: r.y + eo, nx: -1, ny: 0 }
+              : side === "B"
+                ? { x: r.x + r.w / 2, y: r.y + r.h, nx: 0, ny: 1 }
+                : { x: r.x + r.w / 2, y: r.y, nx: 0, ny: -1 };
+        }
+        function pickSides(a, b) {
+          const g = 24;
+          if (b.x >= a.x + a.w - g) return ["R", "L"];
+          if (b.x + b.w <= a.x + g) return ["L", "R"];
+          return b.y + b.h / 2 >= a.y + a.h / 2 ? ["B", "T"] : ["T", "B"];
+        }
+        /* flow lines are straight runs with rounded corners: horizontal out of a frame, one jog in the gutter, horizontal in.
+           a: { x, y, nx, ny } the port and the way it faces; b: the same, or a free point (nx = ny = 0) while dragging */
+        function ortho(a, b) {
+          const S = 26,
+            P = (x, y) => ({ x, y }),
+            out = [P(a.x, a.y)],
+            bn = b.nx || b.ny ? b : null,
+            horA = a.nx !== 0,
+            ahead = horA ? (b.x - a.x) * a.nx : (b.y - a.y) * a.ny,
+            opposed = !!bn && bn.nx === -a.nx && bn.ny === -a.ny;
+          const jog = (limit) => {
+            if (horA) {
+              if (ahead >= limit) {
+                const mx = (a.x + b.x) / 2;
+                out.push(P(mx, a.y), P(mx, b.y));
+              } else {
+                const ox = a.x + a.nx * S;
+                out.push(P(ox, a.y), P(ox, b.y));
+              }
+            } else if (ahead >= limit) {
+              const my = (a.y + b.y) / 2;
+              out.push(P(a.x, my), P(b.x, my));
+            } else {
+              const oy = a.y + a.ny * S;
+              out.push(P(a.x, oy), P(b.x, oy));
+            }
+          };
+          const around = () => {
+            /* the target is beside or behind: step out, go round, step in */
+            const s1 = P(a.x + a.nx * S, a.y + a.ny * S);
+            if (!bn) return out.push(s1, horA ? P(s1.x, b.y) : P(b.x, s1.y));
+            const s2 = P(b.x + bn.nx * S, b.y + bn.ny * S);
+            if (opposed && horA) {
+              const ym = Math.abs(a.y - b.y) < 24 ? Math.min(a.y, b.y) - 70 : (a.y + b.y) / 2;
+              out.push(s1, P(s1.x, ym), P(s2.x, ym), s2);
+            } else if (opposed) {
+              const xm = Math.abs(a.x - b.x) < 24 ? Math.max(a.x, b.x) + 70 : (a.x + b.x) / 2;
+              out.push(s1, P(xm, s1.y), P(xm, s2.y), s2);
+            } else out.push(s1, horA ? P(s1.x, s2.y) : P(s2.x, s1.y), s2);
+          };
+          if (!bn) jog(S);
+          else if (opposed && ahead >= 2 * S) jog(2 * S);
+          else if (!opposed && (horA ? bn.ny !== 0 : bn.nx !== 0)) {
+            const c = horA ? P(b.x, a.y) : P(a.x, b.y);
+            const okA = horA ? (c.x - a.x) * a.nx >= S : (c.y - a.y) * a.ny >= S;
+            const okB = horA ? (c.y - b.y) * bn.ny >= S : (c.x - b.x) * bn.nx >= S;
+            if (okA && okB) out.push(c);
+            else around();
+          } else around();
+          out.push(P(b.x, b.y));
+          /* drop repeats and points that sit on a straight run, so level frames get one clean line */
+          const clean = [];
+          out.forEach((q) => {
+            const l = clean[clean.length - 1];
+            if (!l || Math.abs(q.x - l.x) > 0.5 || Math.abs(q.y - l.y) > 0.5) clean.push(q);
+          });
+          return clean.filter((q, i) => {
+            if (i === 0 || i === clean.length - 1) return true;
+            const a = clean[i - 1],
+              n = clean[i + 1];
+            return Math.abs((q.x - a.x) * (n.y - q.y) - (q.y - a.y) * (n.x - q.x)) >= 0.5;
+          });
+        }
+        function rounded(pts, r = 14) {
+          let d = `M${pts[0].x} ${pts[0].y}`;
+          for (let i = 1; i < pts.length - 1; i++) {
+            const p = pts[i],
+              a = pts[i - 1],
+              b = pts[i + 1],
+              l1 = Math.hypot(p.x - a.x, p.y - a.y),
+              l2 = Math.hypot(b.x - p.x, b.y - p.y),
+              rr = Math.min(r, l1 / 2, l2 / 2),
+              u1 = { x: (p.x - a.x) / l1, y: (p.y - a.y) / l1 },
+              u2 = { x: (b.x - p.x) / l2, y: (b.y - p.y) / l2 };
+            d += `L${p.x - u1.x * rr} ${p.y - u1.y * rr}Q${p.x} ${p.y} ${p.x + u2.x * rr} ${p.y + u2.y * rr}`;
+          }
+          const L = pts[pts.length - 1];
+          return d + `L${L.x} ${L.y}`;
+        }
+        function polyMid(pts) {
+          const seg = pts.slice(1).map((q, i) => Math.hypot(q.x - pts[i].x, q.y - pts[i].y)),
+            half = seg.reduce((x, y) => x + y, 0) / 2;
+          let run = 0;
+          for (let i = 0; i < seg.length; i++) {
+            if (run + seg[i] >= half) {
+              const t = seg[i] ? (half - run) / seg[i] : 0;
+              return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * t, y: pts[i].y + (pts[i + 1].y - pts[i].y) * t };
+            }
+            run += seg[i];
+          }
+          return pts[pts.length - 1];
+        }
+        function shape(c) {
+          const pts = c.pts.map((q) => ({ x: q.x, y: q.y })),
+            n = pts.length,
+            tip = pts[n - 1],
+            prev = pts[n - 2],
+            l = Math.hypot(tip.x - prev.x, tip.y - prev.y) || 1,
+            t = { x: (tip.x - prev.x) / l, y: (tip.y - prev.y) / l },
+            pp = { x: -t.y, y: t.x },
+            mid = polyMid(pts);
+          /* the line stops where the arrowhead starts */
+          if (l > 12) pts[n - 1] = { x: tip.x - t.x * 9, y: tip.y - t.y * 9 };
+          const b1 = { x: tip.x - t.x * 10 + pp.x * 6.5, y: tip.y - t.y * 10 + pp.y * 6.5 },
+            b2 = { x: tip.x - t.x * 10 - pp.x * 6.5, y: tip.y - t.y * 10 - pp.y * 6.5 };
+          return {
+            d: rounded(pts),
+            arr: `${tip.x},${tip.y} ${b1.x},${b1.y} ${b2.x},${b2.y}`,
+            mid,
+          };
+        }
+        function route(a, b, edge) {
+          const [sa, sb] = pickSides(a, b),
+            p0 = sidePt(a, sa, edge),
+            p3 = sidePt(b, sb, edge);
+          return { p0, pts: ortho(p0, p3) };
+        }
+
+        return { sidePt, pickSides, ortho, rounded, polyMid, shape, route };
+      })();
+    </script>
+
+
     <script>
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
@@ -5949,12 +6450,19 @@
       const findingKind = (f) => FINDING_KINDS[f.kind] || PLAIN_FINDING;
 
       /* geometry (lane-local, world px) */
-      const LANE_LEFT = 96,
-        TOP0 = 150,
-        GAP = 104,
-        HEAD = 220,
-        PH_TOP = 28,
-        LANE_GAP = 64;
+      const {
+        laneLeft: LANE_LEFT,
+        top0: TOP0,
+        gap: GAP,
+        head: HEAD,
+        phTop: PH_TOP,
+        laneGap: LANE_GAP,
+      } = FlowGeometry.WORLD;
+      /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
+      const geo = FlowGeometry.create({
+        reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      });
+      matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (e) => geo.setReduceMotion(e.matches));
       let CAP,
         COL_W,
         PH_H,
@@ -6039,16 +6547,18 @@
       let DEV = DEVICES.mobile;
       function applyDevice(id) {
         DEV = DEVICES[id];
-        COL_W = DEV.cw;
-        PH_H = DEV.ch;
-        EDGE_Y = PH_TOP + DEV.edge;
-        CAP = DEV.cap;
-        LANE_H = HEAD + DEV.body + DEV.cap;
-        COLL_H = DEV.collH;
-        DECK_S = DEV.ds;
-        DECK_W = DEV.deckW;
-        PEEK_X = DEV.peekX;
-        PEEK_Y = DEV.peekY;
+        const M = FlowGeometry.metrics(DEV);
+        geo.setMetrics(M);
+        COL_W = M.colW;
+        PH_H = M.phH;
+        EDGE_Y = PH_TOP + M.edge;
+        CAP = M.cap;
+        LANE_H = M.laneH;
+        COLL_H = M.collH;
+        DECK_S = M.deckS;
+        DECK_W = M.deckW;
+        PEEK_X = M.peekX;
+        PEEK_Y = M.peekY;
         const r = document.documentElement.style;
         r.setProperty("--cw", DEV.cw + "px");
         r.setProperty("--ch", DEV.ch + "px");
@@ -6272,18 +6782,10 @@
       const notePlace = (n) =>
         n.frame ? (n.pos && n.pos[DEV.id]) || [COL_W - 70, PH_TOP + 120] : [n.x, n.y];
       /* which frame is this point on, if any (world coordinates) */
-      function homeFor(wx, wy) {
-        const m = worldM();
-        for (const id of ORDER) {
-          if (!FR[id] || FR[id].deck) continue;
-          const r = liveRect(id, m);
-          if (r && wx > r.x - 20 && wx < r.x + r.w + 20 && wy > r.y - 20 && wy < r.y + r.h + 20) return id;
-        }
-        return null;
-      }
+      const homeFor = (wx, wy) => geo.frameAt({ x: wx, y: wy }, performance.now(), { margin: 20 });
       const localFrom = (id, wx, wy) => {
-        const r = liveRect(id);
-        return [Math.round(wx - r.x), Math.round(wy - (r.y - PH_TOP))];
+        const r = geo.rect(id, performance.now());
+        return [Math.round((wx - r.x) / r.s), Math.round((wy - r.y) / r.s)];
       };
       function buildNote(n) {
         const parent = n.frame ? colOf(n.frame) : notesEl;
@@ -6520,20 +7022,8 @@
       const isFree = (id) => !laneOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${id}"]`);
       const laneEl = (id) => document.getElementById(id);
-      const ROTS = [-2, 1.6, -1.2, 2.2];
-      const FR = {};
-      let dragSet = new Set();
       function posOf() {
         return layout.pos[DEV.id] || (layout.pos[DEV.id] = {});
-      }
-      function laneH(L) {
-        return L.open ? LANE_H : COLL_H;
-      }
-      function laneWidth(L) {
-        const n = Math.max(1, L.screens.length);
-        return L.open
-          ? Math.max(n * COL_W + (n - 1) * GAP + 60, 460)
-          : DEV.closedW;
       }
       function sameAsDefault(L) {
         const d = DEFAULT_LANES.find((x) => x.id === L.id);
@@ -6546,101 +7036,37 @@
       const laneName = FlowLayout.groupName;
       const groupById = (id) => layout.lanes.find((l) => l.id === id);
 
-      function placeLanes() {
-        let top = TOP0;
-        const P = posOf();
-        layout.lanes.forEach((L) => {
-          const p = P[L.id];
-          if (p) {
-            L.x = p.x;
-            L.top = p.y;
-            L.pinned = true;
-          } else {
-            L.x = LANE_LEFT;
-            L.top = top;
-            L.pinned = false;
-            if (L.screens.length) top += laneH(L) + LANE_GAP;
-          }
-        });
-      }
-      /* loose frames line up in rows of five below the groups */
-      const freeSlot = (k, bottom) => ({
-        x: LANE_LEFT + (k % 5) * (COL_W + 70),
-        y: bottom + 140 + Math.floor(k / 5) * (PH_TOP + PH_H + CAP + 100),
+      /* what the geometry is asked to arrange: the groups, every frame, and where this device has things saved */
+      const geoInput = () => ({
+        groups: layout.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
+        screens: ORDER,
+        pos: posOf(),
       });
-      function computeFrames() {
-        layout.lanes.forEach((L) => {
-          const n = L.screens.length;
-          L.screens.forEach((id, i) => {
-            if (L.open)
-              FR[id] = {
-                x: L.x + i * (COL_W + GAP),
-                y: L.top + HEAD,
-                r: 0,
-                d: i * 60,
-                z: n - i,
-                fx: 0,
-                fy: 0,
-                deck: false,
-                lane: L.id,
-                i,
-              };
-            else
-              FR[id] = {
-                x: L.x + PEEK_X * i,
-                y: L.top + 10 + PEEK_Y * (n - 1 - i) - PH_TOP * DECK_S,
-                r: ROTS[i % 4],
-                d: (n - 1 - i) * 40,
-                z: n - i,
-                fx: 22 * i,
-                fy: -10 * i,
-                deck: true,
-                lane: L.id,
-                i,
-              };
-          });
-        });
-        const P = posOf();
-        let bottom = TOP0;
-        layout.lanes.forEach((L) => {
-          if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
-        });
-        let k = 0;
-        ORDER.filter(isFree).forEach((id) => {
-          let p = P[id];
-          if (!p) {
-            p = freeSlot(k, bottom);
-            P[id] = p;
-            k++;
-          }
-          FR[id] = {
-            x: p.x,
-            y: p.y,
-            r: 0,
-            d: 0,
-            z: 5,
-            fx: 0,
-            fy: 0,
-            deck: false,
-            lane: null,
-            i: -1,
-          };
-        });
+      const geoMove = FlowGeometry.MOVES;
+      for (const k of ["open", "deck"]) {
+        const root = document.documentElement.style;
+        root.setProperty(`--${k}-dur`, geoMove[k].dur + "ms");
+        root.setProperty(`--${k}-ease`, `cubic-bezier(${geoMove[k].curve.join(",")})`);
       }
-      function applyFrames() {
+      /* a frame's corner, as the geometry has it at this moment */
+      function putFrame(id, now) {
+        const col = colOf(id),
+          r = geo.rect(id, now);
+        if (col && r) {
+          col.style.translate = r.x + "px " + r.y + "px";
+          col.style.scale = r.s;
+        }
+      }
+      function applyFrames(now = performance.now()) {
         ORDER.forEach((id) => {
           const col = colOf(id),
-            f = FR[id];
+            f = geo.place(id);
           if (!col || !f) return;
-          const dragging = dragSet.has(id),
-            st = col.style;
-          col.classList.toggle("deck", f.deck && !dragging);
+          const st = col.style;
+          col.classList.toggle("deck", geo.isDeck(id));
           col.classList.toggle("free", !f.lane);
           col.dataset.lane = f.lane || "";
-          if (!dragging) {
-            st.setProperty("--x", f.x + "px");
-            st.setProperty("--y", f.y + "px");
-          }
+          putFrame(id, now);
           st.setProperty("--r", f.r + "deg");
           st.setProperty("--d", f.d + "ms");
           st.setProperty("--z", f.z);
@@ -6649,6 +7075,26 @@
           const cn = col.querySelector(".cn");
           if (cn) cn.textContent = f.lane ? String(f.i + 1) : "";
         });
+      }
+      /* the one loop that runs while a frame is on its way: move what moved, redraw what hangs off it. It stops
+         by itself when the geometry says everything is at rest, however long the flow is. */
+      let pumping = false;
+      function pump() {
+        if (pumping || geo.settled(performance.now())) return;
+        pumping = true;
+        const tick = () => {
+          const now = performance.now();
+          geo.step(now).forEach((id) => putFrame(id, now));
+          drawConns(now);
+          if (geo.settled(now)) pumping = false;
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+      /* tell the geometry the layout changed: frames slide to their new places */
+      function arrangeFrames(opts) {
+        geo.retarget(geoInput(), performance.now(), opts);
+        applyFrames();
       }
 
       /* a group's own objects: headline, standfirst, edges between consecutive frames */
@@ -6723,10 +7169,11 @@
           L.el = el;
           showGroupText(L);
           const n = L.screens.length;
-          el.style.left = L.x + "px";
-          el.style.top = L.top + "px";
-          el.style.width = laneWidth(L) + "px";
-          el.style.height = laneH(L) + "px";
+          const box = geo.box(L.id);
+          el.style.left = box.x + "px";
+          el.style.top = box.top + "px";
+          el.style.width = box.w + "px";
+          el.style.height = box.h + "px";
           el.classList.toggle("open", L.open);
           el.classList.toggle("closed", !L.open);
           el.classList.toggle("empty", n === 0);
@@ -6753,15 +7200,14 @@
           sizeDz(L);
         });
       }
-      function relayout() {
-        placeLanes();
-        computeFrames();
-        applyFrames();
+      function relayout(opts) {
+        arrangeFrames(opts);
         syncLanes();
         updateBars();
         updateAllBtn();
         if (typeof updateSelBox === "function") updateSelBox();
-        if (typeof followConns === "function") followConns();
+        if (typeof drawConns === "function") drawConns();
+        pump();
         /* now that frames are attached and sized, the finding cards' leaders can be drawn from real measurements */
         document.querySelectorAll(".scan").forEach((d) => d._scan.redrawLeader());
       }
@@ -6802,8 +7248,8 @@
           T = [clamp(x0, left + 18, right - 18), top + h];
           nB = { nx: 0, ny: 1 };
         }
-        const pts = ortho({ x: x0, y: fr, nx: 0, ny: 1 }, { x: T[0], y: T[1], ...nB });
-        return { x0, y0: fr, d: rounded(pts, 12), end: T };
+        const pts = FlowRouting.ortho({ x: x0, y: fr, nx: 0, ny: 1 }, { x: T[0], y: T[1], ...nB });
+        return { x0, y0: fr, d: FlowRouting.rounded(pts, 12), end: T };
       }
       /* f: a finding as the layout has it (the scan's facts, the user's position if it has one) */
       function buildScan(col, f) {
@@ -6927,47 +7373,14 @@
         document.querySelectorAll(".lane,.col").forEach((e) => e.remove());
         ORDER.forEach(makeCol);
         refreshNotes();
+        geo.reset();
         relayout();
       }
 
       /* ---------- geometry helpers ---------- */
       function laneRect(L) {
-        return {
-          x: L.x - 40,
-          y: L.top - 40,
-          w: laneWidth(L) + 80,
-          h: laneH(L) + 80,
-        };
-      }
-      function screenRect(id) {
-        const f = FR[id];
-        return { x: f.x, y: f.y + PH_TOP, w: COL_W, h: PH_H };
-      }
-      function frameBox(id) {
-        const f = FR[id];
-        return { x: f.x, y: f.y, w: COL_W, h: PH_TOP + PH_H + CAP };
-      }
-      function allRect() {
-        let x0 = 1e9,
-          y0 = 1e9,
-          x1 = -1e9,
-          y1 = -1e9;
-        const add = (x, y, w, h) => {
-          x0 = Math.min(x0, x);
-          y0 = Math.min(y0, y);
-          x1 = Math.max(x1, x + w);
-          y1 = Math.max(y1, y + h);
-        };
-        layout.lanes.forEach((L) => {
-          if (L.screens.length)
-            add(L.x - 20, L.top - 20, laneWidth(L) + 40, laneH(L) + 40);
-        });
-        ORDER.filter(isFree).forEach((id) => {
-          const b = frameBox(id);
-          add(b.x - 20, b.y - 20, b.w + 40, b.h + 40);
-        });
-        if (x0 > x1) return { x: 0, y: 0, w: 900, h: 600 };
-        return { x: x0 - 40, y: y0 - 60, w: x1 - x0 + 80, h: y1 - y0 + 120 };
+        const b = geo.box(L.id);
+        return { x: b.x - 40, y: b.top - 40, w: b.w + 80, h: b.h + 80 };
       }
       function setLane(id, open, opts = {}) {
         const L = layout.lanes.find((l) => l.id === id);
@@ -6983,7 +7396,7 @@
         } else {
           if ([...selSet].some((i) => L.screens.includes(i))) select(null);
           if (playing && playLane === id) stopPlay();
-          if (opts.fly !== false) fly(fitRect(allRect(), 60, 1.1));
+          if (opts.fly !== false) fly(fitRect(geo.bounds(), 60, 1.1));
         }
       }
 
@@ -7034,7 +7447,7 @@
         apply();
       }
       function focusScreen(id) {
-        const r = screenRect(id);
+        const r = geo.screenRect(id);
         fly(
           fitRect(
             { x: r.x - 30, y: r.y - 40, w: r.w + 60, h: r.h + 70 },
@@ -7046,7 +7459,7 @@
       function view(n) {
         stopPlay();
         if (n === "all") {
-          fly(fitRect(allRect(), 30));
+          fly(fitRect(geo.bounds(), 30));
           return;
         }
         const L = layout.lanes.find((l) => l.id === n);
@@ -7067,7 +7480,7 @@
       const sH = $(".sbar.h"),
         sV = $(".sbar.v");
       function updateBars(show) {
-        const B = allRect(),
+        const B = geo.bounds(),
           bw = Math.max(B.x + B.w + 400, innerWidth / cam.k),
           bh = Math.max(B.y + B.h + 300, innerHeight / cam.k);
         const vx = -cam.x / cam.k,
@@ -7150,7 +7563,7 @@
         const hop = layout.conns.find((c) => c.from === from && c.to === to);
         if (hop) tokenAlong(hop.id);
         select(to, false);
-        const r = screenRect(to);
+        const r = geo.screenRect(to);
         if (cam.k >= 0.8) {
           fly({
             k: cam.k,
@@ -7322,7 +7735,7 @@
           x1 = -1e9,
           y1 = -1e9;
         hits.forEach((id) => {
-          const b = frameBox(id);
+          const b = geo.frameBox(id);
           x0 = Math.min(x0, b.x);
           y0 = Math.min(y0, b.y);
           x1 = Math.max(x1, b.x + b.w);
@@ -7682,157 +8095,10 @@
    frame, bends around whatever is between them, and follows both ends while they move.
    ====================================================================== */
       let selConn = null,
-        following = false,
-        followUntil = 0,
         connDrag = null;
       const connEls = new Map();
       function worldM() {
         return new DOMMatrixReadOnly(getComputedStyle(world).transform);
-      }
-      function liveRect(id, m) {
-        const c = colOf(id);
-        if (!c) return null;
-        const b = c.querySelector(".pwrap").getBoundingClientRect();
-        m = m || worldM();
-        return {
-          x: (b.left - m.e) / m.a,
-          y: (b.top - m.f) / m.a,
-          w: b.width / m.a,
-          h: b.height / m.a,
-        };
-      }
-      function sidePt(r, side) {
-        const eo = Math.min(DEV.edge, r.h - 6);
-        return side === "R"
-          ? { x: r.x + r.w, y: r.y + eo, nx: 1, ny: 0 }
-          : side === "L"
-            ? { x: r.x, y: r.y + eo, nx: -1, ny: 0 }
-            : side === "B"
-              ? { x: r.x + r.w / 2, y: r.y + r.h, nx: 0, ny: 1 }
-              : { x: r.x + r.w / 2, y: r.y, nx: 0, ny: -1 };
-      }
-      function pickSides(a, b) {
-        const g = 24;
-        if (b.x >= a.x + a.w - g) return ["R", "L"];
-        if (b.x + b.w <= a.x + g) return ["L", "R"];
-        return b.y + b.h / 2 >= a.y + a.h / 2 ? ["B", "T"] : ["T", "B"];
-      }
-      /* flow lines are straight runs with rounded corners: horizontal out of a frame, one jog in the gutter, horizontal in.
-         a: { x, y, nx, ny } the port and the way it faces; b: the same, or a free point (nx = ny = 0) while dragging */
-      function ortho(a, b) {
-        const S = 26,
-          P = (x, y) => ({ x, y }),
-          out = [P(a.x, a.y)],
-          bn = b.nx || b.ny ? b : null,
-          horA = a.nx !== 0,
-          ahead = horA ? (b.x - a.x) * a.nx : (b.y - a.y) * a.ny,
-          opposed = !!bn && bn.nx === -a.nx && bn.ny === -a.ny;
-        const jog = (limit) => {
-          if (horA) {
-            if (ahead >= limit) {
-              const mx = (a.x + b.x) / 2;
-              out.push(P(mx, a.y), P(mx, b.y));
-            } else {
-              const ox = a.x + a.nx * S;
-              out.push(P(ox, a.y), P(ox, b.y));
-            }
-          } else if (ahead >= limit) {
-            const my = (a.y + b.y) / 2;
-            out.push(P(a.x, my), P(b.x, my));
-          } else {
-            const oy = a.y + a.ny * S;
-            out.push(P(a.x, oy), P(b.x, oy));
-          }
-        };
-        const around = () => {
-          /* the target is beside or behind: step out, go round, step in */
-          const s1 = P(a.x + a.nx * S, a.y + a.ny * S);
-          if (!bn) return out.push(s1, horA ? P(s1.x, b.y) : P(b.x, s1.y));
-          const s2 = P(b.x + bn.nx * S, b.y + bn.ny * S);
-          if (opposed && horA) {
-            const ym = Math.abs(a.y - b.y) < 24 ? Math.min(a.y, b.y) - 70 : (a.y + b.y) / 2;
-            out.push(s1, P(s1.x, ym), P(s2.x, ym), s2);
-          } else if (opposed) {
-            const xm = Math.abs(a.x - b.x) < 24 ? Math.max(a.x, b.x) + 70 : (a.x + b.x) / 2;
-            out.push(s1, P(xm, s1.y), P(xm, s2.y), s2);
-          } else out.push(s1, horA ? P(s1.x, s2.y) : P(s2.x, s1.y), s2);
-        };
-        if (!bn) jog(S);
-        else if (opposed && ahead >= 2 * S) jog(2 * S);
-        else if (!opposed && (horA ? bn.ny !== 0 : bn.nx !== 0)) {
-          const c = horA ? P(b.x, a.y) : P(a.x, b.y);
-          const okA = horA ? (c.x - a.x) * a.nx >= S : (c.y - a.y) * a.ny >= S;
-          const okB = horA ? (c.y - b.y) * bn.ny >= S : (c.x - b.x) * bn.nx >= S;
-          if (okA && okB) out.push(c);
-          else around();
-        } else around();
-        out.push(P(b.x, b.y));
-        /* drop repeats and points that sit on a straight run, so level frames get one clean line */
-        const clean = [];
-        out.forEach((q) => {
-          const l = clean[clean.length - 1];
-          if (!l || Math.abs(q.x - l.x) > 0.5 || Math.abs(q.y - l.y) > 0.5) clean.push(q);
-        });
-        return clean.filter((q, i) => {
-          if (i === 0 || i === clean.length - 1) return true;
-          const a = clean[i - 1],
-            n = clean[i + 1];
-          return Math.abs((q.x - a.x) * (n.y - q.y) - (q.y - a.y) * (n.x - q.x)) >= 0.5;
-        });
-      }
-      function rounded(pts, r = 14) {
-        let d = `M${pts[0].x} ${pts[0].y}`;
-        for (let i = 1; i < pts.length - 1; i++) {
-          const p = pts[i],
-            a = pts[i - 1],
-            b = pts[i + 1],
-            l1 = Math.hypot(p.x - a.x, p.y - a.y),
-            l2 = Math.hypot(b.x - p.x, b.y - p.y),
-            rr = Math.min(r, l1 / 2, l2 / 2),
-            u1 = { x: (p.x - a.x) / l1, y: (p.y - a.y) / l1 },
-            u2 = { x: (b.x - p.x) / l2, y: (b.y - p.y) / l2 };
-          d += `L${p.x - u1.x * rr} ${p.y - u1.y * rr}Q${p.x} ${p.y} ${p.x + u2.x * rr} ${p.y + u2.y * rr}`;
-        }
-        const L = pts[pts.length - 1];
-        return d + `L${L.x} ${L.y}`;
-      }
-      function polyMid(pts) {
-        const seg = pts.slice(1).map((q, i) => Math.hypot(q.x - pts[i].x, q.y - pts[i].y)),
-          half = seg.reduce((x, y) => x + y, 0) / 2;
-        let run = 0;
-        for (let i = 0; i < seg.length; i++) {
-          if (run + seg[i] >= half) {
-            const t = seg[i] ? (half - run) / seg[i] : 0;
-            return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * t, y: pts[i].y + (pts[i + 1].y - pts[i].y) * t };
-          }
-          run += seg[i];
-        }
-        return pts[pts.length - 1];
-      }
-      function shape(c) {
-        const pts = c.pts.map((q) => ({ x: q.x, y: q.y })),
-          n = pts.length,
-          tip = pts[n - 1],
-          prev = pts[n - 2],
-          l = Math.hypot(tip.x - prev.x, tip.y - prev.y) || 1,
-          t = { x: (tip.x - prev.x) / l, y: (tip.y - prev.y) / l },
-          pp = { x: -t.y, y: t.x },
-          mid = polyMid(pts);
-        /* the line stops where the arrowhead starts */
-        if (l > 12) pts[n - 1] = { x: tip.x - t.x * 9, y: tip.y - t.y * 9 };
-        const b1 = { x: tip.x - t.x * 10 + pp.x * 6.5, y: tip.y - t.y * 10 + pp.y * 6.5 },
-          b2 = { x: tip.x - t.x * 10 - pp.x * 6.5, y: tip.y - t.y * 10 - pp.y * 6.5 };
-        return {
-          d: rounded(pts),
-          arr: `${tip.x},${tip.y} ${b1.x},${b1.y} ${b2.x},${b2.y}`,
-          mid,
-        };
-      }
-      function routeFor(a, b) {
-        const [sa, sb] = pickSides(a, b),
-          p0 = sidePt(a, sa),
-          p3 = sidePt(b, sb);
-        return { p0, pts: ortho(p0, p3) };
       }
       function mkConnEl(c) {
         const g = document.createElementNS(svgNS, "g");
@@ -7862,19 +8128,16 @@
         connEls.set(c.id, o);
         return o;
       }
-      function drawConns() {
-        const m = worldM(),
-          alive = new Set();
+      function drawConns(now = performance.now()) {
+        const alive = new Set();
         layout.conns.forEach((c) => {
           alive.add(c.id);
           const o = connEls.get(c.id) || mkConnEl(c);
-          const fa = FR[c.from],
-            fb = FR[c.to];
           const hidden =
-            !fa ||
-            !fb ||
-            (fa.deck && !dragSet.has(c.from)) ||
-            (fb.deck && !dragSet.has(c.to));
+            !geo.place(c.from) ||
+            !geo.place(c.to) ||
+            geo.isDeck(c.from) ||
+            geo.isDeck(c.to);
           o.g.classList.toggle("off", hidden);
           o.chip.classList.toggle("off", hidden);
           o.g.dataset.to = c.to;
@@ -7883,11 +8146,11 @@
           if (document.activeElement !== o.lb && o.lb.textContent !== c.label)
             o.lb.textContent = c.label;
           if (hidden) return;
-          const a = liveRect(c.from, m),
-            b = liveRect(c.to, m);
+          const a = geo.screenRect(c.from, now),
+            b = geo.screenRect(c.to, now);
           if (!a || !b) return;
-          const r = routeFor(a, b),
-            sh = shape(r);
+          const r = FlowRouting.route(a, b, DEV.edge),
+            sh = FlowRouting.shape(r);
           o.ln.setAttribute("d", sh.d);
           o.hit.setAttribute("d", sh.d);
           o.dot.setAttribute("cx", r.p0.x);
@@ -7904,22 +8167,6 @@
           }
         });
         markActive();
-      }
-      function followConns(ms = 1500) {
-        followUntil = Math.max(followUntil, performance.now() + ms);
-        [90, 500, 1000, 1600].forEach((t) => setTimeout(drawConns, t));
-        if (following) return;
-        following = true;
-        const tick = () => {
-          drawConns();
-          if (performance.now() < followUntil || drag || connDrag)
-            requestAnimationFrame(tick);
-          else {
-            following = false;
-            drawConns();
-          }
-        };
-        requestAnimationFrame(tick);
       }
       const connBetween = (a, b) =>
         layout.conns.find((c) => c.from === a && c.to === b);
@@ -8001,7 +8248,7 @@
       }
       function connectSel() {
         const ids = readingOrder(
-          [...selSet].filter((i) => FR[i] && !FR[i].deck),
+          [...selSet].filter((i) => geo.place(i) && !geo.place(i).deck),
         );
         if (ids.length < 2) {
           toast("Select two or more frames to connect them in order.");
@@ -8035,27 +8282,11 @@
       }
       function updateConnDrag(e) {
         moved = true;
-        const m = worldM(),
-          w = { x: (e.clientX - m.e) / m.a, y: (e.clientY - m.f) / m.a },
-          a = liveRect(connDrag.from, m);
+        const now = performance.now(),
+          w = toWorld(e.clientX, e.clientY),
+          a = geo.screenRect(connDrag.from, now);
         if (!a) return;
-        let tgt = null;
-        for (const id of ORDER) {
-          if (id === connDrag.from) continue;
-          const f = FR[id];
-          if (!f || (f.deck && !dragSet.has(id))) continue;
-          const r = liveRect(id, m);
-          if (
-            r &&
-            w.x > r.x - 10 &&
-            w.x < r.x + r.w + 10 &&
-            w.y > r.y - 10 &&
-            w.y < r.y + r.h + 10
-          ) {
-            tgt = id;
-            break;
-          }
-        }
+        const tgt = geo.frameAt(w, now, { margin: 10, skip: connDrag.from });
         if (tgt !== connDrag.tgt) {
           document
             .querySelectorAll(".col.tgt")
@@ -8073,12 +8304,12 @@
         }
         let r;
         if (tgt) {
-          r = routeFor(a, liveRect(tgt, m));
+          r = FlowRouting.route(a, geo.screenRect(tgt, now), DEV.edge);
         } else {
-          const p0 = sidePt(a, connDrag.side);
-          r = { p0, pts: ortho(p0, { x: w.x, y: w.y, nx: 0, ny: 0 }) };
+          const p0 = FlowRouting.sidePt(a, connDrag.side, DEV.edge);
+          r = { p0, pts: FlowRouting.ortho(p0, { x: w.x, y: w.y, nx: 0, ny: 0 }) };
         }
-        const sh = shape(r);
+        const sh = FlowRouting.shape(r);
         connDrag.el.querySelector(".ln").setAttribute("d", sh.d);
         connDrag.el.querySelector(".dot").setAttribute("cx", r.p0.x);
         connDrag.el.querySelector(".dot").setAttribute("cy", r.p0.y);
@@ -8187,11 +8418,11 @@
       }
       function readingOrder(ids) {
         return [...ids]
-          .sort((a, b) => FR[a].y - FR[b].y || FR[a].x - FR[b].x)
+          .sort((a, b) => geo.place(a).y - geo.place(b).y || geo.place(a).x - geo.place(b).x)
           .sort((a, b) =>
-            Math.abs(FR[a].y - FR[b].y) < 60
-              ? FR[a].x - FR[b].x
-              : FR[a].y - FR[b].y,
+            Math.abs(geo.place(a).y - geo.place(b).y) < 60
+              ? geo.place(a).x - geo.place(b).x
+              : geo.place(a).y - geo.place(b).y,
           );
       }
 
@@ -8200,8 +8431,8 @@
         if (!ids.length) return null;
         const allFree = ids.every(isFree);
         if (!opts.keepOrder) ids = readingOrder(ids);
-        const minX = Math.min(...ids.map((i) => FR[i].x)),
-          minY = Math.min(...ids.map((i) => FR[i].y));
+        const minX = Math.min(...ids.map((i) => geo.place(i).x)),
+          minY = Math.min(...ids.map((i) => geo.place(i).y));
         const make = () => {
           layout.lanes.forEach((L) => {
             L.screens = L.screens.filter((x) => !ids.includes(x));
@@ -8244,8 +8475,9 @@
               byLane.get(L).push(i);
             });
             byLane.forEach((list, L) => {
+              const box = geo.box(L.id);
               const end =
-                L.x +
+                box.x +
                 (L.open
                   ? L.screens.length * (COL_W + GAP) + 40
                   : DECK_W + PEEK_X * 3 + 120);
@@ -8253,7 +8485,7 @@
               list.forEach((i) => {
                 P[i] = {
                   x: Math.round(end + k * (COL_W + 70)),
-                  y: Math.round(L.open ? FR[i].y : L.top + HEAD),
+                  y: Math.round(L.open ? geo.place(i).y : box.top + HEAD),
                 };
                 k++;
                 L.screens = L.screens.filter((x) => x !== i);
@@ -8274,10 +8506,11 @@
         commit(
           () => {
             const P = posOf();
+            const box = geo.box(L.id);
             L.screens.forEach((i, k) => {
               P[i] = {
-                x: Math.round(L.x + k * (COL_W + GAP)),
-                y: Math.round(L.top + HEAD),
+                x: Math.round(box.x + k * (COL_W + GAP)),
+                y: Math.round(box.top + HEAD),
               };
             });
             L.screens = [];
@@ -8306,12 +8539,10 @@
             const P = layout.pos[DEV.id];
             layout.lanes.forEach((L) => delete P[L.id]);
             loose.forEach((id) => delete P[id]);
-            placeLanes();
-            let bottom = TOP0;
-            layout.lanes.forEach((L) => {
-              if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
-            });
-            loose.forEach((id, k) => (P[id] = freeSlot(k, bottom)));
+            /* pinning the loose frames is the user's tidy, so it is written here, in reading order, and nowhere else */
+            const M = FlowGeometry.metrics(DEV);
+            const { bottom } = FlowGeometry.arrange(geoInput(), M);
+            loose.forEach((id, k) => (P[id] = FlowGeometry.slot(k, bottom, M)));
             /* findings back beside their frames; scanned notes back where the scan put them */
             /* forgetting the user's position for this device puts a scanned card back where the scan put it */
             const forget = (item, scanned) => {
@@ -8333,7 +8564,7 @@
           toast("Already tidy.");
           return;
         }
-        fly(fitRect(allRect(), 40, 1.1));
+        fly(fitRect(geo.bounds(), 40, 1.1));
         toast("Tidied. Groups, flows and connectors are as they were. ⌘Z to undo.");
       }
       function resetLayout() {
@@ -8345,7 +8576,7 @@
           },
           { redraw: ["world"] },
         );
-        fly(fitRect(allRect(), 40, 1.1));
+        fly(fitRect(geo.bounds(), 40, 1.1));
         toast("Layout reset to the scanned arrangement");
       }
       function focusTitle(id) {
@@ -8412,7 +8643,7 @@
       world.insertBefore(selbox, notesEl);
       function updateSelBox() {
         const ids = [...selSet].filter(
-          (id) => FR[id] && !FR[id].deck && colOf(id),
+          (id) => geo.place(id) && !geo.place(id).deck && colOf(id),
         );
         if (ids.length < 2) {
           selbox.style.display = "none";
@@ -8423,7 +8654,7 @@
           x1 = -1e9,
           y1 = -1e9;
         ids.forEach((id) => {
-          const f = FR[id];
+          const f = geo.place(id);
           x0 = Math.min(x0, f.x);
           y0 = Math.min(y0, f.y + PH_TOP);
           x1 = Math.max(x1, f.x + COL_W);
@@ -8446,29 +8677,30 @@
         let best = null;
         for (const L of layout.lanes) {
           const others = L.screens.filter((x) => !ids.includes(x)),
-            m = others.length;
+            m = others.length,
+            B = geo.box(L.id);
           if (L.open) {
             const rowW = Math.max(1, m) * (COL_W + GAP);
             if (
-              c.x >= L.x - 90 &&
-              c.x <= L.x + m * (COL_W + GAP) + COL_W * 1.4 &&
-              c.y >= L.top - 30 &&
-              c.y <= L.top + HEAD + PH_TOP + PH_H + CAP + 70
+              c.x >= B.x - 90 &&
+              c.x <= B.x + m * (COL_W + GAP) + COL_W * 1.4 &&
+              c.y >= B.top - 30 &&
+              c.y <= B.top + HEAD + PH_TOP + PH_H + CAP + 70
             ) {
               const idx = clamp(
-                  Math.round((c.x - L.x - COL_W / 2) / (COL_W + GAP)),
+                  Math.round((c.x - B.x - COL_W / 2) / (COL_W + GAP)),
                   0,
                   m,
                 ),
-                dist = Math.abs(c.x - (L.x + rowW / 2));
+                dist = Math.abs(c.x - (B.x + rowW / 2));
               if (!best || dist < best.dist)
                 best = { kind: "lane", id: L.id, idx, dist };
             }
           } else if (
-            c.x >= L.x - 30 &&
-            c.x <= L.x + DECK_W + PEEK_X * 3 + 70 &&
-            c.y >= L.top - 30 &&
-            c.y <= L.top + COLL_H + 20
+            c.x >= B.x - 30 &&
+            c.x <= B.x + DECK_W + PEEK_X * 3 + 70 &&
+            c.y >= B.top - 30 &&
+            c.y <= B.top + COLL_H + 20
           ) {
             best = { kind: "lane", id: L.id, idx: m, dist: 0 };
           }
@@ -8476,7 +8708,7 @@
         if (best) return best;
         for (const id of ORDER) {
           if (ids.includes(id) || !isFree(id)) continue;
-          const f = FR[id];
+          const f = geo.place(id);
           if (
             c.x > f.x &&
             c.x < f.x + COL_W &&
@@ -8529,7 +8761,7 @@
           drag = {
             kind: "group",
             L,
-            start: { x: L.x, y: L.top },
+            start: { x: geo.box(L.id).x, y: geo.box(L.id).top },
             w0: w,
             snapshot: layout.snapshot(),
           };
@@ -8542,7 +8774,7 @@
         const id = press.id;
         let ids =
           selSet.has(id) && selSet.size > 1
-            ? [...selSet].filter((x) => FR[x] && !FR[x].deck)
+            ? [...selSet].filter((x) => geo.place(x) && !geo.place(x).deck)
             : [id];
         if (!selSet.has(id) || selSet.size <= 1) setSel([id], id);
         const w = toWorld(press.sx, press.sy);
@@ -8555,13 +8787,15 @@
           wasIn: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
           target: null,
         };
+        const t0 = performance.now();
         ids.forEach((i) => {
-          drag.off[i] = { x: w.x - FR[i].x, y: w.y - FR[i].y };
+          const r = geo.rect(i, t0);
+          drag.off[i] = { x: w.x - r.x, y: w.y - r.y };
+          geo.hold(i, r.x, r.y);
           const c = colOf(i);
           c.classList.add("dragging");
           c.classList.remove("deck");
         });
-        dragSet = new Set(ids);
         const L0 = laneOf(id);
         drag.target = {
           kind: L0 ? "lane" : "free",
@@ -8577,12 +8811,11 @@
             x: Math.round(drag.start.x + (w.x - drag.w0.x)),
             y: Math.round(drag.start.y + (w.y - drag.w0.y)),
           };
-          placeLanes();
-          computeFrames();
-          applyFrames();
+          arrangeFrames();
           syncLanes();
           updateBars();
           drawConns();
+          pump();
           return;
         }
         selbox.classList.add("live");
@@ -8592,11 +8825,8 @@
         });
         const hold = () =>
           drag.ids.forEach((i) => {
-            FR[i].x = np[i].x;
-            FR[i].y = np[i].y;
-            const st = colOf(i).style;
-            st.setProperty("--x", np[i].x + "px");
-            st.setProperty("--y", np[i].y + "px");
+            geo.hold(i, np[i].x, np[i].y);
+            putFrame(i);
           });
         hold();
         const p = np[drag.pid],
@@ -8626,14 +8856,14 @@
           const target = t.id,
             ids = d.ids;
           d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
-          dragSet = new Set();
+          geo.release(d.ids);
           groupFrames([target, ...ids], { keepOrder: true, uncommitted: true });
           commit.since(d.snapshot, { redraw: ["layout"] });
           return;
         }
         if (t.kind === "free") {
           d.ids.forEach((i) => {
-            posOf()[i] = { x: Math.round(FR[i].x), y: Math.round(FR[i].y) };
+            posOf()[i] = { x: Math.round(geo.place(i).x), y: Math.round(geo.place(i).y) };
           });
         } else {
           d.ids.forEach((i) =>
@@ -8649,7 +8879,7 @@
           t.kind === "lane" ? laneName(layout.lanes.find((l) => l.id === t.id)) : "";
         pruneLanes();
         d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
-        dragSet = new Set();
+        geo.release(d.ids);
         commit.since(d.snapshot, { redraw: ["layout"] });
         if (moved0)
           msg =
@@ -8658,16 +8888,13 @@
         if (msg) toast(msg + ". ⌘Z to undo.");
       }
       function marqueeHits(r) {
+        const a = toWorld(r.x, r.y),
+          b = toWorld(r.x + r.w, r.y + r.h),
+          now = performance.now();
         return ORDER.filter((id) => {
-          const c = colOf(id);
-          if (!c || c.classList.contains("deck")) return false;
-          const b = c.querySelector(".pwrap").getBoundingClientRect();
-          return (
-            b.right > r.x &&
-            b.left < r.x + r.w &&
-            b.bottom > r.y &&
-            b.top < r.y + r.h
-          );
+          if (!geo.place(id) || geo.isDeck(id)) return false;
+          const q = geo.screenRect(id, now);
+          return q.x + q.w > a.x && q.x < b.x && q.y + q.h > a.y && q.y < b.y;
         });
       }
       function updateMarquee(e) {
@@ -8841,7 +9068,7 @@
           drag = null;
           document.body.classList.remove("gdrag");
           layout.restore(d.snapshot);
-          dragSet = new Set();
+          geo.release(d.ids || []);
           document
             .querySelectorAll(".col.dragging")
             .forEach((c) => c.classList.remove("dragging"));
@@ -9142,7 +9369,7 @@
         }
         if (!typing && mod && e.key.toLowerCase() === "a") {
           e.preventDefault();
-          const ids = ORDER.filter((id) => FR[id] && !FR[id].deck);
+          const ids = ORDER.filter((id) => geo.place(id) && !geo.place(id).deck);
           setSel(ids, ids[ids.length - 1] || null);
           toast(ids.length + " frames selected");
           return;
@@ -9275,7 +9502,7 @@
           },
           VIEW_STATE,
         );
-        fly(fitRect(allRect(), 40, 1.1));
+        fly(fitRect(geo.bounds(), 40, 1.1));
       }
 
       /* ======================================================================
@@ -9305,13 +9532,13 @@
         if (panelOpen && panelMode === "inspect" && prim)
           inspect(prim, true, true);
         if (prim) {
-          const q = screenRect(prim);
+          const q = geo.screenRect(prim);
           cam = fitRect(
             { x: q.x - 30, y: q.y - 40, w: q.w + 60, h: q.h + 70 },
             30,
             1.6,
           );
-        } else cam = fitRect(allRect(), 30);
+        } else cam = fitRect(geo.bounds(), 30);
         stage.classList.remove("fly");
         apply();
         await sleep(80);
@@ -9356,7 +9583,7 @@
         document.body.classList.add("boot");
         applyDevice("mobile");
         buildWorld();
-        cam = fitRect(allRect(), 30);
+        cam = fitRect(geo.bounds(), 30);
         apply();
         if (SCAN.start) select(SCAN.start, false);
         requestAnimationFrame(() =>

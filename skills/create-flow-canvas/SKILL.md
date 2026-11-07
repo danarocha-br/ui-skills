@@ -9,7 +9,7 @@ Turns a codebase into one self-contained HTML canvas: screens laid out as frames
 
 ## Status: draft
 
-`assets/flow-canvas.html` is the reference build, made around a fictional plant-care app ("Loam"). The scanner and generator are not written yet. The engine and the scan are separate inside the one file (see "The scan" below); `docs/architecture-review.html` lists what is still to separate (device description, frame geometry, drag proposals, the panel).
+`assets/flow-canvas.html` is the reference build, made around a fictional plant-care app ("Loam"). The scanner and generator are not written yet. The engine and the scan are separate inside the one file (see "The scan" below); `docs/architecture-review.html` lists what is still to separate (device description, drag proposals, the panel).
 
 Done so far: the layout (groups, positions per device, connectors, findings, notes, id counters, undo history) has one owner, the `FlowLayout` module, in its own `<script id="layout-module">` block at the top of the canvas. It has no DOM and no demo knowledge, and `tests/layout.test.mjs` runs it on its own: `node --test skills/create-flow-canvas/tests/layout.test.mjs`. Every edit ends in one place too: the `FlowCommit` module (`<script id="commit-module">`) owns the undo point, the save and the redraw, in a fixed order. Open or closed groups are view state, so undo does not flip them. What notes, findings and connectors share lives in a third module, `FlowAnnotations` (`<script id="annotations-module">`): one drag with one threshold and a real cancel, arrow-key moves, one Delete path, and one "is this an annotation" check. A kind brings an adapter; a new kind is one more adapter. Tests: `node --test skills/create-flow-canvas/tests/*.test.mjs`. 
 
@@ -20,7 +20,7 @@ Vocabulary is in `GLOSSARY.md`.
 ## What the canvas does
 
 - **Frames and flows:** screens as frames, grouped into flows that open as a row or close into a stack. Drag frames to reorder, regroup or free them. Marquee-select, group, ungroup, rename.
-- **Connectors:** straight runs with rounded corners between frames, drawn from live positions, so they follow every move. Drag from a frame's edge dot to create one. Labels are editable.
+- **Connectors:** straight runs with rounded corners between frames, drawn from where each frame is at that moment (`FlowGeometry`, `<script id="geometry-module">`), so they follow every slide, however many frames the flow has. The routing itself is `FlowRouting` (`<script id="routing-module">`). Drag from a frame's edge dot to create one. Labels are editable.
 - **Annotations:** flow titles and descriptions, notes (one kind, saved with the layout, attach to a frame by dropping them on it), and scanner findings that point at the frame or component they describe.
 - **Inspect panel:** route, source file, components (hover to spotlight on the frame, click to find every screen that uses it), states, notes.
 - **Devices:** the same scan rendered at mobile, tablet or desktop size.
