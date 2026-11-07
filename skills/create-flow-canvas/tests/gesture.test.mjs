@@ -1,6 +1,6 @@
 /* Gesture module tests. FlowGesture holds a drag as a *proposal* outside the layout and commits it once, on the
-   drop. These tests run it with the real layout and commit modules and a recording stand-in for the page (the
-   adapter: where things are, what to show, what to clean up). No DOM.
+   drop. These tests run it with the real layout and commit modules and a recording stand-in for the page (a geometry
+   that says where things are, and the adapter: what to show, what to clean up). No DOM.
    Run:  node --test skills/create-flow-canvas/tests/gesture.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,18 +47,20 @@ function setup({ pos = {} } = {}) {
   for (const kind of ["layout", "scans", "notes", "conns", "world"]) redraw[kind] = () => log.push("redraw:" + kind);
   const commit = FlowCommit.create({ layout, redraw });
   const shown = [];
-  const adapter = {
-    frames: () => ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"],
+  const geo = {
     box: (id) => BOX[id],
     place: (id) => FREE[id] || { x: 0, y: 0 },
     rect: () => ({ x: 0, y: 0 }) /* every frame starts under the pointer's origin: no offsets to think about */,
+  };
+  const frames = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+  const adapter = {
     show: (preview) => {
       shown.push(preview);
       log.push("show");
     },
     settle: (ids) => log.push("settle:" + ids.join(",")),
   };
-  const gesture = FlowGesture.create({ layout, commit, device: () => "mobile", metrics: () => METRICS, adapter });
+  const gesture = FlowGesture.create({ layout, commit, device: () => "mobile", metrics: () => METRICS, geo, frames, now: () => 0, adapter });
   return { layout, commit, gesture, log, shown };
 }
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);

@@ -8,7 +8,8 @@ import { FlowDevice } from "./modules.mjs";
 const plain = (x) => JSON.parse(JSON.stringify(x));
 /* arrays made inside the module's own context are not this context's arrays; compare them as data */
 const restingSpot = (...a) => plain(FlowDevice.restingSpot(...a));
-const carry = (...a) => plain(FlowDevice.carry(...a));
+/* a spot carried from one device to another: the only way the module does it is placeOn, for a note saved on `from` alone */
+const carry = (at, from, to) => plain(FlowDevice.placeOn({ [from]: at }, to));
 const placeOn = (...a) => plain(FlowDevice.placeOn(...a));
 const TOP = 28; /* where a frame's screen starts inside its column: every device says so */
 

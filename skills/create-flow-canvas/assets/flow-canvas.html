@@ -5148,11 +5148,10 @@
            FlowDevice.idForKey(key)         -> the id a keyboard key reaches, or null
            FlowDevice.restingSpot(id, drop) -> [x, y] where a note goes when it has no place anywhere:
                                                near the frame's right edge, `drop` (120) below the screen's top
-           FlowDevice.carry(at, from, to) -> [x, y]  a spot in a frame's own coordinates, moved to
-                                               the same relative place on another device's screen
            FlowDevice.placeOn(saved, id) -> [x, y]  where an annotation sits on this device:
-                                               its saved place here, else carried from the device it was first placed on,
-                                               else the resting spot. Never written back.
+                                               its saved place here, else carried from the device it was first placed on
+                                               (the same relative place on that device's screen), else the resting spot.
+                                               Never written back.
            `metrics.phTop` is where the screen starts inside the frame's column; `at` below is a point in that column.
          ====================================================================== */
       var FlowDevice = (function () {
@@ -5215,7 +5214,7 @@
           const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && isPlace(saved[k]));
           return from ? carry(saved[from], from, id) : restingSpot(id);
         }
-        return { ids, describe, idForKey, restingSpot, carry, placeOn };
+        return { ids, describe, idForKey, restingSpot, placeOn };
       })();
     </script>
     <script id="scan-module">
@@ -6434,7 +6433,6 @@
            FlowRouting.pickSides(a, b)    -> [fromSide, toSide]
            FlowRouting.ortho(a, b)        a, b: { x, y, nx, ny }; b may be a free point (nx = ny = 0)
            FlowRouting.rounded(pts, r)    svg path through pts with rounded corners
-           FlowRouting.polyMid(pts)       the point half way along the polyline (where the label chip sits)
          ====================================================================== */
       var FlowRouting = (function () {
         function sidePt(r, side, edge) {
@@ -6571,7 +6569,7 @@
           return { p0, pts: ortho(p0, p3) };
         }
 
-        return { sidePt, pickSides, ortho, rounded, polyMid, shape, route };
+        return { sidePt, pickSides, ortho, rounded, shape, route };
       })();
     </script>
 
@@ -6583,18 +6581,21 @@
          layout is never touched: the gesture holds a *proposal* (where the drop would land) and the page draws
          the layout as it would be if the proposal were dropped (the *view*). Letting go hands the proposal to
          FlowCommit once, as one undo step. Cancelling (Escape, pointercancel) throws the proposal away: there is
-         nothing in the layout to put back. It knows nothing about the DOM: the page hands it an adapter.
+         nothing in the layout to put back. It knows nothing about the DOM: where things are comes from the geometry
+         it is handed, and the page hands it an adapter for what is drawn.
 
          Interface
-           const gesture = FlowGesture.create({ layout, commit, device, metrics, adapter })
+           const gesture = FlowGesture.create({ layout, commit, device, metrics, geo, frames, now, adapter })
              layout   a FlowLayout            commit  a FlowCommit
              device   () => id of the device whose positions a drop writes
              metrics  () => { colW gap head phTop phH cap collH deckW peekX }, the sizes on this device
-             adapter  the page's side:
-               frames()        every frame id
-               box(groupId)    { x, top } the group's corner, as the arrangement has it now
-               place(frameId)  { x, y } where a frame is meant to be
-               rect(frameId)   { x, y } where a frame is drawn right now (it may be sliding)
+             geo      where things are: what a FlowGeometry.create answers, of which it reads three
+               box(groupId)         { x, top } the group's corner, as the arrangement has it now
+               place(frameId)       { x, y } where a frame is meant to be
+               rect(frameId, now)   { x, y } where a frame is drawn at `now` (it may be sliding)
+             frames   every frame id, in order (an array)
+             now      () => the clock the geometry's animation runs on, in ms
+             adapter  the page's side, what is drawn:
                show(preview)   draw the preview, see below; called after every change, and as the drag begins
                settle(ids)     the drag is over, dropped or cancelled: let go of the held frames and clear
                                everything show() put up. The page is drawn from the layout right after.
@@ -6629,7 +6630,7 @@
         const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
         const keyOf = (p) => p.kind + "|" + (p.id || "") + "|" + (p.idx === undefined ? "" : p.idx);
 
-        function create({ layout, commit, device, metrics, adapter }) {
+        function create({ layout, commit, device, metrics, geo, frames, now, adapter }) {
           let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal, last, base } */
 
           /* where a drop at this point (the centre of the frame under the pointer) would land */
@@ -6638,7 +6639,7 @@
             let best = null;
             for (const L of layout.lanes) {
               const m = L.screens.filter((x) => !ids.includes(x)).length;
-              const B = adapter.box(L.id);
+              const B = geo.box(L.id);
               if (!B) continue;
               if (L.open) {
                 const rowW = Math.max(1, m) * (M.colW + M.gap);
@@ -6662,9 +6663,9 @@
               }
             }
             if (best) return { kind: "into", id: best.id, idx: best.idx };
-            for (const id of adapter.frames()) {
+            for (const id of frames) {
               if (ids.includes(id) || layout.groupOf(id)) continue;
-              const f = adapter.place(id);
+              const f = geo.place(id);
               if (f && c.x > f.x && c.x < f.x + M.colW && c.y > f.y + M.phTop && c.y < f.y + M.phTop + M.phH)
                 return { kind: "merge", id };
             }
@@ -6701,7 +6702,7 @@
             }
             if (p.kind === "merge") {
               /* the group sits where the frame it was dropped on is, whether the others came from a group or not */
-              const at = adapter.place(p.id);
+              const at = geo.place(p.id);
               const ids = [p.id, ...d.ids];
               const group = layout.groupFrames(ids, { device: dev, at: { x: at.x, y: at.y - metrics().head } });
               return { kind: "merge", ids, group };
@@ -6718,7 +6719,7 @@
             begin(press) {
               if (g) throw new Error("FlowGesture: a gesture is already live");
               if (press.kind === "group") {
-                const b = adapter.box(press.id);
+                const b = geo.box(press.id);
                 g = {
                   kind: "group",
                   ids: [],
@@ -6733,7 +6734,7 @@
                 const off = {},
                   held = {};
                 press.ids.forEach((i) => {
-                  const r = adapter.rect(i);
+                  const r = geo.rect(i, now());
                   off[i] = { x: press.pointer.x - r.x, y: press.pointer.y - r.y };
                   held[i] = { x: r.x, y: r.y };
                 });
@@ -7253,7 +7254,7 @@
       const findingKind = (f) => FINDING_KINDS[f.kind] || PLAIN_FINDING;
 
       /* the canvas's fixed measurements, in world px (from the geometry) */
-      const { laneLeft: LANE_LEFT, gap: GAP, head: HEAD } = FlowGeometry.WORLD;
+      const { gap: GAP, head: HEAD } = FlowGeometry.WORLD;
       /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
       const geo = FlowGeometry.create({
         reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -7694,14 +7695,10 @@
         commit,
         device: () => DEV.id,
         metrics: () => ({ ...DEV.metrics, gap: GAP, head: HEAD }),
-        adapter: {
-          frames: () => ORDER,
-          box: (id) => geo.box(id),
-          place: (id) => geo.place(id),
-          rect: (id) => geo.rect(id, performance.now()),
-          show: showGesture,
-          settle: settleGesture,
-        },
+        geo,
+        frames: ORDER,
+        now: () => performance.now(),
+        adapter: { show: showGesture, settle: settleGesture },
       });
 
       /* what the geometry is asked to arrange: the groups, every frame, and where this device has things saved */
@@ -7874,8 +7871,8 @@
         syncLanes();
         updateBars();
         updateAllBtn();
-        if (typeof updateSelBox === "function") updateSelBox();
-        if (typeof drawConns === "function") drawConns();
+        updateSelBox();
+        drawConns();
         pump();
         /* now that frames are attached and sized, the finding cards' leaders can be drawn from real measurements */
         document.querySelectorAll(".scan").forEach((d) => d._scan.redrawLeader());
@@ -8092,12 +8089,13 @@
         $("#zoom").textContent = Math.round(cam.k * 100) + "%";
         updateBars(true);
       }
-      function fly(t, dur = 750) {
+      function fly(t) {
         stage.classList.add("fly");
         cam = { ...t };
         apply();
         clearTimeout(flyTimer);
-        flyTimer = setTimeout(() => stage.classList.remove("fly"), dur + 60);
+        /* the flying transition lasts 750ms (.fly in the styles) */
+        flyTimer = setTimeout(() => stage.classList.remove("fly"), 810);
       }
       function fitRect(r, pad = 60, maxK = 2) {
         const inset = panelInset(),
@@ -8215,7 +8213,7 @@
         seltb.querySelector('[data-a="ungroup"]').hidden = ![...selSet].some(
           (id) => laneOf(id),
         );
-        if (typeof updateSelBox === "function") updateSelBox();
+        updateSelBox();
       }
       function setSel(ids, primary) {
         if (ids.length) selConn = null;
@@ -8983,7 +8981,6 @@
         const done = commit.undo(() => {
           fillAnn(); /* captions are part of the layout now: the frames show what it brought back */
           selConn = null;
-          document.querySelectorAll(".lane").forEach((e) => delete e.dataset.sig);
           setSel(
             [...selSet].filter((id) => SCREENS[id]),
             selected,
