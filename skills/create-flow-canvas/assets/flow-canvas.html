@@ -7091,7 +7091,7 @@
          live host is marked in the page script ("live screen host").
 
          Interface
-           Flowcreate({ screens, components, device, host, behaviour, report }) -> frames
+           FlowFrameDom.create({ screens, components, device, host, behaviour, report }) -> frames   (the page calls it FrameDom)
              screens      the scan's screens: { id: { html: { deviceId: markup }, states: [{ name, html? }] } }
              components   the scan's component selectors: { name: selector }
              device       () -> { id, ... } the device being shown now
@@ -7111,8 +7111,9 @@
            frames.hit(event)            { id, x, y, target } if the event came from inside a screen, else null.
                                         x and y are on the screen, in its own pixels; target is the host's own
                                         handle and means nothing to anyone but the host and the product's behaviour
-           frames.tap(hit)              the ripple, the product's reaction -> { go }, the screen id a link in the
-                                        target leads to, or null. The page decides whether it can follow
+           frames.tap(hit)              the ripple, then the product's reaction -> { go }, the screen id a link in the
+                                        target led to (read before the reaction runs), or null. The page decides
+                                        whether it can follow
            frames.interactive(hit)      the target is a link or something the product reacts to
            frames.copyInto(id, container)   a copy of the screen, drawn into a container, without what the canvas
                                         lays over a live one
@@ -7138,6 +7139,11 @@
             const i = stateIndex(id),
               st = screens[id].states[i];
             return i && st && st.html ? st.html[device().id] : screens[id].html[device().id];
+          };
+
+          /* a screen is shown by mounting its whole render, never by patching what is there */
+          const show = (id) => {
+            host.mount(id, markup(id), stateIndex(id));
           };
 
           function spotlight(id, c) {
@@ -7170,13 +7176,11 @@
             shownStates,
             switchable: (id) => shownStates(id).length > 1,
             hostHTML: (id) => host.hostHTML(id, { device: device(), state: stateIndex(id) }),
-            render(id) {
-              if (known(id)) host.mount(id, markup(id), stateIndex(id));
-            },
+            render: (id) => known(id) && show(id),
             setState(id, i) {
               if (!shownStates(id).includes(i)) return false;
               stateOf[id] = i;
-              host.mount(id, markup(id), i);
+              show(id);
               return true;
             },
             count: (id, c) => (known(id) && components[c] ? host.count(id, components[c]) : 0),
@@ -7186,6 +7190,8 @@
             tap(hit) {
               if (!hit) return { go: null };
               host.ripple(hit.id, hit.x, hit.y);
+              /* where the tap leads is read first: a reaction may replace the very node that links */
+              const go = host.goOf(hit.target) || null;
               if (behaviour && typeof behaviour.onTap === "function") {
                 try {
                   behaviour.onTap(hit.id, hit.target, host.root(hit.id));
@@ -7193,7 +7199,7 @@
                   report(err);
                 }
               }
-              return { go: host.goOf(hit.target) || null };
+              return { go };
             },
             interactive: (hit) =>
               !!hit && host.matches(hit.target, ["[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
@@ -7345,8 +7351,8 @@
             if (b) b.classList.toggle("hl", on);
           },
           act(f) {
-            const i = SCREENS[f.frame].states.findIndex((x, k) => k > 0 && !x.reachable && x.html);
-            if (i > 0) setState(f.frame, i);
+            const i = FrameDom.shownStates(f.frame).find((k) => k > 0 && !SCREENS[f.frame].states[k].reachable);
+            if (i) setState(f.frame, i);
             select(f.frame, true);
           },
         },

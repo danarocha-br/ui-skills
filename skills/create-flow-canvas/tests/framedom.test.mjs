@@ -203,15 +203,29 @@ test("hit asks the host what an event is: a screen, a point on it and an opaque 
   assert.equal(make().frames.hit(event), null);
 });
 
-test("a tap ripples where it landed, then runs the product's reaction on the screen's root, then says where it leads", () => {
+test("a tap ripples where it landed, reads where it leads, then runs the product's reaction on the screen's root", () => {
   const seen = [];
   const behaviour = { onTap: (...args) => seen.push(args) };
   const { frames, host } = make({ behaviour, answers: { go: "form" } });
   const target = { t: 1 };
   assert.deepEqual(plain(frames.tap({ id: "list", x: 12, y: 30, target })), { go: "form" });
-  assert.deepEqual(names(host), ["ripple", "root", "goOf"]);
+  assert.deepEqual(names(host), ["ripple", "goOf", "root"]);
   assert.deepEqual(host.calls[0], ["ripple", "list", 12, 30]);
   assert.deepEqual(seen, [["list", target, { root: "list" }]]);
+});
+
+test("where a tap leads is read before the product's reaction, which may replace the very node that links", () => {
+  let linked = true; /* the fake host's link goes away once the reaction has run */
+  const host = fakeHost();
+  host.goOf = () => (linked ? "form" : null);
+  const frames = FlowFrameDom.create({
+    screens: SCREENS,
+    components: COMPONENTS,
+    device: () => DEVICES.mobile,
+    host,
+    behaviour: { onTap: () => (linked = false) },
+  });
+  assert.deepEqual(plain(frames.tap({ id: "list", x: 0, y: 0, target: {} })), { go: "form" });
 });
 
 test("a tap on nothing that leads anywhere says go: null", () => {
@@ -286,6 +300,7 @@ test("outside the live screen host the page names nothing that is inside a scree
     [/\bCOMP_SEL\b/, "the scan's component selectors"],
     [/\.ripple\b|\.spotlbl\b|\.spot\b/, "what the canvas lays over a screen (ripple, spotlight)"],
     [/\bscreenHTML\b|\bstateOf\b/, "a screen's render and its shown state"],
+    [/data-go|data-state/, "a screen's own attributes (links, shown state)"],
     [/\bSCREENS\[[^\]]*\]\.html\b/, "a screen's render"],
   ];
   const found = forbidden.filter(([re]) => re.test(outside)).map(([, what]) => what);

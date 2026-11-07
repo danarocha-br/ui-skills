@@ -75,7 +75,7 @@ A screen's own markup for one device and one state: what the product's screen lo
 _Avoid_: Template, markup (alone)
 
 **Mount**:
-Putting a render into a frame. One module, `FrameDom`, owns the inside of every screen: which render is shown, mounting it, counting and lighting up its components, the ripple under a tap, the product's own reactions to a tap, and a copy for a search tile. Everything else (the page, the panel, scanner cards) names a screen by its id and never holds a piece of one. Where a mounted screen lives (today in the page's own DOM, in a shadow root when the product styles are scoped to it) is the business of the one host that mounts it.
+Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. Where a mounted screen lives is the business of the one host that mounts it. In code, `FlowFrameDom` (the page's `FrameDom`).
 _Avoid_: Embed, inject
 
 **Link**:
