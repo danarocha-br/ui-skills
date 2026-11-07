@@ -70,6 +70,14 @@ _Avoid_: Commit (that is the module that records every edit)
 One way a screen can look (empty, denied, error). A state is **reachable** when something in the product's UI leads to it, and **only reachable in code** when nothing does.
 _Avoid_: Variant, mode
 
+**Render**:
+A screen's own markup for one device and one state: what the product's screen looks like when it is shown. It is markup by design, the one thing in a scan that is. A render is shown whole, so what someone tapped inside a screen (a plant picked, a switch turned, a time chosen) belongs to the render on show and is gone when another is shown, whether that is another state or another device. Which state a frame shows is kept across devices; its taps are not.
+_Avoid_: Template, markup (alone)
+
+**Mount**:
+Putting a render into a frame. One module, `FrameDom`, owns the inside of every screen: which render is shown, mounting it, counting and lighting up its components, the ripple under a tap, the product's own reactions to a tap, and a copy for a search tile. Everything else (the page, the panel, scanner cards) names a screen by its id and never holds a piece of one. Where a mounted screen lives (today in the page's own DOM, in a shadow root when the product styles are scoped to it) is the business of the one host that mounts it.
+_Avoid_: Embed, inject
+
 **Link**:
 The scan's finding that one screen leads to another. On the canvas a link is drawn as a **connector**; the connector is the only thing that says "A leads to B", and buttons inside a frame follow connectors.
 _Avoid_: Edge, arrow, transition

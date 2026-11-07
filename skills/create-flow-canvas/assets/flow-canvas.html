@@ -5065,7 +5065,7 @@
       /* ======================================================================
          SCAN: THE PRODUCT'S OWN BEHAVIOUR (optional)
          Small reactions inside the sample's screens, the way the real components would react. The engine
-         calls FlowScanBehaviour.onTap(screenId, target, phone) after a tap inside a frame, and leaves taps on
+         calls FlowScanBehaviour.onTap(screenId, target, root) after a tap inside a frame (root is the screen's own root), and leaves taps on
          anything matching FlowScanBehaviour.interactive alone when the frame is double-clicked. A scan whose
          screens are static leaves this block empty.
          ====================================================================== */
@@ -7077,6 +7077,133 @@
       })();
     </script>
 
+    <script id="framedom-module">
+      /* ======================================================================
+         FRAMEDOM MODULE
+         The one owner of a screen's own DOM: the product's markup inside a frame. Which render a screen shows
+         (its state, on this device), mounting it, counting and lighting up its components, the ripple under a
+         tap, the product's own reactions to a tap, and a copy of it for a search tile all come through here.
+         Nothing else holds a node of a screen: the page, the panel and the scanner cards name a screen by its
+         id and get back plain values (a number, a state, where a tap leads).
+
+         The module is logic. Where a screen actually lives (a light-DOM element today, a shadow root some day)
+         is a host adapter's business, so a test stands a fake host in and needs no browser. The page's one
+         live host is marked in the page script ("live screen host").
+
+         Interface
+           Flowcreate({ screens, components, device, host, behaviour, report }) -> frames
+             screens      the scan's screens: { id: { html: { deviceId: markup }, states: [{ name, html? }] } }
+             components   the scan's component selectors: { name: selector }
+             device       () -> { id, ... } the device being shown now
+             behaviour    optional, the product's own { onTap(screenId, target, root), interactive: selector }
+             report       report(error) for a reaction that throws; the tap goes on
+           frames.stateIndex(id)        the state a screen shows (0 until set); kept across devices, not saved
+           frames.shownStates(id)       the states that have a render of their own, plus the first
+           frames.switchable(id)        more than one state can be shown
+           frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it in
+                                        a frame, then calls render)
+           frames.render(id)            mounts the render for the shown state on this device. The whole of it:
+                                        what was tapped inside the screen is gone, because a screen is its render
+           frames.setState(id, i)       shows state i, if it can be shown -> true; otherwise nothing happens -> false
+           frames.count(id, c)          how many instances of component c are on the screen now (a number)
+           frames.spotlight(id, c)      dims the screen except around c, with its name; clears the last one first
+           frames.clearSpot()
+           frames.hit(event)            { id, x, y, target } if the event came from inside a screen, else null.
+                                        x and y are on the screen, in its own pixels; target is the host's own
+                                        handle and means nothing to anyone but the host and the product's behaviour
+           frames.tap(hit)              the ripple, the product's reaction -> { go }, the screen id a link in the
+                                        target leads to, or null. The page decides whether it can follow
+           frames.interactive(hit)      the target is a link or something the product reacts to
+           frames.copyInto(id, container)   a copy of the screen, drawn into a container, without what the canvas
+                                        lays over a live one
+
+         Host adapter (what a host answers)
+           hostHTML(id, { device, state }) -> markup      mount(id, markup, state)       root(id) -> the screen's root
+           count(id, selector) -> n (only what is shown)  rects(id, selector) -> { w, h, rects: [{x,y,w,h}] } | null
+           drawSpot(id, { svg, label: { text, left, top } })   clearSpot()
+           hit(event) -> { id, x, y, target } | null      ripple(id, x, y)              goOf(target) -> id | null
+           matches(target, selector) -> boolean           copyInto(id, container)
+         ====================================================================== */
+      var FlowFrameDom = (function () {
+        "use strict";
+        const PAD = 3;
+        function create({ screens, components = {}, device, host, behaviour = null, report = () => {} }) {
+          /* the state each switchable screen shows: view state, kept across device switches */
+          const stateOf = {};
+          const known = (id) => Object.prototype.hasOwnProperty.call(screens, id);
+          const shownStates = (id) =>
+            known(id) ? screens[id].states.map((st, i) => (i === 0 || st.html ? i : -1)).filter((i) => i >= 0) : [];
+          const stateIndex = (id) => (known(id) && stateOf[id]) || 0;
+          const markup = (id) => {
+            const i = stateIndex(id),
+              st = screens[id].states[i];
+            return i && st && st.html ? st.html[device().id] : screens[id].html[device().id];
+          };
+
+          function spotlight(id, c) {
+            host.clearSpot();
+            if (!known(id) || !components[c]) return;
+            const seen = host.rects(id, components[c]);
+            if (!seen || !seen.rects.length) return;
+            const W = seen.w,
+              H = seen.h;
+            const rects = seen.rects.map((r) => {
+              const x = Math.max(0, r.x - PAD),
+                y = Math.max(0, r.y - PAD);
+              return { x, y, w: Math.min(W - x, r.w + PAD * 2), h: Math.min(H - y, r.h + PAD * 2) };
+            });
+            const rad = (r) => Math.min(14, r.h / 2);
+            const svg = `<svg class="spot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><mask id="spm"><rect width="${W}" height="${H}" fill="#fff"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="#000"/>`).join("")}</mask></defs><rect width="${W}" height="${H}" fill="rgba(16,19,19,.46)" mask="url(#spm)"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="none" stroke="#A343F5" stroke-width="2"/>`).join("")}</svg>`;
+            const first = rects.slice().sort((a, b) => a.y - b.y || a.x - b.x)[0];
+            host.drawSpot(id, {
+              svg,
+              label: {
+                text: c + (rects.length > 1 ? " ×" + rects.length : ""),
+                left: Math.max(6, Math.min(first.x, W - 130)),
+                top: first.y > 30 ? first.y - 26 : first.y + first.h + 6,
+              },
+            });
+          }
+
+          return {
+            stateIndex,
+            shownStates,
+            switchable: (id) => shownStates(id).length > 1,
+            hostHTML: (id) => host.hostHTML(id, { device: device(), state: stateIndex(id) }),
+            render(id) {
+              if (known(id)) host.mount(id, markup(id), stateIndex(id));
+            },
+            setState(id, i) {
+              if (!shownStates(id).includes(i)) return false;
+              stateOf[id] = i;
+              host.mount(id, markup(id), i);
+              return true;
+            },
+            count: (id, c) => (known(id) && components[c] ? host.count(id, components[c]) : 0),
+            spotlight,
+            clearSpot: () => host.clearSpot(),
+            hit: (event) => host.hit(event),
+            tap(hit) {
+              if (!hit) return { go: null };
+              host.ripple(hit.id, hit.x, hit.y);
+              if (behaviour && typeof behaviour.onTap === "function") {
+                try {
+                  behaviour.onTap(hit.id, hit.target, host.root(hit.id));
+                } catch (err) {
+                  report(err);
+                }
+              }
+              return { go: host.goOf(hit.target) || null };
+            },
+            interactive: (hit) =>
+              !!hit && host.matches(hit.target, ["[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
+            copyInto: (id, container) => host.copyInto(id, container),
+          };
+        }
+        return { create };
+      })();
+    </script>
+
     <script>
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
@@ -7099,22 +7226,108 @@
       const DEFAULT_LANES = SCAN.groups;
       const FINDINGS = SCAN.findings;
       const NOTES = SCAN.notes;
-      const COMP_SEL = SCAN.components;
       const shortName = (x) => SCREENS[x].name.split(" · ")[0];
       const hopTo = (x) => String(html`<button class="hop" data-to="${x}">${shortName(x)}</button>`);
       const andList = (a) =>
         a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
-      /* the states a frame can switch between: the first (the screen's own render) and every one with a render of
-         its own. A frame with more than one can be switched. */
-      const shownStates = (id) => SCREENS[id].states.map((st, i) => (i === 0 || st.html ? i : -1)).filter((i) => i >= 0);
-      const switchable = (id) => shownStates(id).length > 1;
-      /* the state each switchable frame shows: view state, kept across device switches, not saved */
-      const stateOf = {};
-      const stateIndex = (id) => stateOf[id] || 0;
-      const screenHTML = (id) => {
-        const st = SCREENS[id].states[stateIndex(id)];
-        return stateIndex(id) && st && st.html ? st.html[DEV.id] : SCREENS[id].html[DEV.id];
-      };
+      /* ---------- live screen host: begin ---------- */
+      /* FrameDom (FlowFrameDom, above) owns a screen's own DOM. This block is its host: the only place in the page
+         that knows a screen is a ".phone" element in the page's own DOM, how that element is made and found,
+         how an event from inside one is read, what is laid over it (ripple, spotlight) and how a copy is drawn.
+         To mount screens in a shadow root instead, change this block (and where the product styles apply) and
+         nothing else. Nothing outside it holds a node of a screen. */
+      const FrameDom = (() => {
+        const phoneOf = (id) => document.getElementById("p-" + id);
+        /* what of a component is on the screen to be seen: the instances that take room, and not the spotlight itself */
+        const shown = (ph, selector) => [...ph.querySelectorAll(selector)].filter((el) => el.offsetWidth > 0 && !el.closest(".spot"));
+        const host = {
+          hostHTML: (id, { device, state }) => `<div class="phone ${device.cls}" id="p-${esc(id)}" data-state="${esc(state)}"></div>`,
+          mount(id, markup, state) {
+            const ph = phoneOf(id);
+            if (!ph) return;
+            ph.innerHTML = markup;
+            ph.dataset.state = state;
+          },
+          root: phoneOf,
+          count: (id, selector) => {
+            const ph = phoneOf(id);
+            return ph ? shown(ph, selector).length : 0;
+          },
+          rects(id, selector) {
+            const ph = phoneOf(id);
+            if (!ph) return null;
+            const pr = ph.getBoundingClientRect(),
+              sc = pr.width / ph.offsetWidth;
+            return {
+              w: ph.offsetWidth,
+              h: ph.offsetHeight,
+              rects: shown(ph, selector).map((el) => {
+                const r = el.getBoundingClientRect();
+                return { x: (r.left - pr.left) / sc, y: (r.top - pr.top) / sc, w: r.width / sc, h: r.height / sc };
+              }),
+            };
+          },
+          drawSpot(id, { svg, label }) {
+            const ph = phoneOf(id);
+            if (!ph) return;
+            ph.insertAdjacentHTML("beforeend", svg);
+            const lbl = document.createElement("span");
+            lbl.className = "spotlbl";
+            lbl.textContent = label.text;
+            lbl.style.left = label.left + "px";
+            lbl.style.top = label.top + "px";
+            ph.appendChild(lbl);
+            requestAnimationFrame(() => {
+              const sp = ph.querySelector(".spot");
+              if (sp) sp.classList.add("on");
+              lbl.classList.add("on");
+            });
+          },
+          clearSpot() {
+            document.querySelectorAll(".spot,.spotlbl").forEach((n) => n.remove());
+          },
+          /* an event from inside a screen: which, where on it (in its own pixels, whatever the zoom), and what was hit */
+          hit(e) {
+            const ph = e.target.closest && e.target.closest(".phone"),
+              col = ph && ph.closest(".col");
+            if (!ph || !col) return null;
+            const r = ph.getBoundingClientRect();
+            return { id: col.dataset.id, x: (e.clientX - r.left) / cam.k, y: (e.clientY - r.top) / cam.k, target: e.target };
+          },
+          ripple(id, x, y) {
+            const ph = phoneOf(id);
+            if (!ph) return;
+            const rp = document.createElement("span");
+            rp.className = "ripple";
+            rp.style.left = x + "px";
+            rp.style.top = y + "px";
+            ph.appendChild(rp);
+            setTimeout(() => rp.remove(), 650);
+          },
+          goOf(target) {
+            const el = target.closest("[data-go]");
+            return (el && el.dataset.go) || null;
+          },
+          matches: (target, selector) => !!target.closest(selector),
+          /* a copy of a screen to draw somewhere else (a search tile), without what the canvas lays over a live one */
+          copyInto(id, container) {
+            const clone = phoneOf(id).cloneNode(true);
+            clone.removeAttribute("id");
+            clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+            clone.querySelectorAll(".ripple,.spot,.spotlbl").forEach((n) => n.remove());
+            container.appendChild(clone);
+          },
+        };
+        return FlowFrameDom.create({
+          screens: SCREENS,
+          components: SCAN.components,
+          device: () => DEV,
+          host,
+          behaviour: window.FlowScanBehaviour,
+          report: (err) => console.error("flow-scan-behaviour:", err),
+        });
+      })();
+      /* ---------- live screen host: end ---------- */
 
       /* The finding kinds. The scan says what was found (a kind and its facts); the kind says it in words,
          decides what lights up with the card, and what clicking it does. A kind the engine does not know shows
@@ -7949,20 +8162,21 @@
       function makeCol(id) {
         const s = SCREENS[id],
           col = document.createElement("div"),
-          many = switchable(id);
+          many = FrameDom.switchable(id);
         col.className = "col" + (many ? " hasstack" : "");
         col.dataset.id = id;
         col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}</div>
-    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}<div class="phone ${DEV.cls}" id="p-${esc(id)}" data-state="${stateIndex(id)}">${screenHTML(id)}</div><i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
+    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
         layout.scans.filter((f) => f.frame === id).forEach((f) => buildScan(col, f));
         if (many)
           col.querySelector(".states").addEventListener("click", (e) => {
             e.stopPropagation();
             select(id);
-            const shown = shownStates(id);
-            setState(id, shown[(shown.indexOf(stateIndex(id)) + 1) % shown.length]);
+            const shown = FrameDom.shownStates(id);
+            setState(id, shown[(shown.indexOf(FrameDom.stateIndex(id)) + 1) % shown.length]);
           });
         framesEl.appendChild(col);
+        FrameDom.render(id);
         return col;
       }
       function buildWorld() {
@@ -8285,65 +8499,6 @@
         } else paintPanel(st, { rebuild: true });
       };
       $("#pclose").onclick = () => panel.close();
-      /* ---------- FrameDom: what the panel knows of a frame's own DOM. Nothing else reaches into a phone. ---------- */
-      const FrameDom = (() => {
-        const phoneOf = (id) => document.getElementById("p-" + id);
-        /* where each component shows up in a screen: from the scan (COMP_SEL, above) */
-        const components = (id, c) => {
-          const ph = phoneOf(id);
-          if (!ph || !COMP_SEL[c]) return [];
-          return [...ph.querySelectorAll(COMP_SEL[c])].filter((el) => el.offsetWidth > 0 && !el.closest(".spot"));
-        };
-        function clearSpot() {
-          document.querySelectorAll(".spot,.spotlbl").forEach((n) => n.remove());
-        }
-        function spotlight(id, c) {
-          clearSpot();
-          const ph = phoneOf(id);
-          const els = components(id, c);
-          if (!ph || !els.length) return;
-          const pr = ph.getBoundingClientRect(),
-            sc = pr.width / ph.offsetWidth,
-            W = ph.offsetWidth,
-            H = ph.offsetHeight;
-          const rects = els.map((el) => {
-            const r = el.getBoundingClientRect();
-            const x = Math.max(0, (r.left - pr.left) / sc - 3),
-              y = Math.max(0, (r.top - pr.top) / sc - 3);
-            return {
-              x,
-              y,
-              w: Math.min(W - x, r.width / sc + 6),
-              h: Math.min(H - y, r.height / sc + 6),
-            };
-          });
-          const rad = (r) => Math.min(14, r.h / 2);
-          const svg = `<svg class="spot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><mask id="spm"><rect width="${W}" height="${H}" fill="#fff"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="#000"/>`).join("")}</mask></defs><rect width="${W}" height="${H}" fill="rgba(16,19,19,.46)" mask="url(#spm)"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="none" stroke="#A343F5" stroke-width="2"/>`).join("")}</svg>`;
-          ph.insertAdjacentHTML("beforeend", svg);
-          const first = rects.slice().sort((a, b) => a.y - b.y || a.x - b.x)[0];
-          const lbl = document.createElement("span");
-          lbl.className = "spotlbl";
-          lbl.textContent = c + (rects.length > 1 ? " ×" + rects.length : "");
-          lbl.style.left = Math.max(6, Math.min(first.x, W - 130)) + "px";
-          lbl.style.top = (first.y > 30 ? first.y - 26 : first.y + first.h + 6) + "px";
-          ph.appendChild(lbl);
-          requestAnimationFrame(() => {
-            const sp = ph.querySelector(".spot");
-            if (sp) sp.classList.add("on");
-            lbl.classList.add("on");
-          });
-          // the colour map matches this panel's own element, so a moved frame still reads true
-        }
-        /* a copy of a frame to draw somewhere else (a search tile), without what the canvas lays over a live one */
-        function snapshot(id) {
-          const clone = phoneOf(id).cloneNode(true);
-          clone.removeAttribute("id");
-          clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
-          clone.querySelectorAll(".ripple,.spot,.spotlbl").forEach((n) => n.remove());
-          return clone;
-        }
-        return { components, spotlight, clearSpot, snapshot };
-      })();
       async function copyText(t) {
         try {
           await navigator.clipboard.writeText(t);
@@ -8425,20 +8580,20 @@
           L = laneOf(id),
           file = s.file.split("/"),
           nOnly = s.states.filter((x) => !x.reachable).length,
-          many = switchable(id);
+          many = FrameDom.switchable(id);
         const code = `<svg aria-hidden="true"><use href="#i-code"/></svg>`;
         setTitle(s.name);
         const swept = (c) => !!sw && sw.component === c;
         const chips = s.components
           .map((c) => {
-            const n = FrameDom.components(id, c).length;
+            const n = FrameDom.count(id, c);
             const lbl = `${c}, ${n ? n + " on this screen" : "not on screen in this state"}`;
             return `<button class="cc${swept(c) ? " on" : ""}${n ? "" : " off"}" data-comp="${esc(c)}" aria-pressed="${swept(c)}" aria-label="${esc(lbl)}" title="${n ? "" : "Not on screen in this state"}">${esc(c)}<small aria-hidden="true">${n ? "×" + n : "—"}</small></button>`;
           })
           .join("");
         const only = (st) => !st.reachable;
-        const shown = shownStates(id),
-          at = stateIndex(id);
+        const shown = FrameDom.shownStates(id),
+          at = FrameDom.stateIndex(id);
         const states = many
           ? `<div class="chipsrow">${s.states
               .map(
@@ -8462,7 +8617,7 @@
         let armed = null;
         pbody.querySelectorAll(".cc").forEach((b) => {
           const c = b.dataset.comp,
-            n = FrameDom.components(id, c).length;
+            n = FrameDom.count(id, c);
           const on = () => {
             FrameDom.spotlight(id, c);
             hint.classList.add("hot");
@@ -8581,9 +8736,8 @@
           const s = SCREENS[id],
             t = document.createElement("div");
           t.className = "tile";
-          const clone = FrameDom.snapshot(id);
           t.innerHTML = `<div class="th"></div><b>${esc(s.name)}</b><small>${esc(s.route)}</small>`;
-          t.querySelector(".th").appendChild(clone);
+          FrameDom.copyInto(id, t.querySelector(".th"));
           t.onclick = () => select(id, true);
           res.appendChild(t);
         });
@@ -9570,29 +9724,14 @@
           if (!(selSet.size > 1 && selSet.has(id)) && selected !== id)
             select(id, false);
         }
-        const ph = e.target.closest(".phone");
-        if (ph && col) {
-          const r = ph.getBoundingClientRect(),
-            rp = document.createElement("span");
-          rp.className = "ripple";
-          rp.style.left = (e.clientX - r.left) / cam.k + "px";
-          rp.style.top = (e.clientY - r.top) / cam.k + "px";
-          ph.appendChild(rp);
-          setTimeout(() => rp.remove(), 650);
-          const goEl = e.target.closest("[data-go]");
-          /* the product's own reactions, if the scan brought any */
-          if (window.FlowScanBehaviour && typeof FlowScanBehaviour.onTap === "function") {
-            try {
-              FlowScanBehaviour.onTap(col.dataset.id, e.target, ph);
-            } catch (err) {
-              console.error("flow-scan-behaviour:", err);
-            }
-          }
+        const hit = FrameDom.hit(e);
+        if (hit) {
+          /* the ripple and the product's own reactions, if the scan brought any */
+          const { go: to } = FrameDom.tap(hit);
           /* a button that leads somewhere follows the connector that says so; no connector, no jump (a button
              that leads to its own screen has nowhere to go and needs none) */
-          if (goEl && goEl.dataset.go && SCREENS[goEl.dataset.go]) {
-            const from = col.dataset.id,
-              to = goEl.dataset.go;
+          if (to && SCREENS[to]) {
+            const from = hit.id;
             if (from === to || layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), 180);
             else toast(`No connector from ${shortName(from)} to ${shortName(to)}. Draw one to follow this button.`);
           }
@@ -9606,25 +9745,18 @@
         if (
           col &&
           !col.classList.contains("deck") &&
-          !e.target.closest(
-            /* .cap is not part of captionKind.owns on purpose: a press on a caption's padding still drags the frame */
-            ["[data-go],.states,.cap", window.FlowScanBehaviour && FlowScanBehaviour.interactive].filter(Boolean).join(","),
-          ) &&
+          /* .cap is not part of captionKind.owns on purpose: a press on a caption's padding still drags the frame */
+          !e.target.closest(".states,.cap") &&
+          !FrameDom.interactive(FrameDom.hit(e)) &&
           !annotations.owns(e.target)
         )
           select(col.dataset.id, true);
       });
 
       /* states: a switchable frame shows one state at a time, from the state's own render */
-      const stateLabel = (id) => `${shownStates(id).length} states · ${esc(SCREENS[id].states[stateIndex(id)].name)}`;
+      const stateLabel = (id) => `${FrameDom.shownStates(id).length} states · ${esc(SCREENS[id].states[FrameDom.stateIndex(id)].name)}`;
       function setState(id, i) {
-        if (!shownStates(id).includes(i)) return;
-        stateOf[id] = i;
-        const ph = document.getElementById("p-" + id);
-        if (ph) {
-          ph.innerHTML = screenHTML(id);
-          ph.dataset.state = i;
-        }
+        if (!FrameDom.setState(id, i)) return;
         const b = colOf(id) && colOf(id).querySelector(".states");
         if (b) b.innerHTML = stateLabel(id);
       }

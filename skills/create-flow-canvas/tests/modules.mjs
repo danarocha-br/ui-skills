@@ -19,6 +19,7 @@ export const ENGINE_BLOCKS = [
   "geometry-module",
   "gesture-module",
   "panel-module",
+  "framedom-module",
 ];
 /* the text of one <script id="..."> block (attributes after the id are allowed) */
 export const block = (id) => {
@@ -28,7 +29,7 @@ export const block = (id) => {
 };
 const sandbox = {};
 for (const id of ENGINE_BLOCKS) vm.runInNewContext(block(id), sandbox);
-export const { FlowMarkup, FlowDevice, FlowScan, FlowLayout, FlowCommit, FlowAnnotations, FlowRouting, FlowGeometry, FlowGesture, FlowPanel } = sandbox;
+export const { FlowMarkup, FlowDevice, FlowScan, FlowLayout, FlowCommit, FlowAnnotations, FlowRouting, FlowGeometry, FlowGesture, FlowPanel, FlowFrameDom } = sandbox;
 /* "" when the canvas has no sample yet, so the module tests still load and the sample's own test says why */
 export const sampleScan = html.match(/^\s*<script\b[^>]*\bid="flow-scan"/m) ? block("flow-scan") : "";
 
