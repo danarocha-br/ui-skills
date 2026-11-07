@@ -310,6 +310,37 @@ test("without a time, rect questions are about where the frame is going", () => 
   assert.deepEqual(plain(g.screenRect("s1")), { x: g.place("s1").x, y: g.place("s1").y + M.phTop, w: M.colW, h: M.phH });
 });
 
+/* a point on a frame, in the frame's own pixels (what a note on it stores), and the same point in the world */
+test("a point on a resting frame is its corner plus the point", () => {
+  const g = live([], [group("g", ids(2))], 0);
+  const p = g.place("s1");
+  assert.deepEqual(plain(g.worldOf("s1", [10, 20], 0)), { x: p.x + 10, y: p.y + 20 });
+});
+
+test("a point on a frame drawn small is scaled about the corner", () => {
+  const g = live([], [group("g", ids(3), false)], 0);
+  const p = g.place("s1");
+  assert.ok(p.s < 1, "a deck frame is drawn smaller");
+  assert.deepEqual(plain(g.worldOf("s1", [100, 200], 0)), { x: p.x + 100 * p.s, y: p.y + 200 * p.s });
+});
+
+test("a point on a frame that is still sliding follows the frame, not the place it is heading for", () => {
+  const g = live([], [group("g", ids(3))], 0);
+  const from = g.rect("s0", 0);
+  g.retarget(world([group("g", ids(3), false)]), 1000);
+  const start = g.worldOf("s0", [10, 20], 1000);
+  assert.deepEqual(plain(start), { x: from.x + 10 * from.s, y: from.y + 20 * from.s }, "the moment it is told, the frame has not moved");
+  const to = g.place("s0");
+  const rest = g.worldOf("s0", [10, 20], 1000 + 80 + 600);
+  assert.deepEqual(plain(rest), { x: to.x + 10 * to.s, y: to.y + 20 * to.s });
+  assert.notDeepEqual(plain(start), plain(rest));
+});
+
+test("a point on a frame the canvas does not have is undefined, like its rect", () => {
+  const g = live([], [group("g", ids(2))], 0);
+  assert.equal(g.worldOf("nope", [1, 2], 0), undefined);
+});
+
 test("the canvas's extent covers the groups and the loose frames, and the camera gets room around it", () => {
   const empty = live([], [], 0);
   assert.deepEqual(plain(empty.bounds()), { x: 0, y: 0, w: 900, h: 600 });

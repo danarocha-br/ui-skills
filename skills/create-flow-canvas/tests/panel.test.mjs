@@ -4,7 +4,7 @@
    Run:  node --test skills/create-flow-canvas/tests/panel.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FlowPanel } from "./modules.mjs";
+import { FlowPanel, html } from "./modules.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 /* three screens; Button is on a and b, Card on b only, Ghost on none */
@@ -243,4 +243,49 @@ test("the inset is asked for each time, so a window that is resized is answered 
   panel.open("inspect", "a");
   assert.deepEqual(plain(panel.insets({ width: 1000, height: 800 })), { right: 480, bottom: 0 });
   assert.deepEqual(plain(panel.insets({ width: 500, height: 800 })), { right: 0, bottom: 368 });
+});
+
+/* ---------- the size table: one place, shared with the stylesheet ---------- */
+
+test("the panel's size is one table: the breakpoint, a side panel's share and cap, a sheet's share and cap", () => {
+  assert.deepEqual(plain(FlowPanel.SIZE), {
+    narrowAt: 720,
+    side: { share: 0.48, max: 560 },
+    sheet: { share: 0.46, max: 430 },
+  });
+  assert.equal(Object.isFrozen(FlowPanel.SIZE) && Object.isFrozen(FlowPanel.SIZE.side) && Object.isFrozen(FlowPanel.SIZE.sheet), true);
+});
+
+test("the stylesheet is handed the panel's width and height as variables, in the units it uses", () => {
+  assert.deepEqual(plain(FlowPanel.cssVars()), {
+    "--panel-side-w": "min(560px, 48vw)",
+    "--panel-sheet-h": "min(46vh, 430px)",
+  });
+});
+
+/* The stylesheet cannot read a variable in a media query, so the breakpoint is the one number it still spells out.
+   Read the page's CSS: it must spell the table's number, and take its width and height from the variables. */
+const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+/* the @media (max-width: Npx) blocks of the stylesheet that restyle #panel's height: its sheet */
+const sheetQueries = () =>
+  [...css.matchAll(/@media\s*\(max-width:\s*(\d+)px\)\s*\{/g)]
+    .map((m) => {
+      let depth = 1,
+        i = m.index + m[0].length;
+      while (depth && i < css.length) (depth += css[i] === "{" ? 1 : css[i] === "}" ? -1 : 0), i++;
+      return { px: +m[1], body: css.slice(m.index + m[0].length, i - 1) };
+    })
+    .filter((q) => /#panel\s*\{[^}]*height:/.test(q.body));
+
+test("the stylesheet turns the panel into a sheet at the table's breakpoint, and nowhere else", () => {
+  const found = sheetQueries();
+  assert.equal(found.length, 1, "exactly one media query makes #panel a sheet");
+  assert.equal(found[0].px, FlowPanel.SIZE.narrowAt);
+});
+
+test("the stylesheet sizes the panel from the variables, not from numbers of its own", () => {
+  const side = /(?:^|[\s}])#panel\s*\{([^}]*)\}/.exec(css);
+  assert.match(side[1], /width:\s*var\(--panel-side-w\)/);
+  const [{ body }] = sheetQueries();
+  assert.match(/#panel\s*\{([^}]*)\}/.exec(body)[1], /height:\s*var\(--panel-sheet-h\)/);
 });

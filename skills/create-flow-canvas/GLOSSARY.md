@@ -68,8 +68,12 @@ What a note or a finding does on a device it has no place on: it keeps the same 
 _Avoid_: Fallback, default position
 
 **Slide**:
-A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Someone who asks for reduced motion gets no slide: frames are simply at their places.
+A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Anything that has to wait for a slide (Play, after it opens a group) waits for the canvas to be settled, not for a guessed time. Someone who asks for reduced motion gets no slide: frames are simply at their places, and the canvas is settled at once.
 _Avoid_: Transition, animation (those name the browser mechanism, not the thing the user sees)
+
+**Pacing**:
+A length of time that is the canvas's own choice: how long Play stays on a screen, how long a tap's mark or a message shows, how long a click waits for a second one. Each is named once. It is not a wait for something to finish: that waits for the thing itself (the canvas to be settled, a fade to end, the next frame), so a change to how long something takes cannot leave a guess behind. In code, `TIMING`.
+_Avoid_: Delay, timeout, sleep
 
 **Selection**:
 The frames the user has selected (a click, shift-click, a marquee, select all), or one connector, never both. One of the selected frames is the **primary** (the last one chosen): the frame the toolbar, the arrow keys, the counter ("03/09") and Inspect are about. Inspect follows the primary however the selection changes. Deselecting frames leaves a selected connector alone; selecting frames lets go of it. In code, `FlowSelection`; the page only paints it.
@@ -128,7 +132,7 @@ A title and a body typed in place under a frame. It is an annotation and part of
 _Avoid_: Heading
 
 **Panel**:
-The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none): the selection's primary frame, which it follows. The panel's **inset** is what it takes from the window; the camera leaves it free, so when the camera flies to a screen, a group or everything it fits them in what is left. A resize, while the panel is open and a screen is selected, centres that screen again in the room that remains; it does not re-fit the other frames. In code, `FlowPanel`; the page only paints what it says.
+The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none): the selection's primary frame, which it follows. The panel's **inset** is what it takes from the window; the camera leaves it free, so when the camera flies to a screen, a group or everything it fits them in what is left. The room the camera leaves free is the room the panel is drawn in, on a wide window and on a narrow one. A resize, while the panel is open and a screen is selected, centres that screen again in the room that remains; it does not re-fit the other frames. In code, `FlowPanel`; the page only paints what it says.
 _Avoid_: Sidebar, drawer, inspector (that is Inspect's label to a screen reader)
 
 **Sweep**:

@@ -73,7 +73,11 @@
         height: 0;
       }
       #stage.fly #world {
-        transition: transform 0.75s var(--ease);
+        transition: transform var(--fly-dur) var(--ease);
+      }
+      /* a device switch fades the world out and back in */
+      #world.fading {
+        transition: opacity var(--fade-dur);
       }
 
       /* ================= canvas objects: free frames and groups ================= */
@@ -739,7 +743,7 @@
         background: rgba(163, 67, 245, 0.26);
         border: 2px solid rgba(163, 67, 245, 0.55);
         pointer-events: none;
-        animation: rip 0.6s ease-out forwards;
+        animation: rip var(--ripple-dur) ease-out forwards;
         z-index: 9;
       }
       @keyframes rip {
@@ -1712,7 +1716,7 @@
         top: 0;
         bottom: 0;
         right: 0;
-        width: min(560px, 48vw);
+        width: var(--panel-side-w);
         background: #f7f4ef;
         border-left: 1px solid transparent; /* keeps an edge when forced-colors drops the shadow */
         box-shadow:
@@ -2363,7 +2367,7 @@
           right: 0;
           bottom: 0;
           width: auto;
-          height: min(46vh, 430px);
+          height: var(--panel-sheet-h);
           border-radius: 22px 22px 0 0;
           box-shadow:
             0 -1px 0 rgba(16, 19, 19, 0.06),
@@ -6548,6 +6552,7 @@
                                                                group always wins; of open ones, the one whose row's centre is nearer
            geo.closedTitle(groupId)                            { x, y } where a closed group's title stands, beside its deck
            geo.rect(id, now) -> { x, y, s }                    the frame's corner and the scale it is drawn at, now; without now, its place
+           geo.worldOf(id, [x, y], now) -> { x, y } | undefined   a point in the frame's own pixels, in the world: the corner it has now plus the point, scaled
            geo.screenRect(id, now)  geo.frameBox(id, now)      the screen area / the whole frame with its caption
            geo.frameAt(point, now, { margin, skip }) -> id|null  the frame whose screen is under the point
            geo.bounds()                                        everything on the canvas, with room round it
@@ -6917,6 +6922,11 @@
             },
             isDeck: (id) => !!arr.places[id] && arr.places[id].deck && !held.has(id),
             rect,
+            /* a point in a frame's own pixels (what a note on it stores), in the world, from where the frame is now */
+            worldOf(id, [lx, ly], now) {
+              const r = rect(id, now);
+              return r && { x: r.x + lx * r.s, y: r.y + ly * r.s };
+            },
             screenRect,
             frameBox,
             frameAt(pt, now, o = {}) {
@@ -7823,7 +7833,10 @@
          Interface
            const panel = FlowPanel.create({ usesOf, narrowAt? })
              usesOf    (component) => [screen ids that use it], from the scan
-             narrowAt  a window this wide or narrower gets a sheet instead of a side panel (default 720, the stylesheet's breakpoint)
+             narrowAt  a window this wide or narrower gets a sheet instead of a side panel (default SIZE.narrowAt, the stylesheet's breakpoint)
+           FlowPanel.SIZE                 { narrowAt, side: { share, max }, sheet: { share, max } }: the one table of how much of
+                                          the window the panel takes. Frozen.
+           FlowPanel.cssVars()            { "--panel-side-w", "--panel-sheet-h" }: that table as the stylesheet's lengths
            Every call below that changes something returns true, and one that changes nothing returns false.
            panel.open(mode, subject?)     "inspect" | "search"; anything else throws. Inspect takes the screen it is
                                           about (or none); Search takes no subject. Opening Search clears a sweep.
@@ -7847,10 +7860,23 @@
       var FlowPanel = (function () {
         "use strict";
         const MODES = { inspect: "Inspector", search: "Search" };
-        const SIDE = { share: 0.48, max: 560 };
-        const SHEET = { share: 0.46, max: 430 };
+        /* How much of the window the panel takes: the one place these numbers are written. The camera's arithmetic
+           (insets) and the stylesheet's width and height (cssVars, which the page hands over at boot) both read
+           this table. A media query cannot read a variable, so the stylesheet still spells out the breakpoint; a test
+           fails if it spells another number. */
+        const SIZE = Object.freeze({
+          narrowAt: 720,
+          side: Object.freeze({ share: 0.48, max: 560 }),
+          sheet: Object.freeze({ share: 0.46, max: 430 }),
+        });
+        const pct = (share) => Math.round(share * 1e4) / 100;
+        /* the stylesheet's custom properties for the panel's width (a side panel) and height (a sheet) */
+        const cssVars = () => ({
+          "--panel-side-w": `min(${SIZE.side.max}px, ${pct(SIZE.side.share)}vw)`,
+          "--panel-sheet-h": `min(${pct(SIZE.sheet.share)}vh, ${SIZE.sheet.max}px)`,
+        });
 
-        function create({ usesOf, narrowAt = 720 }) {
+        function create({ usesOf, narrowAt = SIZE.narrowAt }) {
           let open = false,
             mode = "search",
             subject = null,
@@ -7930,8 +7956,8 @@
             state,
             insets({ width, height }) {
               if (!open) return { right: 0, bottom: 0 };
-              if (width <= narrowAt) return { right: 0, bottom: Math.round(Math.min(height * SHEET.share, SHEET.max)) };
-              return { right: Math.min(SIDE.max, width * SIDE.share), bottom: 0 };
+              if (width <= narrowAt) return { right: 0, bottom: Math.round(Math.min(height * SIZE.sheet.share, SIZE.sheet.max)) };
+              return { right: Math.min(SIZE.side.max, width * SIZE.side.share), bottom: 0 };
             },
             on(listener) {
               listeners.add(listener);
@@ -7940,7 +7966,7 @@
           };
           return api;
         }
-        return { create };
+        return { create, SIZE, cssVars };
       })();
     </script>
 
@@ -8079,6 +8105,36 @@
 
     <script>
       "use strict"; /* a write to what the layout holds (read-only) throws here instead of being ignored */
+      /* Every duration the page spells out, in ms, in one place. Where the stylesheet runs the same length it is handed
+         the number as a variable (setVars, below), so the two cannot drift; tests/timing-owner.test.mjs fails on a
+         timer that spells its own. A wait that means "until that is done" does not belong here: it waits on the thing
+         itself (geo.settled, a transitionend, the next frame). What is left are lengths that are the page's own.
+           fly           the camera's flight (.fly in the styles)             fade       a device switch's fade (#world.fading)
+           tapMark       how long the mark under a tap lasts (the CSS animation)
+           playDwell     how long Play stays on each screen                   tapLead    a tap on a link, before the camera follows it
+           doubleClick   a connector label's single click waits this long for a second one
+           resizeSettle  a resize waits this long for the window to stop      scrollbarFade, toast, hintHides, copied: feedback that goes away
+           tail          extra time after an animation's own length before its class or node is taken off
+           giveUp        how long past its expected length a wait on a signal (a transition's end, a frame being drawn)
+                         gives up, so a signal that never comes (nothing changed, the tab hidden) cannot hold anything up */
+      const TIMING = Object.freeze({
+        fly: 750,
+        fade: 180,
+        tapMark: 600,
+        tail: 60,
+        giveUp: 250,
+        playDwell: 1900,
+        tapLead: 180,
+        doubleClick: 240,
+        resizeSettle: 120,
+        scrollbarFade: 900,
+        toast: 2800,
+        hintHides: 9000,
+        copied: 1700,
+      });
+      /* custom properties the stylesheet is handed: { "--name": value } */
+      const setVars = (vars) => Object.entries(vars).forEach(([name, value]) => document.documentElement.style.setProperty(name, value));
+      setVars({ "--fly-dur": TIMING.fly + "ms", "--fade-dur": TIMING.fade + "ms", "--ripple-dur": TIMING.tapMark + "ms" });
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
    product class names, no product words. Problems are reported in the console; a scan that cannot be read
@@ -8174,7 +8230,7 @@
             rp.style.left = x + "px";
             rp.style.top = y + "px";
             ph.appendChild(rp);
-            setTimeout(() => rp.remove(), 650);
+            setTimeout(() => rp.remove(), TIMING.tapMark + TIMING.tail);
           },
           goOf(target) {
             const el = target.closest("[data-go]");
@@ -8478,12 +8534,16 @@
       }
       /* after a drag or a nudge: a note dropped on a frame belongs to it from then on; dropped on empty canvas it floats.
          The data change runs inside a commit (FlowAnnotations does that); the DOM follows in rehomeDom. */
-      function rehomeData(n, d) {
-        const m = worldM(),
-          r = d.getBoundingClientRect(),
-          wx = (r.left - m.e) / m.a,
-          wy = (r.top - m.f) / m.a,
-          f = homeFor(wx + r.width / m.a / 2, wy + r.height / m.a / 2);
+      function rehomeData(n, d, p) {
+        /* where the note's corner is in the world: its place `p` in its parent, from the geometry. No DOM rect and no
+           camera, so it is right in the middle of a flight too. Only the note's own size is read from the page. */
+        const now = performance.now(),
+          home = n.frame ? geo.rect(n.frame, now) : null,
+          s = home ? home.s : 1,
+          at = home ? geo.worldOf(n.frame, [p.x, p.y], now) : p,
+          wx = at.x,
+          wy = at.y,
+          f = homeFor(wx + (d.offsetWidth * s) / 2, wy + (d.offsetHeight * s) / 2);
         if (f) layout.edit("notes", n.id, { frame: f, pos: { ...(f === n.frame ? n.pos : {}), [DEV.id]: localFrom(f, wx, wy) }, x: undefined, y: undefined });
         else layout.edit("notes", n.id, { frame: null, pos: undefined, x: Math.round(wx), y: Math.round(wy) });
       }
@@ -8546,7 +8606,7 @@
           const n = noteOf(id),
             d = noteEls.get(id);
           if (!n || !d) return;
-          if (!how.nudged) return rehomeData(n, d); /* a drop: it may land on another frame, or on empty canvas */
+          if (!how.nudged) return rehomeData(n, d, p); /* a drop: it may land on another frame, or on empty canvas */
           /* a nudge moves the note where it is: 8 px must not attach it to a frame or let go of one */
           const at = [Math.round(p.x), Math.round(p.y)];
           if (n.frame) layout.edit("notes", n.id, { pos: { ...(n.pos || {}), [DEV.id]: at } });
@@ -8709,11 +8769,13 @@
       };
       const arrange = FlowArrange.create({ layout, geo, frames: ORDER, device: () => DEV.id, metrics: () => DEV.metrics, input: geoInput });
       const geoMove = FlowGeometry.MOVES;
-      for (const k of ["open", "deck"]) {
-        const root = document.documentElement.style;
-        root.setProperty(`--${k}-dur`, geoMove[k].dur + "ms");
-        root.setProperty(`--${k}-ease`, `cubic-bezier(${geoMove[k].curve.join(",")})`);
-      }
+      for (const k of ["open", "deck"])
+        setVars({
+          [`--${k}-dur`]: geoMove[k].dur + "ms",
+          [`--${k}-ease`]: `cubic-bezier(${geoMove[k].curve.join(",")})`,
+        });
+      /* the panel's width and height come from FlowPanel's size table, the same one the camera fits things with */
+      setVars(FlowPanel.cssVars());
       /* a frame's corner, as the geometry has it at this moment */
       function putFrame(id, now) {
         const col = colOf(id),
@@ -9020,6 +9082,39 @@
       /* ======================================================================
    CAMERA
    ====================================================================== */
+      /* the next n frames have been drawn (or, in a tab that is not drawing, a moment later) */
+      const frames = (n = 2) =>
+        new Promise((res) => {
+          const tick = () => (--n > 0 ? requestAnimationFrame(tick) : res());
+          requestAnimationFrame(tick);
+          setTimeout(res, TIMING.giveUp);
+        });
+      /* resolves when el's `prop` transition ends. A timer a little longer than `ms` covers the transition that never
+         starts (nothing to change, the tab hidden), so a caller is never left waiting. */
+      const afterTransition = (el, prop, ms) =>
+        new Promise((res) => {
+          let timer;
+          const done = () => {
+            clearTimeout(timer);
+            el.removeEventListener("transitionend", on);
+            res();
+          };
+          const on = (e) => e.target === el && e.propertyName === prop && done();
+          el.addEventListener("transitionend", on);
+          timer = setTimeout(done, ms + TIMING.giveUp);
+        });
+      /* resolves once every frame is where it is going (geometry's settled): at once when none is moving or under
+         reduced motion. It asks the geometry when the last slide ends rather than watching frames, so a tab that is
+         not drawing does not hold it up; a slide begun meanwhile makes it wait again. */
+      const whenSettled = () =>
+        new Promise((res) => {
+          const check = () => {
+            const left = geo.restsAt() - performance.now();
+            if (left <= 0) res();
+            else setTimeout(check, left);
+          };
+          check();
+        });
       let cam = { x: 0, y: 0, k: 0.6 },
         flyTimer;
       /* the inset the panel takes from the window, which the camera leaves free; asked for each time */
@@ -9039,8 +9134,7 @@
         cam = { ...t };
         apply();
         clearTimeout(flyTimer);
-        /* the flying transition lasts 750ms (.fly in the styles) */
-        flyTimer = setTimeout(() => stage.classList.remove("fly"), 810);
+        flyTimer = setTimeout(() => stage.classList.remove("fly"), TIMING.fly + TIMING.tail);
       }
       function fitRect(r, pad = 60, maxK = 2) {
         const inset = panelInset(),
@@ -9112,7 +9206,7 @@
           sbT = setTimeout(() => {
             sH.classList.remove("show");
             sV.classList.remove("show");
-          }, 900);
+          }, TIMING.scrollbarFade);
         }
       }
 
@@ -9270,10 +9364,7 @@
         if (ch.opened) {
           if (selection.primary()) focusScreen(selection.primary());
           /* a keyboard user who opens the inspector lands in it; closing hands focus back */
-          if (st.mode === "inspect")
-            setTimeout(() => {
-              if (panel.state().open) ptitle.focus({ preventScroll: true });
-            }, 60);
+          if (st.mode === "inspect") ptitle.focus({ preventScroll: true });
         }
       }
       panel.on(paintPanel);
@@ -9451,13 +9542,13 @@
           setTimeout(() => {
             cp.classList.remove("done");
             cp.setAttribute("aria-label", "Copy path");
-          }, 1700);
+          }, TIMING.copied);
         };
         refreshSweepUI();
       }
       function openSearch() {
         panel.open("search");
-        setTimeout(() => $("#q") && $("#q").focus(), 350);
+        if ($("#q")) $("#q").focus({ preventScroll: true });
       }
       function renderSearchBody() {
         pbody.innerHTML = `<div class="qrow"><input id="q" placeholder="Describe what you’re looking for" autocomplete="off"><label>Filter by</label>
@@ -9552,7 +9643,7 @@
         pl.querySelector("span").textContent = "Stop";
         if (!L.open) {
           setGroup(L.id, true, { fly: false });
-          await sleep(450);
+          await whenSettled();
         }
         let prev = null;
         for (const id of ids) {
@@ -9561,7 +9652,7 @@
           if (hop) tokenAlong(hop.id);
           select(id, true);
           prev = id;
-          await sleep(1900);
+          await sleep(TIMING.playDwell);
         }
         stopPlay();
       }
@@ -9582,9 +9673,6 @@
    ====================================================================== */
       let connDrag = null;
       const connEls = new Map();
-      function worldM() {
-        return new DOMMatrixReadOnly(getComputedStyle(world).transform);
-      }
       function mkConnEl(c) {
         const g = document.createElementNS(svgNS, "g");
         g.setAttribute("class", "conn");
@@ -9681,7 +9769,7 @@
             else done();
           };
           requestAnimationFrame(step);
-          setTimeout(done, D + 250);
+          setTimeout(done, D + TIMING.giveUp);
         });
       }
       function addConn(from, to, opts = {}) {
@@ -9703,7 +9791,7 @@
           layout.add("conns", link);
           return link;
         });
-        if (!opts.noEdit) setTimeout(() => editChip(c.id), 40);
+        if (!opts.noEdit) editChip(c.id);
         return c;
       }
       function deleteConn(id) {
@@ -9825,7 +9913,7 @@
           if (!c || c.querySelector(".lb").isContentEditable) return;
           e.stopPropagation();
           clearTimeout(chipT);
-          chipT = setTimeout(() => go(c.dataset.from, c.dataset.to), 240);
+          chipT = setTimeout(() => go(c.dataset.from, c.dataset.to), TIMING.doubleClick);
         },
         true,
       );
@@ -9880,7 +9968,7 @@
       function afterGrouped(L, ids, { fly: bring }) {
         setSel(ids, ids[ids.length - 1]);
         if (bring) fly(fitRect(groupRect(L), 40));
-        setTimeout(() => focusTitle(L.id), 650);
+        focusTitle(L.id);
         toast(
           ids.length === 1
             ? "Grouped. Name it, then drag frames in."
@@ -9950,7 +10038,7 @@
         if (!L.open) setGroup(id, true, { fly: false });
         const t = groupEl(id) && groupEl(id).querySelector(".gtitle");
         if (!t) return;
-        t.focus();
+        t.focus({ preventScroll: true });
         const r = document.createRange();
         r.selectNodeContents(t);
         const s = getSelection();
@@ -10031,7 +10119,7 @@
       }
       const hint = $("#hint");
       const hideHint = () => hint.classList.add("gone");
-      setTimeout(hideHint, 9000);
+      setTimeout(hideHint, TIMING.hintHides);
       /* the page's side of a gesture: draw its preview, and clean up after it. Everything a drag puts on the page is
          drawn from the preview and cleared in settleGesture, which a drop and a cancel both end in. */
       function showGesture(pv) {
@@ -10323,7 +10411,7 @@
              that leads to its own screen has nowhere to go and needs none) */
           if (to && SCREENS[to]) {
             const from = hit.id;
-            if (from === to || layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), 180);
+            if (from === to || layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), TIMING.tapLead);
             else toast(`No connector from ${shortName(from)} to ${shortName(to)}. Draw one to follow this button.`);
           }
         }
@@ -10459,7 +10547,7 @@
         t.textContent = m;
         t.classList.add("show");
         clearTimeout(tt);
-        tt = setTimeout(() => t.classList.remove("show"), 2800);
+        tt = setTimeout(() => t.classList.remove("show"), TIMING.toast);
       }
 
       /* Delete and the arrow keys on an annotation: one handler for every kind, ahead of the others */
@@ -10581,7 +10669,7 @@
         clearTimeout(resizeT);
         resizeT = setTimeout(() => {
           if (panel.state().open && selection.primary()) focusScreen(selection.primary());
-        }, 120);
+        }, TIMING.resizeSettle);
       });
 
       /* ======================================================================
@@ -10622,9 +10710,9 @@
         closeMenus();
         const sel = selection.ids(),
           prim = selection.primary();
-        world.style.transition = "opacity .18s";
+        world.classList.add("fading");
         world.style.opacity = 0;
-        await sleep(200);
+        await afterTransition(world, "opacity", TIMING.fade);
         document.body.classList.add("boot");
         applyDevice(id);
         buildWorld();
@@ -10641,11 +10729,11 @@
         } else cam = fitRect(geo.bounds(), 30);
         stage.classList.remove("fly");
         apply();
-        await sleep(80);
+        await frames();
         document.body.classList.remove("boot");
         world.style.opacity = 1;
-        await sleep(240);
-        world.style.transition = "";
+        await afterTransition(world, "opacity", TIMING.fade);
+        world.classList.remove("fading");
         switching = false;
         toast(DEV.label + " · " + DEV.vp);
       }
