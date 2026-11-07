@@ -91,6 +91,8 @@ const OLD_SHAPES = {
   "the real canvas's first layout (whole groups, full lists)": () => fs.readFileSync(path.join(here, "fixtures/saved-layout-v1.json"), "utf8").trim(),
   "whole groups, with their text": () =>
     JSON.stringify({ v: 2, lanes: [{ id: "g1", screens: ["s1"], open: false, title: "Mine", sub: "", subOn: false }], pos: { mobile: { s1: { x: 5, y: 5 } } }, conns: { edits: {}, mine: [] }, cc: 6, gc: 3 }),
+  "groups that are an object but not edits": () =>
+    JSON.stringify({ v: 3, lanes: { foo: 1 }, pos: { mobile: { s1: { x: 5, y: 5 } } }, conns: { edits: { c1: { label: "Mine" } }, mine: [] }, cc: 6, gc: 3 }),
   "a list of groups and nothing else": () => JSON.stringify({ lanes: [{ id: "g1", screens: ["s1", "s2"], open: true }] }),
   "a list of groups with text of the wrong type": () =>
     JSON.stringify({ lanes: [{ id: "g1", screens: ["s1"], open: true, title: 7, sub: null, subOn: "yes" }], conns: [], notes: [], gc: 3 }),

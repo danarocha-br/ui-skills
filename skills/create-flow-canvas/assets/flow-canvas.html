@@ -5152,7 +5152,7 @@
                                                its saved place here, else carried from the device it was first placed on
                                                (the same relative place on that device's screen), else the resting spot.
                                                Never written back.
-           `metrics.phTop` is where the screen starts inside the frame's column; `at` below is a point in that column.
+           `metrics.phTop` is where the screen starts inside the frame's column.
          ====================================================================== */
       var FlowDevice = (function () {
         /* the facts, once. cw/ch: the screen (px); top: where it starts in the frame's column; cr: its corner radius; ds: the deck's scale; tw: the
@@ -5544,7 +5544,8 @@
          Everything the scan provides is saved the same way, as the user's edits over it and the things the user
          made (FlowScan.merge and diff; for groups, mergeGroups and diffGroups, which add which frames are in
          which group). Loading lays those over the scan it is given. So a new scan reaches a saved layout in
-         every kind, and the user's edits win where they touched it. The saved layout holds edits over the scan, never copies of it; what the user made themselves is kept whole.
+         every kind, and the user's edits win where they touched it. The saved layout holds edits over the scan,
+         never copies of it; what the user made themselves is kept whole.
 
          A group is { id, screens, open, title, sub, subOn }: its frames, whether it is fanned out, its
          title (the text before a colon is its name), its description, and whether the description is
@@ -5602,10 +5603,11 @@
 
          On disk: { v: 3, lanes, pos, conns, scans, notes, caps, cc, gc }. Each of the first kinds (not pos) is
          { edits, mine }, and lanes (the groups) also has place (a frame the user put in a group or freed), order (a group
-         the user arranged) and seq (the order of the groups). "lanes" is the older name for groups and the only
-         place it is left: the key on disk, kept so saved layouts still load. Nothing older than this is read: a saved layout whose groups are not in this form starts
-         from the scan (the file stays until the next save replaces it), and a kind that is not in this form
-         is the scan's. Loading never throws.
+         the user arranged) and seq (the order of the groups). "lanes" is the older name for groups; in this module
+         it is left only as the key on disk, kept so saved layouts still load.
+         Nothing older than this is read: a saved layout whose groups are not in this form starts from the scan
+         (the file stays until the next save replaces it), and a kind that is not in this form is the scan's.
+         Loading never throws.
          ====================================================================== */
       var FlowLayout = (function () {
         "use strict";
@@ -5739,7 +5741,7 @@
             } catch (e) {}
             /* nothing saved, or a layout that is not the current shape (an older build's, or not ours at all):
                start from the scan. The old file stays in storage until the next save replaces it. */
-            if (!isObj(st) || !isObj(st.lanes)) return fallBack();
+            if (!isObj(st) || !isEdits(st.lanes)) return fallBack();
             try {
               /* ids the user's own groups hold are taken before any is handed out */
               counters = {
