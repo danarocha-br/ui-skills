@@ -91,8 +91,8 @@ test("the drawn shape starts at the port, ends its arrowhead on the target, and 
 });
 
 /* ---------- the leader of a scanner finding: from the frame's bottom edge to its card ---------- */
-const LM = { colW: 270, phTop: 40, phH: 585 }; /* the frame's bottom edge is at phTop + phH = 625; the dock sits colW - 62 = 208 across */
-const leader = (...a) => plain(FlowRouting.leader(LM, ...a));
+const LF = { w: 270, screenBottom: 625 }; /* the frame's anatomy (FlowGeometry.frame): the dock sits w - 62 = 208 across */
+const leader = (...a) => plain(FlowRouting.leader(LF, ...a));
 
 test("an unmoved card whose top is past the gutter run is reached from above: down the gutter to its top", () => {
   /* left 300 is right of the run (colW + 22 = 292), so the line lands on the card's top edge at the run */

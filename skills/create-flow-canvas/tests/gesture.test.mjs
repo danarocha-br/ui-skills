@@ -1,10 +1,10 @@
 /* Gesture module tests. FlowGesture holds a drag as a *proposal* outside the layout and commits it once, on the
-   drop. These tests run it with the real layout and commit modules and a recording stand-in for the page (a geometry
-   that says where things are, and the adapter: what to show, what to clean up). No DOM.
+   drop. These tests run it with the real layout, commit and geometry modules and a recording stand-in for the page
+   (the adapter: what to show, what to clean up; showing a preview arranges the geometry again, as the page does). No DOM.
    Run:  node --test skills/create-flow-canvas/tests/gesture.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FlowLayout, FlowCommit, FlowGesture } from "./modules.mjs";
+import { FlowDevice, FlowGeometry, FlowLayout, FlowCommit, FlowGesture } from "./modules.mjs";
 import { builtinKinds } from "./kinds.mjs";
 
 const KEY = "flow-canvas.layout.v1";
@@ -19,10 +19,21 @@ const DEFAULTS = () => ({
   notes: [],
   scans: {},
 });
-/* a small canvas: three groups stacked down the left, two loose frames on the right */
-const METRICS = { colW: 100, gap: 20, head: 40, phTop: 10, phH: 200, cap: 30, collH: 150, deckW: 80, peekX: 8 };
-const BOX = { g1: { x: 0, top: 0 }, g2: { x: 0, top: 400 }, g3: { x: 0, top: 800 } };
-const FREE = { s7: { x: 2000, y: 0 }, s8: { x: 2000, y: 500 } };
+/* a canvas on the mobile device: three groups stacked down the left, far enough apart that their bands do not meet, and
+   two loose frames on the right. Where they are is the test's, as the saved positions are the page's. */
+const M = FlowDevice.describe("mobile").metrics;
+const { WORLD } = FlowGeometry;
+const FIXED = { g1: { x: 0, y: 0 }, g2: { x: 0, y: 1400 }, g3: { x: 0, y: 2800 }, s7: { x: 6000, y: 0 }, s8: { x: 6000, y: 1500 } };
+const FRAMES = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+const GROUPS = () => DEFAULTS().groups.map(({ id, screens, open }) => ({ id, screens, open }));
+/* the arrangement the canvas starts in: where a frame is, and so where a pointer must be to drop it somewhere */
+const REF = FlowGeometry.create({ reduceMotion: true });
+REF.setMetrics(M);
+REF.retarget({ groups: GROUPS(), screens: FRAMES, pos: FIXED }, 0, { snap: true });
+/* a frame is pressed at its own corner, so the pointer is the frame's corner and the frame's centre is half a frame in */
+const slot = (g, i) => REF.slotPlace(g, i); /* over slot i of an open group */
+const deck = (g) => ({ x: REF.box(g).x, y: REF.box(g).top - 200 }); /* over a closed group's deck */
+const corner = (id) => ({ x: REF.place(id).x, y: REF.place(id).y });
 
 function setup({ pos = {} } = {}) {
   const log = []; /* "save", "redraw:layout", "show", "settle:<ids>" in the order they happened */
@@ -45,36 +56,47 @@ function setup({ pos = {} } = {}) {
     },
     kinds: builtinKinds(),
   });
-  const redraw = { world: () => log.push("redraw:world"), layout: () => log.push("redraw:layout") };
+  const redraw = {
+    world: () => log.push("redraw:world"),
+    layout: () => {
+      log.push("redraw:layout");
+      arrange();
+    },
+  };
   const kinds = builtinKinds({}, { refresh: (name) => log.push("redraw:" + name) });
   const commit = FlowCommit.create({ layout, kinds, redraw });
   const shown = [];
-  const geo = {
-    box: (id) => BOX[id],
-    place: (id) => FREE[id] || { x: 0, y: 0 },
-    rect: () => ({ x: 0, y: 0 }) /* every frame starts under the pointer's origin: no offsets to think about */,
+  /* the page arranges the geometry again whenever it draws: after a commit, and for every preview */
+  const geo = FlowGeometry.create({ reduceMotion: true });
+  geo.setMetrics(M);
+  let gesture;
+  const arrange = () => {
+    const v = gesture.view();
+    geo.retarget({ groups: v.groups.map(({ id, screens, open }) => ({ id, screens, open })), screens: FRAMES, pos: { ...FIXED, ...v.pos } }, 0, { snap: true });
   };
-  const frames = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
   const adapter = {
     show: (preview) => {
       shown.push(preview);
       log.push("show");
+      arrange();
     },
     settle: (ids) => log.push("settle:" + ids.join(",")),
   };
-  const gesture = FlowGesture.create({ layout, commit, device: () => "mobile", metrics: () => METRICS, geo, frames, now: () => 0, adapter });
-  return { layout, commit, gesture, log, shown };
+  gesture = FlowGesture.create({ layout, commit, device: () => "mobile", geo, frames: FRAMES, now: () => 0, adapter });
+  arrange();
+  const begin = gesture.begin;
+  /* a frame press without a pointer is at the frame's own corner */
+  gesture.begin = (press) => begin(press.kind === "frame" && !press.pointer ? { ...press, pointer: corner(press.pid) } : press);
+  return { layout, commit, gesture, log, shown, geo };
 }
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 const ids = (layout, g) => layout.groups.find((l) => l.id === g).screens;
-/* the pointer that puts a frame's centre at (cx, cy): the centre is 50 right of and 110 below the corner */
-const at = (cx, cy) => ({ x: cx - 50, y: cy - 110 });
 
 test("dragging a frame into another group is a proposal: the layout is not touched until the drop", () => {
   const { layout, gesture } = setup();
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  const p = gesture.move(at(170, 450)); /* over g2, between its two frames */
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  const p = gesture.move(slot("g2", 1)); /* over g2, between its two frames */
   eq(p, { kind: "into", id: "g2", idx: 1 });
   assert.equal(layout.snapshot(), before, "the model is exactly as it was");
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
@@ -88,8 +110,8 @@ test("dragging a frame into another group is a proposal: the layout is not touch
 test("the drop commits once: the frame is in the new group, in its slot, and one undo undoes it", () => {
   const { layout, gesture } = setup({ pos: { s1: { x: 5, y: 5 } } });
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  gesture.move(at(170, 450));
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  gesture.move(slot("g2", 1));
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s2", "s3"]);
   eq(ids(layout, "g2"), ["s4", "s1", "s5"]);
@@ -103,8 +125,8 @@ test("the drop commits once: the frame is in the new group, in its slot, and one
 
 test("reordering inside a group is a drop into the same group, not a move", () => {
   const { layout, gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(290, 100)), { kind: "into", id: "g1", idx: 2 });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  eq(gesture.move(slot("g1", 2)), { kind: "into", id: "g1", idx: 2 });
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s2", "s3", "s1"]);
   assert.deepEqual({ group: out.group, moved: out.moved }, { group: "g1", moved: false });
@@ -112,20 +134,22 @@ test("reordering inside a group is a drop into the same group, not a move", () =
 
 test("a closed group takes the frame at its end", () => {
   const { layout, gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(50, 850)), { kind: "into", id: "g3", idx: 1 });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  eq(gesture.move(deck("g3")), { kind: "into", id: "g3", idx: 1 });
   gesture.end();
   eq(ids(layout, "g3"), ["s6", "s1"]);
 });
 
 test("a free drop takes the frames out of their group and keeps where they were let go", () => {
   const { layout, gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1", "s2"], pid: "s1", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s1", "s2"], pid: "s1" });
   const p = gesture.move({ x: 2500.4, y: 1000.6 });
   assert.equal(p.kind, "loose");
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s3"]);
-  eq(layout.pos.mobile, { s1: { x: 2500, y: 1001 }, s2: { x: 2500, y: 1001 } });
+  /* each keeps its offset from the frame under the pointer: s2 stands a slot right of s1 */
+  const dx = slot("g1", 1).x - slot("g1", 0).x;
+  eq(layout.pos.mobile, { s1: { x: 2500, y: 1001 }, s2: { x: Math.round(2500.4 + dx), y: 1001 } });
   assert.deepEqual({ kind: out.kind, moved: out.moved }, { kind: "loose", moved: true });
   layout.undo();
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
@@ -134,7 +158,7 @@ test("a free drop takes the frames out of their group and keeps where they were 
 
 test("a free drop of the last frame of a group removes the empty group", () => {
   const { layout, gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6" });
   gesture.move({ x: 2500, y: 1000 });
   gesture.end();
   eq(layout.groups.map((l) => l.id), ["g1", "g2"]);
@@ -145,8 +169,8 @@ test("a free drop of the last frame of a group removes the empty group", () => {
 test("dropping a frame from a group onto a loose frame makes a group pinned at that frame", () => {
   const { layout, gesture } = setup();
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(2050, 110)), { kind: "merge", id: "s7" });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  eq(gesture.move(corner("s7")), { kind: "merge", id: "s7" });
   assert.equal(layout.snapshot(), before, "still only a proposal");
   const out = gesture.end();
   assert.equal(out.kind, "merge");
@@ -155,44 +179,44 @@ test("dropping a frame from a group onto a loose frame makes a group pinned at t
   eq(layout.groups.find((l) => l.id === "g4").screens, ["s7", "s1"]);
   eq(ids(layout, "g1"), ["s2", "s3"]);
   /* the group sits where the frame it was dropped on was, though one of its frames came from a group */
-  eq(layout.pos.mobile.g4, { x: 2000, y: -40 });
+  eq(layout.pos.mobile.g4, { x: 6000, y: -WORLD.head });
   assert.equal(layout.undo(), true);
   assert.equal(layout.snapshot(), before, "one step undoes the whole merge");
 });
 
 test("dropping loose frames onto a loose frame merges them, pinned at that frame", () => {
-  const { layout, gesture } = setup({ pos: { s8: { x: 2000, y: 500 } } });
-  gesture.begin({ kind: "frame", ids: ["s8"], pid: "s8", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(2050, 110)), { kind: "merge", id: "s7" });
+  const { layout, gesture } = setup({ pos: { s8: FIXED.s8 } });
+  gesture.begin({ kind: "frame", ids: ["s8"], pid: "s8" });
+  eq(gesture.move(corner("s7")), { kind: "merge", id: "s7" });
   gesture.end();
   eq(layout.groups.find((l) => l.id === "g4").screens, ["s7", "s8"]);
-  eq(layout.pos.mobile, { g4: { x: 2000, y: -40 } }, "the frames' own places are gone; the group has one");
+  eq(layout.pos.mobile, { g4: { x: 6000, y: -WORLD.head } }, "the frames' own places are gone; the group has one");
 });
 
 test("a merge that takes the last frame of a group leaves no empty group behind", () => {
   const { layout, gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6", pointer: { x: 0, y: 0 } });
-  gesture.move(at(2050, 110));
+  gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6" });
+  gesture.move(corner("s7"));
   gesture.end();
   eq(layout.groups.map((l) => l.id), ["g1", "g2", "g4"]);
 });
 
 test("a frame is never proposed as a merge with itself or with a frame in a group", () => {
   const { gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7", pointer: { x: 0, y: 0 } });
-  assert.equal(gesture.move(at(2050, 110)).kind, "loose", "over itself");
+  gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7" });
+  assert.equal(gesture.move(corner("s7")).kind, "loose", "over itself");
 });
 
 test("a group dragged by its grip is a proposed move: its place changes only on the drop", () => {
   const { layout, gesture } = setup();
   const before = layout.snapshot();
   gesture.begin({ kind: "group", id: "g2", pointer: { x: 10, y: 10 } });
-  eq(gesture.move({ x: 40, y: -10 }), { kind: "move", id: "g2", at: { x: 30, y: 380 } });
+  eq(gesture.move({ x: 40, y: -10 }), { kind: "move", id: "g2", at: { x: 30, y: 1380 } });
   assert.equal(layout.snapshot(), before);
-  eq(gesture.view().pos.g2, { x: 30, y: 380 });
+  eq(gesture.view().pos.g2, { x: 30, y: 1380 });
   assert.equal(layout.pos.mobile.g2, undefined);
   gesture.end();
-  eq(layout.pos.mobile.g2, { x: 30, y: 380 });
+  eq(layout.pos.mobile.g2, { x: 30, y: 1380 });
   layout.undo();
   assert.equal(layout.snapshot(), before);
 });
@@ -200,9 +224,9 @@ test("a group dragged by its grip is a proposed move: its place changes only on 
 test("cancel throws the proposal away: the layout is as it was, nothing saved, no undo step", () => {
   const { layout, gesture, log } = setup();
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1", "s2"], pid: "s1", pointer: { x: 0, y: 0 } });
-  gesture.move(at(170, 450));
-  gesture.move(at(2050, 110));
+  gesture.begin({ kind: "frame", ids: ["s1", "s2"], pid: "s1" });
+  gesture.move(slot("g2", 1));
+  gesture.move(corner("s7"));
   log.length = 0;
   assert.equal(gesture.cancel(), true);
   assert.equal(layout.snapshot(), before);
@@ -226,11 +250,11 @@ test("cancelling a group drag leaves the group where it was", () => {
 test("after a cancel (Escape, pointercancel) the rest of the press does nothing", () => {
   const { layout, gesture, log } = setup();
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  gesture.move(at(170, 450));
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  gesture.move(slot("g2", 1));
   gesture.cancel();
   log.length = 0;
-  assert.equal(gesture.move(at(170, 450)), null);
+  assert.equal(gesture.move(slot("g2", 1)), null);
   assert.equal(gesture.end(), null);
   assert.equal(gesture.cancel(), false, "a second cancel is harmless");
   assert.deepEqual(log, [], "no redraw, no save, no clean-up twice");
@@ -239,20 +263,20 @@ test("after a cancel (Escape, pointercancel) the rest of the press does nothing"
 
 test("the page is told what to show: held frames, the group to light up, the frame to merge into", () => {
   const { gesture, shown } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
   let p = shown.at(-1);
   assert.equal(p.kind, "frame");
-  eq(p.held, { s1: { x: 0, y: 0 } });
-  gesture.move(at(170, 450));
+  eq(p.held, { s1: corner("s1") });
+  gesture.move(slot("g2", 1));
   p = shown.at(-1);
   assert.equal(p.dropGroup, "g2");
   assert.equal(p.mergeFrame, null);
   assert.equal(p.regrouped, true);
-  gesture.move(at(180, 450)); /* still g2, slot 1: the arrangement does not change */
+  gesture.move({ x: slot("g2", 1).x + 10, y: slot("g2", 1).y }); /* still g2, slot 1: the arrangement does not change */
   p = shown.at(-1);
   assert.equal(p.regrouped, false);
-  eq(p.held, { s1: { x: 130, y: 340 } });
-  gesture.move(at(2050, 110));
+  eq(p.held, { s1: { x: slot("g2", 1).x + 10, y: slot("g2", 1).y } });
+  gesture.move(corner("s7"));
   p = shown.at(-1);
   assert.equal(p.dropGroup, null);
   assert.equal(p.mergeFrame, "s7");
@@ -272,22 +296,22 @@ test("a group drag is shown as a group drag", () => {
 
 test("a frame held over its own slot proposes nothing: no group lights up and the arrangement is not redrawn", () => {
   const { gesture, shown } = setup();
-  gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(170, 100)), { kind: "stay" });
+  gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2" });
+  eq(gesture.move(slot("g1", 1)), { kind: "stay" });
   assert.equal(shown.at(-1).regrouped, false);
   assert.equal(shown.at(-1).dropGroup, null);
   eq(gesture.view().groups.map((g) => g.screens), [["s1", "s2", "s3"], ["s4", "s5"], ["s6"]]);
   /* once it has been somewhere else, coming back to its own slot is a proposal like any other */
-  gesture.move(at(170, 450));
+  gesture.move(slot("g2", 1));
   assert.equal(shown.at(-1).dropGroup, "g2");
-  eq(gesture.move(at(170, 100)), { kind: "into", id: "g1", idx: 1 });
+  eq(gesture.move(slot("g1", 1)), { kind: "into", id: "g1", idx: 1 });
   assert.equal(shown.at(-1).regrouped, true);
   assert.equal(shown.at(-1).dropGroup, "g1");
 });
 
 test("a loose frame dragged over empty canvas is a free proposal that follows the pointer without a redraw", () => {
   const { gesture, shown } = setup();
-  gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7" });
   eq(gesture.move({ x: 2600, y: 900 }), { kind: "loose", at: { s7: { x: 2600, y: 900 } } });
   assert.equal(shown.at(-1).regrouped, false);
   eq(gesture.move({ x: 2700, y: 950 }), { kind: "loose", at: { s7: { x: 2700, y: 950 } } });
@@ -295,8 +319,8 @@ test("a loose frame dragged over empty canvas is a free proposal that follows th
 
 test("if the layout changes under a live drag (undo, group), the drop is discarded instead of applied to stale data", () => {
   const { layout, gesture, log } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  gesture.move(at(170, 450)); /* over g2 */
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
+  gesture.move(slot("g2", 1)); /* over g2 */
   layout.mark();
   layout.takeOut(layout.groups.find((l) => l.id === "g2").screens); /* ⌘Z or ⌘⇧G took the group away meanwhile */
   const changed = layout.snapshot();
@@ -310,8 +334,8 @@ test("if the layout changes under a live drag (undo, group), the drop is discard
 
 test("a drop with no change is no undo step, but the page still settles and draws (frames slide home)", () => {
   const { layout, gesture, log } = setup();
-  gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(170, 100)), { kind: "stay" });
+  gesture.begin({ kind: "frame", ids: ["s2"], pid: "s2" });
+  eq(gesture.move(slot("g1", 1)), { kind: "stay" });
   log.length = 0;
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
@@ -324,7 +348,7 @@ test("a drop with no change is no undo step, but the page still settles and draw
 test("pressing and letting go without moving changes nothing and does not move the frames", () => {
   const { layout, gesture, log } = setup();
   const before = layout.snapshot();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
   log.length = 0;
   gesture.end();
   assert.equal(layout.snapshot(), before);
@@ -333,6 +357,6 @@ test("pressing and letting go without moving changes nothing and does not move t
 
 test("a drag that starts while one is live refuses, so two never share a proposal", () => {
   const { gesture } = setup();
-  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
+  gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1" });
   assert.throws(() => gesture.begin({ kind: "group", id: "g1", pointer: { x: 0, y: 0 } }), /already/);
 });

@@ -55,6 +55,10 @@ _Avoid_: Card, tile, artboard
 Where a frame is meant to be. A frame in a group takes its slot in the row or the deck; a loose frame is where the user put it on this device, or, when they have not, in the next free spot below the groups. A place is worked out from the layout each time and is not saved, apart from the positions the user chose.
 _Avoid_: Slot (that is one place in a row), coordinates
 
+**Extent**:
+How big a thing on the canvas is, in world pixels on the device on show: a frame (its screen and its caption), a row of frames, a deck, a group's box. Each is worked out once, in `FlowGeometry`, from the device's numbers; nothing else computes one, and `tests/extents-owner.test.mjs` fails if a second copy of an extent turns up. Two kinds of box are drawn round a group and are not its extent: the **drop zone**, the dashed box that lights up when a frame is dragged over it, and the **drop band**, the larger area where a dragged frame counts as over the group (the band is only ever asked, never drawn). The offsets between them are named in one table and are not all consistent on purpose; each is a thing the user sees.
+_Avoid_: Size, dimensions, bounds (the geometry's `bounds()` is the whole canvas, for the camera)
+
 **Device**:
 A size the canvas can show every screen at (mobile, tablet, desktop). Each is described once; the sizes of the screen and its caption, the style variables, the class on a frame, the switcher button and the key that reaches it all come from that description. Groups are shared by every device; places are per device. In code, `FlowDevice.describe(id)`.
 _Avoid_: Breakpoint, platform

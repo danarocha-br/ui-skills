@@ -6524,12 +6524,29 @@
                                                                 is one row); place(id) -> { x, y }. A new list.
            FlowGeometry.bezier(x1, y1, x2, y2) -> (t) => y      the CSS cubic-bezier curve
 
+           Extents. Nobody else measures a frame, a row, a deck or a group: they ask here.
+           FlowGeometry.frame(m)          -> { w, screenTop, screenH, screenBottom, caption, h }   a frame, from the top of its column
+           FlowGeometry.slotPitch(m)      -> the distance from one frame of an open group to the next
+           FlowGeometry.rowW(n, m)        -> the width of a row of n frames (an empty row has room for one)
+           FlowGeometry.deckSpread(n, m)  -> the width of a deck of n cards
+           FlowGeometry.groupCornerFor(place) -> { x, y }   where a group sits so its first frame lands at `place`
+           FlowGeometry.EDGES             every offset these are built from, named once (see its comment)
+
            const geo = FlowGeometry.create({ reduceMotion })
            geo.setMetrics(m)    geo.setReduceMotion(bool)    geo.reset()   (setMetrics first: retarget throws without it)
            geo.retarget(input, now, { snap }) -> arrangement   new places; frames slide there from where they
                                                 are now. A frame seen for the first time, or any frame under
                                                 reduced motion or { snap }, is simply there.
            geo.place(id)  geo.box(groupId)  geo.isDeck(id)     where it is meant to be; deck unless held
+           geo.frame()  geo.groupCornerFor(place)              the statics above, for the metrics the geometry was given
+           geo.slotPlace(groupId, i)                           { x, y } frame i of an open group; a dissolved group's frames land here
+           geo.exitX(groupId, k = 0)                           the x where the k-th frame let out of a group lands: right of its row or deck
+           geo.dropZone(groupId)                               { left, top, w, h } the box that lights up round a group, from its corner
+           geo.dropBand(groupId, { count })                    { x0, x1, y0, y1 } where a dragged frame joins it, when `count` frames stay
+           geo.slotAt(point, { skip })                         { group, idx } | null   the group a drop here joins and the slot it takes
+                                                               among the frames that stay (skip: the ones being dragged). A closed
+                                                               group always wins; of open ones, the one whose row's centre is nearer
+           geo.closedTitle(groupId)                            { x, y } where a closed group's title stands, beside its deck
            geo.rect(id, now) -> { x, y, s }                    the frame's corner and the scale it is drawn at, now; without now, its place
            geo.screenRect(id, now)  geo.frameBox(id, now)      the screen area / the whole frame with its caption
            geo.frameAt(point, now, { margin, skip }) -> id|null  the frame whose screen is under the point
@@ -6581,7 +6598,91 @@
         });
         const EASE = { open: bezier(...MOVES.open.curve), deck: bezier(...MOVES.deck.curve) };
 
+        /* Every offset an extent is built from, named once. The values are what the canvas has always drawn; a test pins
+           each one. They are not all consistent with each other on purpose (a deck's band and exit assume its widest
+           fan of four cards, however many it holds; the drop zone is 4px narrower than the box it lights up), so a
+           change to any of them is a change to what the user sees.
+             rowPad, rowMin   an open group's box is its row and this much, and never narrower than rowMin
+             deckPeeks        peeks of a deck counted in its drop band and its exit: the widest fan, four cards
+             loosePitch       loose frames in a row stand a column and this much apart (loosePlace, frames let out of a group)
+             looseRowGap/Top  rows of loose frames: this far below the previous row; the first, this far below the groups
+             titlePad         a closed group's title starts this far right of its deck
+             band             where a dragged frame joins a group: how far past the group's corner and slots it reaches
+               open  left, top (px); right (column widths past the last slot); bottom (px below the frames' column)
+               closed  left, right (px past the deck's widest fan), top, bottom (px below the collapsed height)
+             zone             the box the page lights up: inset (px each side of the row or deck), above (px above the
+                              group's corner, plus the head when closed), taller (px added to the height)
+             exit             where frames let out of a group land, right of the row (open) or of the deck's widest fan (closed) */
+        const EDGES = Object.freeze({
+          rowPad: 60,
+          rowMin: 460,
+          deckPeeks: 3,
+          loosePitch: 70,
+          looseRowGap: 100,
+          looseTop: 140,
+          titlePad: 60,
+          band: Object.freeze({
+            open: Object.freeze({ left: 90, right: 1.4, top: 30, bottom: 70 }),
+            closed: Object.freeze({ left: 30, right: 70, top: 30, bottom: 20 }),
+          }),
+          zone: Object.freeze({
+            open: Object.freeze({ inset: 28, above: 34, taller: 60 }),
+            closed: Object.freeze({ inset: 34, above: 14, taller: 10 }),
+          }),
+          exit: Object.freeze({ open: 40, closed: 120 }),
+        });
+
         const groupH = (m) => WORLD.head + m.body + m.cap;
+        /* a frame, from the top of its column: the bezel above the screen, the screen, then the caption */
+        const frame = (m) => ({
+          w: m.colW,
+          screenTop: m.phTop,
+          screenH: m.phH,
+          screenBottom: m.phTop + m.phH,
+          caption: m.cap,
+          h: m.phTop + m.phH + m.cap,
+        });
+        const slotPitch = (m) => m.colW + WORLD.gap;
+        /* a row of n frames, side by side (an empty row has room for one) */
+        const rowW = (n, m) => Math.max(1, n) * slotPitch(m) - WORLD.gap;
+        /* a deck of n cards: the first, and the peek of each card behind it */
+        const deckSpread = (n, m) => m.deckW + m.peekX * Math.max(n - 1, 0);
+        /* the corner a group takes so its first frame lands at `place` (the frame it replaces) */
+        const groupCornerFor = (place) => ({ x: place.x, y: place.y - WORLD.head });
+        /* frame i of an open group whose box is `box` */
+        const slotIn = (box, i, m) => ({ x: box.x + i * slotPitch(m), y: box.top + WORLD.head });
+        const exitIn = (box, k, m) =>
+          box.x +
+          (box.open ? box.n * slotPitch(m) + EDGES.exit.open : deckSpread(EDGES.deckPeeks + 1, m) + EDGES.exit.closed) +
+          k * (m.colW + EDGES.loosePitch);
+        /* the area where a dragged frame joins a group, when `count` frames stay in it */
+        function bandIn(box, count, m) {
+          if (box.open) {
+            const b = EDGES.band.open;
+            return {
+              x0: box.x - b.left,
+              x1: box.x + count * slotPitch(m) + m.colW * b.right,
+              y0: box.top - b.top,
+              y1: box.top + WORLD.head + frame(m).h + b.bottom,
+            };
+          }
+          const b = EDGES.band.closed;
+          return {
+            x0: box.x - b.left,
+            x1: box.x + deckSpread(EDGES.deckPeeks + 1, m) + b.right,
+            y0: box.top - b.top,
+            y1: box.top + m.collH + b.bottom,
+          };
+        }
+        /* the box the page lights up round a group, relative to the group's corner */
+        function zoneIn(box, m) {
+          if (box.open) {
+            const z = EDGES.zone.open;
+            return { left: -z.inset, top: -z.above, w: rowW(box.n, m) + 2 * z.inset, h: frame(m).h + z.taller };
+          }
+          const z = EDGES.zone.closed;
+          return { left: -z.inset, top: -WORLD.head - z.above, w: deckSpread(box.n, m) + 2 * z.inset, h: m.collH + z.taller };
+        }
 
         /* frames in the order they are read: rows from the top, each row left to right (frames less than 60px apart in y
            are one row). place(id) -> { x, y }. Returns a new list. */
@@ -6593,8 +6694,8 @@
         /* loose frames with nowhere saved line up in rows of five below the groups */
         function loosePlace(k, bottom, m) {
           return {
-            x: WORLD.groupLeft + (k % PER_ROW) * (m.colW + 70),
-            y: bottom + 140 + Math.floor(k / PER_ROW) * (m.phTop + m.phH + m.cap + 100),
+            x: WORLD.groupLeft + (k % PER_ROW) * (m.colW + EDGES.loosePitch),
+            y: bottom + EDGES.looseTop + Math.floor(k / PER_ROW) * (frame(m).h + EDGES.looseRowGap),
           };
         }
 
@@ -6607,7 +6708,7 @@
           groups.forEach((g) => {
             const n = g.screens.length,
               h = g.open ? groupH(m) : m.collH,
-              w = g.open ? Math.max(Math.max(1, n) * m.colW + (Math.max(1, n) - 1) * WORLD.gap + 60, 460) : m.closedW;
+              w = g.open ? Math.max(rowW(n, m) + EDGES.rowPad, EDGES.rowMin) : m.closedW;
             const p = pos[g.id];
             let box;
             if (p) box = { x: p.x, top: p.y, w, h, n, open: g.open };
@@ -6620,8 +6721,7 @@
             g.screens.forEach((id, i) => {
               places[id] = g.open
                 ? {
-                    x: box.x + i * (m.colW + WORLD.gap),
-                    y: box.top + WORLD.head,
+                    ...slotIn(box, i, m),
                     r: 0,
                     s: 1,
                     d: i * 60,
@@ -6660,7 +6760,8 @@
           let m = null,
             reduce = !!opts.reduceMotion,
             arr = { places: {}, boxes: {}, bottom: WORLD.top0 },
-            order = [];
+            order = [],
+            groupIds = []; /* the groups, in the order the arrangement was given them */
           const cur = {} /* where each frame was last reported to be */,
             tw = {} /* id -> the slide it is on: { from, to, start, dur, ease } */,
             held = new Set();
@@ -6684,17 +6785,20 @@
           /* a frame is drawn from its corner, scaled about it: a deck frame is small, and grows as it fans out */
           const screenRect = (id, now) => {
             const r = rect(id, now);
-            return r && { x: r.x, y: r.y + m.phTop * r.s, w: m.colW * r.s, h: m.phH * r.s };
+            const f = frame(m);
+            return r && { x: r.x, y: r.y + f.screenTop * r.s, w: f.w * r.s, h: f.screenH * r.s };
           };
           const frameBox = (id, now) => {
             const r = rect(id, now);
-            return r && { x: r.x, y: r.y, w: m.colW * r.s, h: (m.phTop + m.phH + m.cap) * r.s };
+            const f = frame(m);
+            return r && { x: r.x, y: r.y, w: f.w * r.s, h: f.h * r.s };
           };
 
           function retarget(input, now, o = {}) {
             if (!m) throw new Error("FlowGeometry: setMetrics before retarget");
             const next = arrange(input, m);
             order = input.screens.slice();
+            groupIds = input.groups.map((g) => g.id);
             const keep = new Set(order);
             Object.keys(cur).forEach((id) => {
               if (!keep.has(id)) {
@@ -6763,11 +6867,49 @@
               held.clear();
               arr = { places: {}, boxes: {}, bottom: WORLD.top0 };
               order = [];
+              groupIds = [];
             },
             retarget,
             step,
             place: (id) => arr.places[id],
             box: (id) => arr.boxes[id],
+            frame: () => frame(m),
+            groupCornerFor,
+            slotPlace: (id, i) => slotIn(arr.boxes[id], i, m),
+            exitX: (id, k = 0) => exitIn(arr.boxes[id], k, m),
+            dropZone: (id) => zoneIn(arr.boxes[id], m),
+            dropBand: (id, { count }) => bandIn(arr.boxes[id], count, m),
+            closedTitle: (id) => ({
+              x: deckSpread(Math.max(arr.boxes[id].n, 1), m) + EDGES.titlePad,
+              y: Math.max(0, Math.round(m.collH / 2 - 100)),
+            }),
+            /* the group a dragged frame would join at this point, and the slot it would take among the frames that
+               stay (skip: the ones being dragged). A closed group always wins, an open one when its row's centre is
+               nearer; null when the point is over no group. */
+            slotAt(pt, { skip = [] } = {}) {
+              const out = new Set(skip),
+                stay = {};
+              Object.keys(arr.places).forEach((fid) => {
+                const g = arr.places[fid].group;
+                if (g && !out.has(fid)) stay[g] = (stay[g] || 0) + 1;
+              });
+              let best = null;
+              for (const id of groupIds) {
+                const box = arr.boxes[id];
+                if (!box) continue;
+                const count = stay[id] || 0,
+                  b = bandIn(box, count, m);
+                if (pt.x < b.x0 || pt.x > b.x1 || pt.y < b.y0 || pt.y > b.y1) continue;
+                if (!box.open) {
+                  best = { group: id, idx: count, dist: 0 };
+                  continue;
+                }
+                const idx = Math.max(0, Math.min(count, Math.round((pt.x - box.x - m.colW / 2) / slotPitch(m)))),
+                  dist = Math.abs(pt.x - (box.x + (Math.max(1, count) * slotPitch(m)) / 2));
+                if (!best || dist < best.dist) best = { group: id, idx, dist };
+              }
+              return best && { group: best.group, idx: best.idx };
+            },
             isDeck: (id) => !!arr.places[id] && arr.places[id].deck && !held.has(id),
             rect,
             screenRect,
@@ -6820,7 +6962,7 @@
           };
         }
 
-        return { WORLD, MOVES, groupH, arrange, loosePlace, readingOrder, bezier, create };
+        return { WORLD, EDGES, MOVES, groupH, frame, slotPitch, rowW, deckSpread, groupCornerFor, arrange, loosePlace, readingOrder, bezier, create };
       })();
     </script>
 
@@ -6840,8 +6982,8 @@
            FlowRouting.pickSides(a, b)    -> [fromSide, toSide]
            FlowRouting.ortho(a, b)        a, b: { x, y, nx, ny }; b may be a free point (nx = ny = 0)
            FlowRouting.rounded(pts, r)    svg path through pts with rounded corners
-           FlowRouting.leader(m, left, top, w, h, moved) -> { x0, y0, d, end }   a scanner finding's leader: from the frame's
-                                          bottom edge to its card (m: the device's colW, phTop, phH)
+           FlowRouting.leader(frame, left, top, w, h, moved) -> { x0, y0, d, end }   a scanner finding's leader: from the frame's
+                                          bottom edge to its card (frame: FlowGeometry.frame's w and screenBottom)
          ====================================================================== */
       var FlowRouting = (function () {
         function sidePt(r, side, edge) {
@@ -6979,16 +7121,17 @@
         }
 
         /* a scanner finding's leader, from the frame's bottom edge to its card (left, top, w, h: the card, in the frame's own
-           coordinates; moved: the user has put it somewhere). m: the device's metrics (colW, phTop, phH).
+           coordinates; moved: the user has put it somewhere). frame: the frame's anatomy, from FlowGeometry.frame
+           (w, screenBottom). The dock and the run down the gutter are the leader's own drawing, measured from those two.
            Unmoved: leave the frame's bottom edge, slip between frame and caption, run down the gutter and land on the card.
            Moved: a smooth path from the same dock to the nearest side of the card. -> { x0, y0, d, end } */
-        function leader(m, left, top, w, h, moved) {
-          const fr = m.phTop + m.phH,
-            x0 = m.colW - 62,
+        function leader(frame, left, top, w, h, moved) {
+          const fr = frame.screenBottom,
+            x0 = frame.w - 62,
             right = left + w;
           if (!moved) {
             const yRun = fr + 24,
-              runX = m.colW + 22,
+              runX = frame.w + 22,
               midY = top + 26,
               toTop = runX <= right - 14,
               lead = `M${x0} ${fr}V${fr + 10}Q${x0} ${yRun} ${x0 + 14} ${yRun}H${runX - 14}Q${runX} ${yRun} ${runX} ${yRun + 14}`;
@@ -7004,7 +7147,7 @@
           if (top >= fr + 28) {
             T = [clamp(x0, left + 18, right - 18), top];
             nB = { nx: 0, ny: -1 };
-          } else if (left >= m.colW - 4) {
+          } else if (left >= frame.w - 4) {
             T = [left, top + h / 2];
             nB = { nx: -1, ny: 0 };
           } else if (right <= 4) {
@@ -7033,10 +7176,12 @@
          Interface
            const arrange = FlowArrange.create({ layout, geo, frames, device, metrics, input })
              layout   a FlowLayout
-             geo      where things are: box(groupId) -> { x, top }, place(frameId) -> { x, y }
+             geo      where things are: box(groupId), place(frameId), slotPlace(groupId, i), exitX(groupId, k) (what
+                      FlowGeometry.create answers: where frames land is the geometry's, not the arrangement's)
              frames   every frame id, in order
              device   () => id of the device whose places are written
-             metrics  () => the device's metrics (FlowDevice.describe(id).metrics)
+             metrics  () => the device's metrics (FlowDevice.describe(id).metrics); only tidy reads them, to ask
+                      FlowGeometry.arrange and loosePlace where the loose frames go
              input    () => what FlowGeometry.arrange is given: { groups, screens, pos }
            arrange.tidy() -> changed   Put the view in order without touching what the flows are: groups keep the order
                                        they are stacked in (top to bottom, then left to right; empty ones last), lose their
@@ -7052,7 +7197,6 @@
          ====================================================================== */
       var FlowArrange = (function () {
         function create({ layout, geo, frames, device, metrics, input }) {
-          const { gap, head } = FlowGeometry.WORLD;
 
           function tidy() {
             const was = layout.snapshot(),
@@ -7081,8 +7225,7 @@
           }
 
           function takeOut(ids) {
-            const dev = device(),
-              M = metrics();
+            const dev = device();
             ids = ids.filter((id) => layout.groupOf(id));
             if (!ids.length) return [];
             const byGroup = new Map();
@@ -7091,11 +7234,10 @@
               if (!byGroup.has(L)) byGroup.set(L, []);
               byGroup.get(L).push(id);
             });
+            /* right of the group they left, in a row; level with their old slot, or with a closed group's row */
             byGroup.forEach((list, L) => {
-              const box = geo.box(L.id);
-              const end = box.x + (L.open ? L.screens.length * (M.colW + gap) + 40 : M.deckW + M.peekX * 3 + 120);
               list.forEach((id, k) => {
-                layout.place(dev, id, { x: end + k * (M.colW + 70), y: L.open ? geo.place(id).y : box.top + head });
+                layout.place(dev, id, { x: geo.exitX(L.id, k), y: L.open ? geo.place(id).y : geo.slotPlace(L.id, 0).y });
               });
             });
             layout.takeOut(ids);
@@ -7103,10 +7245,8 @@
           }
 
           function dissolve(L) {
-            const dev = device(),
-              M = metrics(),
-              box = geo.box(L.id);
-            L.screens.forEach((id, k) => layout.place(dev, id, { x: box.x + k * (M.colW + gap), y: box.top + head }));
+            const dev = device();
+            L.screens.forEach((id, k) => layout.place(dev, id, geo.slotPlace(L.id, k)));
             layout.takeOut(L.screens);
           }
 
@@ -7455,14 +7595,18 @@
          it is handed, and the page hands it an adapter for what is drawn.
 
          Interface
-           const gesture = FlowGesture.create({ layout, commit, device, metrics, geo, frames, now, adapter })
+           const gesture = FlowGesture.create({ layout, commit, device, geo, frames, now, adapter })
              layout   a FlowLayout            commit  a FlowCommit
              device   () => id of the device whose positions a drop writes
-             metrics  () => { colW gap head phTop phH cap collH deckW peekX }, the sizes on this device
-             geo      where things are: what a FlowGeometry.create answers, of which it reads three
-               box(groupId)         { x, top } the group's corner, as the arrangement has it now
+             geo      where things are, and how big: what a FlowGeometry.create answers, of which it reads seven. The
+                      page arranges it again for every preview, so these are about the layout as the drag proposes it
+               box(groupId)         { x, top } the group's corner
                place(frameId)       { x, y } where a frame is meant to be
                rect(frameId, now)   { x, y } where a frame is drawn at `now` (it may be sliding)
+               screenRect(frameId)  { x, y, w, h } its screen, where it is meant to be
+               frame()              { w, screenTop, screenH } the anatomy of a frame on this device
+               slotAt(point, { skip }) -> { group, idx } | null   the group a drop at this point joins, and the slot
+               groupCornerFor(place) -> { x, y }   where a group sits so its first frame lands at `place`
              frames   every frame id, in order (an array)
              now      () => the clock the geometry's animation runs on, in ms
              adapter  the page's side, what is drawn:
@@ -7500,44 +7644,18 @@
         const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
         const keyOf = (p) => p.kind + "|" + (p.id || "") + "|" + (p.idx === undefined ? "" : p.idx);
 
-        function create({ layout, commit, device, metrics, geo, frames, now, adapter }) {
+        function create({ layout, commit, device, geo, frames, now, adapter }) {
           let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal, last, base } */
 
-          /* where a drop at this point (the centre of the frame under the pointer) would land */
+          /* where a drop at this point (the centre of the frame under the pointer) would land: in the group whose band it is
+             over (the geometry knows the bands and the slots), onto a loose frame's screen, or on the canvas */
           function targetAt(c, ids) {
-            const M = metrics();
-            let best = null;
-            for (const L of layout.groups) {
-              const m = L.screens.filter((x) => !ids.includes(x)).length;
-              const B = geo.box(L.id);
-              if (!B) continue;
-              if (L.open) {
-                const rowW = Math.max(1, m) * (M.colW + M.gap);
-                if (
-                  c.x >= B.x - 90 &&
-                  c.x <= B.x + m * (M.colW + M.gap) + M.colW * 1.4 &&
-                  c.y >= B.top - 30 &&
-                  c.y <= B.top + M.head + M.phTop + M.phH + M.cap + 70
-                ) {
-                  const idx = clamp(Math.round((c.x - B.x - M.colW / 2) / (M.colW + M.gap)), 0, m),
-                    dist = Math.abs(c.x - (B.x + rowW / 2));
-                  if (!best || dist < best.dist) best = { kind: "into", id: L.id, idx, dist };
-                }
-              } else if (
-                c.x >= B.x - 30 &&
-                c.x <= B.x + M.deckW + M.peekX * 3 + 70 &&
-                c.y >= B.top - 30 &&
-                c.y <= B.top + M.collH + 20
-              ) {
-                best = { kind: "into", id: L.id, idx: m, dist: 0 };
-              }
-            }
-            if (best) return { kind: "into", id: best.id, idx: best.idx };
+            const hit = geo.slotAt(c, { skip: ids });
+            if (hit) return { kind: "into", id: hit.group, idx: hit.idx };
             for (const id of frames) {
               if (ids.includes(id) || layout.groupOf(id)) continue;
-              const f = geo.place(id);
-              if (f && c.x > f.x && c.x < f.x + M.colW && c.y > f.y + M.phTop && c.y < f.y + M.phTop + M.phH)
-                return { kind: "merge", id };
+              const r = geo.screenRect(id);
+              if (r && c.x > r.x && c.x < r.x + r.w && c.y > r.y && c.y < r.y + r.h) return { kind: "merge", id };
             }
             return { kind: "loose" };
           }
@@ -7571,7 +7689,7 @@
               /* the group sits where the frame it was dropped on is, whether the others came from a group or not */
               const at = geo.place(p.id);
               const ids = [p.id, ...d.ids];
-              const group = layout.groupFrames(ids, { device: dev, at: { x: at.x, y: at.y - metrics().head } });
+              const group = layout.groupFrames(ids, { device: dev, at: geo.groupCornerFor(at) });
               return { kind: "merge", ids, group };
             }
             if (p.kind === "move") {
@@ -7636,9 +7754,10 @@
               g.ids.forEach((i) => {
                 held[i] = { x: pointer.x - g.off[i].x, y: pointer.y - g.off[i].y };
               });
-              const M = metrics(),
+              /* the centre of the screen of the frame under the pointer */
+              const F = geo.frame(),
                 p0 = held[g.pid];
-              const t = targetAt({ x: p0.x + M.colW / 2, y: p0.y + M.phTop + M.phH / 2 }, g.ids);
+              const t = targetAt({ x: p0.x + F.w / 2, y: p0.y + F.screenTop + F.screenH / 2 }, g.ids);
               const next = t.kind === "loose" ? { kind: "loose", at: held } : t;
               const key = keyOf(next),
                 same = key === g.last;
@@ -8120,7 +8239,7 @@
       const findingKind = (f) => FINDING_KINDS[f.kind] || PLAIN_FINDING;
 
       /* the canvas's fixed measurements, in world px (from the geometry) */
-      const { gap: GAP, head: HEAD } = FlowGeometry.WORLD;
+      const { head: HEAD } = FlowGeometry.WORLD; /* only the stylesheet's --head: the geometry measures with it */
       /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
       const geo = FlowGeometry.create({
         reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -8573,7 +8692,6 @@
         layout,
         commit,
         device: () => DEV.id,
-        metrics: () => ({ ...DEV.metrics, gap: GAP, head: HEAD }),
         geo,
         frames: ORDER,
         now: () => performance.now(),
@@ -8671,25 +8789,15 @@
         });
         return el;
       }
-      function sizeDz(L, n = L.screens.length) {
-        const m = DEV.metrics;
-        const dz = groupEls.get(L.id).querySelector(".dz");
-        if (L.open) {
-          const w = Math.max(1, n) * (m.colW + GAP) - GAP;
-          Object.assign(dz.style, {
-            left: "-28px",
-            top: "-34px",
-            width: w + 56 + "px",
-            height: m.phTop + m.phH + m.cap + 60 + "px",
-          });
-        } else {
-          Object.assign(dz.style, {
-            left: "-34px",
-            top: -HEAD - 14 + "px",
-            width: m.deckW + m.peekX * Math.max(n - 1, 0) + 68 + "px",
-            height: m.collH + 10 + "px",
-          });
-        }
+      /* the dashed box that lights up when a frame is dragged over a group: the geometry says how big it is */
+      function sizeDz(L) {
+        const z = geo.dropZone(L.id);
+        Object.assign(groupEls.get(L.id).querySelector(".dz").style, {
+          left: z.left + "px",
+          top: z.top + "px",
+          width: z.w + "px",
+          height: z.h + "px",
+        });
       }
       /* the group's title and description as the layout has them (after an undo, a reset, a load); the field
          being typed in is left alone */
@@ -8704,7 +8812,6 @@
         el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
       function syncGroups() {
-        const m = DEV.metrics;
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
         document.querySelectorAll(".lane").forEach((e) => {
@@ -8726,14 +8833,10 @@
           el.classList.toggle("open", L.open);
           el.classList.toggle("closed", !L.open);
           el.classList.toggle("empty", n === 0);
-          el.style.setProperty(
-            "--hx",
-            m.deckW + m.peekX * (Math.max(n, 1) - 1) + 60 + "px",
-          );
-          el.style.setProperty(
-            "--hy",
-            Math.max(0, Math.round(m.collH / 2 - 100)) + "px",
-          );
+          /* where a closed group's title stands, beside its deck */
+          const title = geo.closedTitle(L.id);
+          el.style.setProperty("--hx", title.x + "px");
+          el.style.setProperty("--hy", title.y + "px");
           el.querySelector(".gcount").textContent =
             n + (n === 1 ? " screen" : " screens");
           const dm = DEFAULT_GROUPS.find((x) => x.id === L.id);
@@ -8746,7 +8849,7 @@
                   ? " · " + esc(dm.meta.split(" · ").slice(1).join(" · "))
                   : "")
               : "";
-          sizeDz(L, n);
+          sizeDz(L);
         });
       }
       function relayout(opts) {
@@ -8772,7 +8875,7 @@
         const saved = FlowDevice.carried(f.pos, DEV.id);
         const [dx, dy] = [0, DEV.findY + Math.max(0, nth) * 132];
         let left = saved ? saved[0] : dx,
-          top = saved ? saved[1] : dy + DEV.metrics.cap,
+          top = saved ? saved[1] : dy + geo.frame().caption,
           moved = !!saved;
         const st = document.createElementNS(svgNS, "svg");
         st.setAttribute("class", "stem");
@@ -8795,7 +8898,7 @@
           top = t;
           d.style.left = l + "px";
           d.style.top = t + "px";
-          const g = FlowRouting.leader(DEV.metrics, l, t, d.offsetWidth, d.offsetHeight, m);
+          const g = FlowRouting.leader(geo.frame(), l, t, d.offsetWidth, d.offsetHeight, m);
           st.querySelector(".sl").setAttribute("d", g.d);
           const dk = st.querySelector(".dk"),
             en = st.querySelector(".en");
@@ -9788,7 +9891,7 @@
         const minX = Math.min(...ids.map((i) => geo.place(i).x)),
           minY = Math.min(...ids.map((i) => geo.place(i).y));
         /* frames that were all loose keep their spot; otherwise the group takes the next free one */
-        const at = allFree ? { x: minX, y: minY - HEAD } : undefined;
+        const at = allFree ? geo.groupCornerFor({ x: minX, y: minY }) : undefined;
         const L = commit(() => layout.groupFrames(ids, { device: DEV.id, at }));
         afterGrouped(L, ids, { fly: !allFree });
         return L;
@@ -9894,7 +9997,6 @@
       selbox.innerHTML = "<span></span>";
       world.insertBefore(selbox, notesEl);
       function updateSelBox() {
-        const m = DEV.metrics;
         const ids = selection.ids().filter(
           (id) => geo.place(id) && !geo.place(id).deck && colOf(id),
         );
@@ -9907,11 +10009,11 @@
           x1 = -1e9,
           y1 = -1e9;
         ids.forEach((id) => {
-          const f = geo.place(id);
-          x0 = Math.min(x0, f.x);
-          y0 = Math.min(y0, f.y + m.phTop);
-          x1 = Math.max(x1, f.x + m.colW);
-          y1 = Math.max(y1, f.y + m.phTop + m.phH);
+          const r = geo.screenRect(id);
+          x0 = Math.min(x0, r.x);
+          y0 = Math.min(y0, r.y);
+          x1 = Math.max(x1, r.x + r.w);
+          y1 = Math.max(y1, r.y + r.h);
         });
         const pad = 14;
         Object.assign(selbox.style, {
