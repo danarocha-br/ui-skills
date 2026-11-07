@@ -5926,7 +5926,7 @@
         settle(d, how) {
           d.classList.remove("dragging");
           document.body.classList.remove("selecting");
-          if (how.cancelled) d._scan.restore();
+          if (how.cancelled) d._scan.redrawLeader();
           if (how.moved && !how.nudged) d._scan.dragged(); /* the click that follows a drag is not a click on the card */
         },
         erase: (d) => d._scan.erase(),
@@ -6196,6 +6196,8 @@
         updateAllBtn();
         if (typeof updateSelBox === "function") updateSelBox();
         if (typeof followConns === "function") followConns();
+        /* now that frames are attached and sized, the scanner cards' leaders can be drawn from real measurements */
+        document.querySelectorAll(".scan").forEach((d) => d._scan.redrawLeader());
       }
 
       /* ---------- scanner findings: a card tied to its frame by a leader; drag it, dismiss it ---------- */
@@ -6276,6 +6278,7 @@
         };
         /* the data change for a move or a nudge; FlowAnnotations commits it */
         const savePos = (p) => {
+          moved = true; /* it has a place of its own now, so its leader takes the "moved" route */
           const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
           r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(p.x), Math.round(p.y)] });
         };
@@ -6313,8 +6316,9 @@
         d._scan = {
           at: () => ({ x: left, y: top }),
           place: (x, y) => place(x, y, true),
-          /* after a cancelled drag the card is back at its place; draw its leader as it was before (not "moved") */
-          restore: () => place(left, top, moved),
+          /* draw the leader for where the card is now, at its real size: after a cancelled drag, and after every
+             layout (a card is built before its frame is attached to the page, so it measures 0 wide at first) */
+          redrawLeader: () => place(left, top, moved),
           savePos,
           erase: () => {
             (layout.scans[sc.key] || (layout.scans[sc.key] = {})).gone = true;
