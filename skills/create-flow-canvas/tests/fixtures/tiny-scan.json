@@ -1,0 +1,37 @@
+{
+  "product": { "name": "Tally" },
+  "start": "home",
+  "components": { "Button": "button", "Total": ".total" },
+  "screens": [
+    {
+      "id": "home",
+      "name": "Home",
+      "route": "/",
+      "file": "src/routes/index.tsx",
+      "components": ["Total", "Button"],
+      "states": [
+        { "name": "empty", "reachable": true },
+        { "name": "offline", "reachable": false, "html": { "mobile": "<p>offline</p>", "tablet": "<p>offline</p>", "desktop": "<p>offline</p>" } }
+      ],
+      "note": "Totals come from the ledger.",
+      "caption": { "title": "Start here", "body": "The total, then one button.", "on": true },
+      "html": { "mobile": "<p class=\"total\">0</p><button data-go=\"detail\">Open</button>", "tablet": "<p class=\"total\">0</p>", "desktop": "<p class=\"total\">0</p>" }
+    },
+    {
+      "id": "detail",
+      "name": "Detail",
+      "route": "/detail",
+      "file": "src/routes/detail.tsx",
+      "components": ["Button"],
+      "states": [{ "name": "default", "reachable": true }],
+      "html": { "mobile": "<button>Back</button>", "tablet": "<button>Back</button>", "desktop": "<button>Back</button>" }
+    }
+  ],
+  "groups": [{ "id": "g1", "screens": ["home", "detail"], "open": true, "title": "Tally: count fast", "sub": "Two screens.", "subOn": true, "meta": "src/routes/*" }],
+  "links": [{ "from": "home", "to": "detail", "label": "Open" }],
+  "findings": [
+    { "kind": "unreachable-states", "frame": "home", "source": "Offline.tsx" },
+    { "kind": "reused-component", "frame": "detail", "component": "Button" }
+  ],
+  "notes": [{ "frame": "home", "who": "Ana", "t": "1h", "text": "Is zero the right empty state?" }]
+}

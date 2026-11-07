@@ -28,7 +28,7 @@ const DEFAULTS = {
     { id: "c6", from: "s8", to: "s9", label: "Start trial" },
   ],
   notes: [{ id: "s1:Dana", frame: "s1", who: "Dana", text: "Hero image is big", pos: { mobile: [1, 2] } }],
-  scans: {},
+  scans: [{ id: "s3:states", kind: "unreachable-states", frame: "s3", source: "Denied.tsx" }],
 };
 
 /* the text a default group has when nothing else says otherwise: none in these defaults, so blank */
@@ -57,7 +57,7 @@ test("empty storage gives the defaults, without page-only fields", () => {
   eq(Object.keys(layout.lanes[0]), ["id", "screens", "open", "title", "sub", "subOn"]);
   assert.equal(layout.conns.length, 6);
   eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
-  eq(layout.scans, {});
+  eq(layout.scans.map((f) => f.id), ["s3:states"]);
   assert.equal(layout.notes[0].id, "s1:Dana");
 });
 
@@ -75,7 +75,7 @@ test("save then load round-trips every kind and the counters", () => {
   a.lanes[1].open = true;
   a.pos.mobile.s1 = { x: 10, y: 20 };
   a.conns.push({ id: a.nextId("c"), from: "s1", to: "s9", label: "Jump" });
-  a.scans["s1:states"] = { gone: true, pos: { mobile: [1, 2] } };
+  a.scans[0].pos = { mobile: [1, 2] };
   a.notes.push({ id: "n1", frame: null, who: "You", text: "floating", x: 5, y: 6 });
   a.lanes[2].screens = ["s8"];
   a.lanes.push({ id: a.nextId("g"), screens: ["s9"], open: true });
@@ -92,15 +92,12 @@ test("a layout saved by the real canvas before groups carried their text loads w
   const storage = memory({ [KEY]: raw });
   const layout = make(storage);
   const saved = JSON.parse(raw);
-  eq(plain(layout), {
-    lanes: saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })),
-    pos: saved.pos,
-    conns: saved.conns,
-    scans: saved.scans,
-    notes: saved.notes,
-  });
-  const onDisk = JSON.parse(storage.data[KEY]);
-  eq({ ...onDisk, lanes: null }, { ...saved, lanes: null }, "everything but the groups is saved back as it was");
+  eq(plain(layout).lanes, saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })));
+  /* everything else shows as it did (edits.test.mjs checks how it is saved now) */
+  eq(layout.pos, saved.pos);
+  eq(layout.conns, saved.conns);
+  eq(layout.notes.slice(1), saved.notes.slice(1), "the notes these defaults do not scan are the user's own");
+  eq(layout.scans, [], "the finding dismissed back then stays dismissed");
   assert.equal(layout.nextId("c"), "c8");
   assert.equal(layout.nextId("g"), "g5");
   /* from here on the file is in the new shape and loads as it is */
@@ -124,7 +121,7 @@ test("load drops what no longer exists", () => {
     ],
     scans: "nope",
     notes: [{ id: "n1", text: "ok" }, { id: "n2" }, { text: "no id" }, null],
-    cc: 3,
+    cc: 6, // the scan has six links: any layout this build saved has a counter at least that high
     gc: 1,
   };
   const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
@@ -134,7 +131,7 @@ test("load drops what no longer exists", () => {
     { id: "g2", screens: ["s3"], open: false, ...blank },
   ]);
   eq(layout.conns.map((c) => c.id), ["c1"]);
-  eq(layout.scans, {});
+  eq(layout.scans.map((f) => f.id), ["s3:states"], "unreadable findings: the scan's");
   eq(layout.notes.map((n) => n.id), ["n1"]);
   eq(layout.pos.mobile, { s1: { x: 1, y: 2 } });
   eq(Object.keys(layout.pos), ["mobile", "tablet", "desktop"]);
