@@ -337,3 +337,42 @@ test("viewStamp changes when how the groups are shown does, and only then", () =
   layout.setOpen("g2", true);
   assert.equal(layout.viewStamp(), w);
 });
+
+/* ---------- review findings: a mutator that is refused changes nothing ---------- */
+
+test("moveInto into a group that is not there throws before anything changes, so the layout and its snapshot are not left half-edited", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  const groups = layout.groups;
+  assert.throws(() => layout.moveInto(["s1"], "nope", 0), /nope/);
+  assert.equal(layout.snapshot(), s);
+  assert.equal(layout.groups, groups);
+  eq(layout.groups[0].screens, ["s1", "s2", "s3", "s4"]);
+});
+
+test("forgetPlaces on a device with no places leaves the layout, and so its snapshot, as it was", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  layout.forgetPlaces(["s1"], "watch");
+  assert.equal(layout.snapshot(), s);
+  assert.ok(!("watch" in layout.pos));
+});
+
+test("edit keeps a kind's rule: a change that makes the item invalid is refused and nothing changes", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  assert.equal(layout.edit("conns", "c1", { to: "zz" }), false, "a connector cannot be pointed at a frame that is not there");
+  assert.equal(layout.edit("conns", "c1", { to: "s1" }), false, "nor at its own start");
+  assert.equal(layout.edit("notes", "s1:Dana", { text: 3 }), false, "a note keeps its text");
+  assert.equal(layout.snapshot(), s);
+  assert.equal(layout.edit("conns", "c1", { to: "s3" }), true);
+  assert.equal(layout.conns[0].to, "s3");
+});
+
+test("a place must be a number: NaN or Infinity is refused instead of being saved as null", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  assert.equal(layout.place("mobile", "s1", { x: NaN, y: 1 }), false);
+  assert.equal(layout.place("mobile", "s1", { x: 1, y: Infinity }), false);
+  assert.equal(layout.snapshot(), s);
+});

@@ -6,11 +6,11 @@ An interactive canvas that shows a product's screens as frames, grouped into flo
 
 **Layout**:
 The saved arrangement of a canvas: which frames sit in which groups and what each group is called, where things are placed on each device, the user's edits to the scan's groups, connectors, notes, findings and captions, and the groups, connectors and notes the user made. Everything the scan provides is saved the same way, as edits over the scan.
-The layout owns its writes: what it holds is read-only from outside, and every change goes through one of its **mutators**. How the groups are shown is not in it (see **View state**).
+The layout owns its writes: what it holds is read-only from outside, and every change goes through one of its **mutators**. How the groups are shown is kept in a record of its own, outside its edits and its snapshot (see **View state**).
 _Avoid_: View state, canvas state
 
 **Mutator**:
-One of the layout's own ways to change what it holds (`place`, `forgetPlaces`, `takeOut`, `moveInto`, `groupFrames`, `orderGroups`, `setGroupText`, `add`, `edit`, `remove`, `letGoOfMoves`, `resetText`), each keeping the layout's rules (a group left empty goes, an id is never used twice, a frame is in one group). The page reads the layout and asks it to change; it never writes to it, and a write to a read throws. A mutator says what it touched, so the commit knows what to redraw.
+One of the layout's own ways to change what it holds (`place`, `forgetPlaces`, `takeOut`, `moveInto`, `groupFrames`, `orderGroups`, `setGroupText`, `resetText`, `add`, `edit`, `remove`, `letGoOfMoves`, and `setOpen` for view state), each keeping the layout's rules (a group left empty goes, an id is never used twice, a frame is in one group). The page reads the layout and asks it to change; it never writes to it, and a write to a read throws. A mutator says what it touched, so the commit knows what to redraw.
 _Avoid_: Setter, action, reducer
 
 **View state**:

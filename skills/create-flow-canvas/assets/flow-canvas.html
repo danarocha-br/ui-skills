@@ -5653,7 +5653,8 @@
          Mutators (each keeps the layout's rules; the caller commits, see FlowCommit)
            groups     layout.takeOut(ids)                the frames leave their groups; a group left empty (or already
                                                          empty) goes. Their places are not touched.
-                      layout.moveInto(ids, groupId, idx) the frames leave their groups and go into `groupId` at slot `idx`
+                      layout.moveInto(ids, groupId, idx) (throws for a group that is not there, before changing anything)
+                                                         the frames leave their groups and go into `groupId` at slot `idx`
                                                          among the frames that stay there; their own places are forgotten
                                                          on every device; a group left empty goes, but never the one they
                                                          are going into
@@ -5671,13 +5672,15 @@
                       layout.resetText()                 every group's text and every caption back to the scanned text
                                                          (blank for a group that was not scanned)
            positions  layout.place(device, id, { x, y }) where a frame or group sits on one device, in whole pixels;
-                                                         false for an id that is neither
+                                                         false for an id that is neither, or a position that is not a number
                       layout.forgetPlaces(ids, device?)  let go of places, on one device or (none named) on every one
-           kinds      layout.add(kind, item)             an item of a kind: its id is new, and the kind's valid() says yes
-                                                         (false when it says no; throws for a repeated id or no kind)
-                      layout.edit(kind, id, patch)       set the fields of one item: a value replaces, undefined takes the
-                                                         field away, the id stays. False for an item that is not there.
-                      layout.remove(kind, id)            take one item out; says whether there was one
+           kinds      layout.add(name, item)             an item of the kind called `name`: its id is new, and the kind's
+                                                         valid() says yes (false when it says no; throws for a repeated
+                                                         id or an unknown kind)
+                      layout.edit(name, id, changes)     set the fields of one item: a value replaces, undefined takes the
+                                                         field away, the id stays; the kind's valid() must still say yes
+                                                         after. False for an item that is not there, or when it would not.
+                      layout.remove(name, id)            take one item out; says whether there was one
                       layout.letGoOfMoves(device)        every kind's moved places on this device back as the scan had them
            view       layout.setOpen(ids, open)          show a group (or several) open or closed; true if any changed
                       layout.viewStamp()                 changes when, and only when, how the groups are shown does
@@ -5819,23 +5822,25 @@
 
           /* what is read: frozen copies, made once per change. Nothing outside writes to the layout; it asks (see the
              mutators), which is what lets it keep the rules and count the changes. */
-          let seen = null;
-          function views() {
-            if (seen && seen.rev === rev && seen.viewRev === viewRev) return seen;
-            const shown = (g) => {
-              const { id, screens, title, sub, subOn } = clone(groupRecord(g));
-              return deepFreeze({ id, screens, open: isOpen(g.id), title, sub, subOn });
-            };
-            const out = { rev, viewRev, groups: S.groups.map(shown) };
-            out.groups = Object.freeze(out.groups);
-            out.pos = deepFreeze(clone(S.pos));
-            kinds.forEach((k) => (out[k.name] = deepFreeze(clone(S[k.name]))));
-            return (seen = out);
+          let seen = { rev: -1, viewRev: -1, fields: {} };
+          const shown = (g) => {
+            const { id, screens, title, sub, subOn } = clone(groupRecord(g));
+            return deepFreeze({ id, screens, open: isOpen(g.id), title, sub, subOn });
+          };
+          const MAKE = {
+            groups: () => Object.freeze(S.groups.map(shown)),
+            pos: () => deepFreeze(clone(S.pos)),
+          };
+          /* one field at a time, so a read after a write copies only what is read (typing in a title reads the groups,
+             not every kind) */
+          function view(name) {
+            if (seen.rev !== rev || seen.viewRev !== viewRev) seen = { rev, viewRev, fields: {} };
+            return name in seen.fields ? seen.fields[name] : (seen.fields[name] = MAKE[name] ? MAKE[name]() : deepFreeze(clone(S[name])));
           }
           const readOnly = (name) =>
             Object.defineProperty(layout, name, {
               enumerable: true,
-              get: () => views()[name],
+              get: () => view(name),
               set() {
                 throw new Error("FlowLayout: layout." + name + " is read-only; change it with a mutator (place, setGroupText, add, edit, remove, setOpen, ...)");
               },
@@ -5846,13 +5851,12 @@
              shown is not in it. */
           let made = null;
           function persisted() {
-            if (made && made.rev === rev) return made.out;
+            if (made && made.rev === rev) return made;
             const out = {};
             out.lanes = FlowScan.diffGroups(D0.groups, S.groups.map(groupRecord)); /* "lanes" is the disk name */
             out.pos = S.pos;
             kinds.forEach((k) => (out[k.name] = FlowScan.diff(D0[k.name], S[k.name])));
-            made = { rev, out, str: JSON.stringify(out) };
-            return out;
+            return (made = { rev, out, str: JSON.stringify(out) });
           }
           /* an item of the user's own, of a kind with a counter, whose id a new scan now uses gets a fresh one */
           function freshIds() {
@@ -5955,15 +5959,12 @@
               storage.setItem(
                 key,
                 JSON.stringify(
-                  Object.assign({ v: VERSION }, persisted(), { view: { open: openSaid } }, Object.fromEntries(COUNTERS.map((c) => [c.saved, counters[c.prefix]]))),
+                  Object.assign({ v: VERSION }, persisted().out, { view: { open: openSaid } }, Object.fromEntries(COUNTERS.map((c) => [c.saved, counters[c.prefix]]))),
                 ),
               );
             } catch (e) {}
           };
-          layout.snapshot = () => {
-            persisted();
-            return made.str;
-          };
+          layout.snapshot = () => persisted().str;
           layout.restore = (s) => {
             const st = JSON.parse(s);
             const d = freshDefaults();
@@ -5995,16 +5996,20 @@
             S.groups = S.groups.filter((L) => L.screens.length);
           };
           const placesOf = (device) => S.pos[device] || (S.pos[device] = {});
-          const forget = (ids, device) => (device ? [placesOf(device)] : Object.values(S.pos)).forEach((P) => ids.forEach((i) => delete P[i]));
-          layout.groupOf = (id) => views().groups.find((l) => l.screens.includes(id));
+          const whole = (at) => ({ x: Math.round(at.x), y: Math.round(at.y) });
+          /* only devices that have places: letting go on one that has none must not make it */
+          const forget = (ids, device) => (device ? [S.pos[device]] : Object.values(S.pos)).forEach((P) => P && ids.forEach((i) => delete P[i]));
+          layout.groupOf = (id) => view("groups").find((l) => l.screens.includes(id));
           layout.takeOut = (ids) => {
             leave(ids);
             dropEmpty();
             wrote("layout");
           };
           layout.moveInto = (ids, groupId, idx) => {
+            const into = S.groups.find((l) => l.id === groupId);
+            if (!into) throw new Error('FlowLayout.moveInto: there is no group "' + groupId + '"'); /* before anything changes */
             leave(ids);
-            S.groups.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
+            into.screens.splice(idx, 0, ...ids);
             forget(ids);
             dropEmpty();
             wrote("layout");
@@ -6015,9 +6020,9 @@
             const g = { id: layout.nextId("g"), screens: ids.slice(), ...BLANK_TEXT };
             S.groups.push(g);
             forget(ids);
-            if (at) placesOf(device)[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
+            if (at) placesOf(device)[g.id] = whole(at);
             wrote("layout");
-            return views().groups.find((l) => l.id === g.id);
+            return view("groups").find((l) => l.id === g.id);
           };
           /* the order the groups are stacked in; never adds or drops one. Those not named follow, in their order. */
           layout.orderGroups = (ids) => {
@@ -6028,14 +6033,14 @@
           };
           /* a group's title, description and whether the description is shown: the page draws a field as it is typed in,
              so nothing is asked to be redrawn */
-          layout.setGroupText = (id, patch) => {
-            for (const k in patch) {
+          layout.setGroupText = (id, changes) => {
+            for (const k in changes) {
               if (!(k in BLANK_TEXT)) throw new Error('FlowLayout.setGroupText: only title, sub and subOn can be set, not "' + k + '"');
-              if (typeof patch[k] !== typeof BLANK_TEXT[k]) throw new Error("FlowLayout.setGroupText: " + k + " must be a " + typeof BLANK_TEXT[k]);
+              if (typeof changes[k] !== typeof BLANK_TEXT[k]) throw new Error("FlowLayout.setGroupText: " + k + " must be a " + typeof BLANK_TEXT[k]);
             }
             const g = S.groups.find((x) => x.id === id);
             if (!g) return false;
-            Object.assign(g, patch);
+            Object.assign(g, changes);
             wrote();
             return true;
           };
@@ -6049,8 +6054,8 @@
           /* ---- positions: where a frame or a group sits on one device ---- */
           const exists = (id) => hasScreen(id) || S.groups.some((g) => g.id === id);
           layout.place = (device, id, at) => {
-            if (!exists(id)) return false;
-            placesOf(device)[id] = { x: Math.round(at.x), y: Math.round(at.y) };
+            if (!exists(id) || !Number.isFinite(at.x) || !Number.isFinite(at.y)) return false;
+            placesOf(device)[id] = whole(at);
             wrote("layout");
             return true;
           };
@@ -6071,16 +6076,19 @@
             wrote(name);
             return true;
           };
-          layout.edit = (name, id, patch) => {
-            kindOf(name);
-            if ("id" in patch && patch.id !== id) throw new Error('FlowLayout.edit("' + name + '"): an item keeps its id');
+          layout.edit = (name, id, changes) => {
+            const k = kindOf(name);
+            if ("id" in changes && changes.id !== id) throw new Error('FlowLayout.edit("' + name + '"): an item keeps its id');
             const it = S[name].find((x) => x.id === id);
             if (!it) return false;
-            for (const f in patch) {
+            const next = { ...it };
+            for (const f in changes) {
               if (f === "id") continue;
-              if (patch[f] === undefined) delete it[f];
-              else it[f] = clone(patch[f]);
+              if (changes[f] === undefined) delete next[f];
+              else next[f] = clone(changes[f]);
             }
+            if (k.valid && !k.valid(next, { hasScreen })) return false; /* the kind's rule holds after an edit too */
+            S[name][S[name].indexOf(it)] = next;
             wrote(name);
             return true;
           };
@@ -6092,7 +6100,7 @@
             wrote(name);
             return true;
           };
-          /* notes and findings back where the scan put them on this device (Tidy), each by its kind's own rule */
+          /* every kind's moved places on this device back as the scan had them (Tidy), each by its kind's own rule */
           layout.letGoOfMoves = (device) => {
             kinds.forEach((k) => {
               if (typeof k.letGo !== "function") return;
@@ -6103,20 +6111,19 @@
 
           /* ---- view state: how the groups are shown. Saved with the layout, never in a snapshot or an undo step. ---- */
           layout.setOpen = (ids, open) => {
-            let changed = false;
             const next = { ...openSaid };
+            let changed = false;
             (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
               if (!S.groups.some((g) => g.id === id) || isOpen(id) === open) return;
               if (open === openDefault(id)) delete next[id];
               else next[id] = open;
-              openSaid = next;
               changed = true;
             });
-            if (changed) {
-              viewRev++;
-              touched.add("layout");
-            }
-            return changed;
+            if (!changed) return false;
+            openSaid = next;
+            viewRev++;
+            touched.add("layout");
+            return true;
           };
           layout.viewStamp = () => viewRev;
           layout.takeTouched = () => {
@@ -8202,10 +8209,10 @@
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
         document.querySelectorAll(".lane").forEach((e) => {
-          if (ids.has(e.id)) return;
-          e.remove();
-          groupEls.delete(e.id);
+          if (!ids.has(e.id)) e.remove();
         });
+        /* the page's handles follow the groups shown, however a group's element went (the world is rebuilt too) */
+        groupEls.forEach((el, id) => ids.has(id) || groupEls.delete(id));
         shown.forEach(({ group: L, screens }) => {
           let el = document.getElementById(L.id);
           if (!el) el = makeGroup(L);

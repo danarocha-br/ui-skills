@@ -1,6 +1,7 @@
 /* Nothing but the layout writes to the layout (N5). The layout's reads are frozen, so a stray write throws once the
    page runs it in strict code; this guard reads the page's own script and fails on the shapes of a direct write, so it
-   is caught here whether or not that line runs. The page's script is the one <script> with no id.
+   is caught here whether or not that line runs. It knows the page's names for what it gets from the layout (L, n, c, f ...);
+   a write through another alias is not seen here, and throws when it runs. The page's script is the one <script> with no id.
    Run:  node --test skills/create-flow-canvas/tests/layout-owner.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
