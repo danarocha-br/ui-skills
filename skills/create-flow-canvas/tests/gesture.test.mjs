@@ -71,7 +71,7 @@ test("dragging a frame into another group is a proposal: the layout is not touch
   const before = layout.snapshot();
   gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
   const p = gesture.move(at(170, 450)); /* over g2, between its two frames */
-  eq(p, { kind: "lane", id: "g2", idx: 1 });
+  eq(p, { kind: "into", id: "g2", idx: 1 });
   assert.equal(layout.snapshot(), before, "the model is exactly as it was");
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
   /* what the canvas arranges while the drag is live is the layout as it would be */
@@ -90,7 +90,7 @@ test("the drop commits once: the frame is in the new group, in its slot, and one
   eq(ids(layout, "g1"), ["s2", "s3"]);
   eq(ids(layout, "g2"), ["s4", "s1", "s5"]);
   eq(layout.pos.mobile, {}, "a frame in a group has no place of its own");
-  assert.deepEqual({ kind: out.kind, group: out.group, moved: out.moved }, { kind: "lane", group: "g2", moved: true });
+  assert.deepEqual({ kind: out.kind, group: out.group, moved: out.moved }, { kind: "into", group: "g2", moved: true });
   assert.equal(layout.undo(), true);
   assert.equal(layout.snapshot(), before);
   assert.equal(layout.undo(), false, "that was the only step");
@@ -100,7 +100,7 @@ test("the drop commits once: the frame is in the new group, in its slot, and one
 test("reordering inside a group is a drop into the same group, not a move", () => {
   const { layout, gesture } = setup();
   gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(290, 100)), { kind: "lane", id: "g1", idx: 2 });
+  eq(gesture.move(at(290, 100)), { kind: "into", id: "g1", idx: 2 });
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s2", "s3", "s1"]);
   assert.deepEqual({ group: out.group, moved: out.moved }, { group: "g1", moved: false });
@@ -109,7 +109,7 @@ test("reordering inside a group is a drop into the same group, not a move", () =
 test("a closed group takes the frame at its end", () => {
   const { layout, gesture } = setup();
   gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
-  eq(gesture.move(at(50, 850)), { kind: "lane", id: "g3", idx: 1 });
+  eq(gesture.move(at(50, 850)), { kind: "into", id: "g3", idx: 1 });
   gesture.end();
   eq(ids(layout, "g3"), ["s6", "s1"]);
 });
@@ -118,11 +118,11 @@ test("a free drop takes the frames out of their group and keeps where they were 
   const { layout, gesture } = setup();
   gesture.begin({ kind: "frame", ids: ["s1", "s2"], pid: "s1", pointer: { x: 0, y: 0 } });
   const p = gesture.move({ x: 2500.4, y: 1000.6 });
-  assert.equal(p.kind, "free");
+  assert.equal(p.kind, "loose");
   const out = gesture.end();
   eq(ids(layout, "g1"), ["s3"]);
   eq(layout.pos.mobile, { s1: { x: 2500, y: 1001 }, s2: { x: 2500, y: 1001 } });
-  assert.deepEqual({ kind: out.kind, moved: out.moved }, { kind: "free", moved: true });
+  assert.deepEqual({ kind: out.kind, moved: out.moved }, { kind: "loose", moved: true });
   layout.undo();
   eq(ids(layout, "g1"), ["s1", "s2", "s3"]);
   eq(layout.pos.mobile, {});
@@ -176,7 +176,7 @@ test("a merge that takes the last frame of a group leaves no empty group behind"
 test("a frame is never proposed as a merge with itself or with a frame in a group", () => {
   const { gesture } = setup();
   gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7", pointer: { x: 0, y: 0 } });
-  assert.equal(gesture.move(at(2050, 110)).kind, "free", "over itself");
+  assert.equal(gesture.move(at(2050, 110)).kind, "loose", "over itself");
 });
 
 test("a group dragged by its grip is a proposed move: its place changes only on the drop", () => {
@@ -276,7 +276,7 @@ test("a frame held over its own slot proposes nothing: no group lights up and th
   /* once it has been somewhere else, coming back to its own slot is a proposal like any other */
   gesture.move(at(170, 450));
   assert.equal(shown.at(-1).dropGroup, "g2");
-  eq(gesture.move(at(170, 100)), { kind: "lane", id: "g1", idx: 1 });
+  eq(gesture.move(at(170, 100)), { kind: "into", id: "g1", idx: 1 });
   assert.equal(shown.at(-1).regrouped, true);
   assert.equal(shown.at(-1).dropGroup, "g1");
 });
@@ -284,9 +284,9 @@ test("a frame held over its own slot proposes nothing: no group lights up and th
 test("a loose frame dragged over empty canvas is a free proposal that follows the pointer without a redraw", () => {
   const { gesture, shown } = setup();
   gesture.begin({ kind: "frame", ids: ["s7"], pid: "s7", pointer: { x: 0, y: 0 } });
-  eq(gesture.move({ x: 2600, y: 900 }), { kind: "free", at: { s7: { x: 2600, y: 900 } } });
+  eq(gesture.move({ x: 2600, y: 900 }), { kind: "loose", at: { s7: { x: 2600, y: 900 } } });
   assert.equal(shown.at(-1).regrouped, false);
-  eq(gesture.move({ x: 2700, y: 950 }), { kind: "free", at: { s7: { x: 2700, y: 950 } } });
+  eq(gesture.move({ x: 2700, y: 950 }), { kind: "loose", at: { s7: { x: 2700, y: 950 } } });
 });
 
 test("if the layout changes under a live drag (undo, group), the drop is discarded instead of applied to stale data", () => {

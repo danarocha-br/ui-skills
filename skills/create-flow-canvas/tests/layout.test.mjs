@@ -355,3 +355,50 @@ test("groupFrames is a change like any other: snapshot, undo", () => {
   assert.equal(layout.undo(), true);
   assert.equal(layout.snapshot(), before);
 });
+
+/* the three small questions a drag, a group and a ungroup all ask of the groups */
+test("groupOf says which group a frame is in, or nothing for a loose frame", () => {
+  const layout = make();
+  assert.equal(layout.groupOf("s6").id, "g2");
+  assert.equal(layout.groupOf("s6"), layout.lanes[1], "the group itself, not a copy");
+  layout.lanes[1].screens = [];
+  assert.equal(layout.groupOf("s6"), undefined);
+});
+
+test("takeOut removes frames from every group and drops a group it leaves empty, leaving their places alone", () => {
+  const layout = make();
+  layout.pos.mobile = { s8: { x: 1, y: 2 } };
+  layout.takeOut(["s8", "s9", "s1"]);
+  eq(layout.lanes.map((l) => [l.id, l.screens]), [["g1", ["s2", "s3", "s4"]], ["g2", ["s5", "s6", "s7"]]]);
+  eq(layout.pos.mobile, { s8: { x: 1, y: 2 } }, "where a frame was put on a device is not a group's business");
+});
+
+test("takeOut with nothing to take still drops the groups that are already empty", () => {
+  const layout = make();
+  layout.lanes[2].screens = [];
+  layout.takeOut([]);
+  eq(layout.lanes.map((l) => l.id), ["g1", "g2"]);
+});
+
+test("moveInto puts frames into a group at a slot, takes them out of the others, and forgets their own places", () => {
+  const layout = make();
+  layout.pos.mobile = { s1: { x: 1, y: 1 }, g2: { x: 9, y: 9 } };
+  layout.pos.desktop = { s1: { x: 3, y: 3 } };
+  layout.moveInto(["s1", "s2"], "g2", 1);
+  eq(layout.lanes.map((l) => [l.id, l.screens]), [
+    ["g1", ["s3", "s4"]],
+    ["g2", ["s5", "s1", "s2", "s6", "s7"]],
+    ["g3", ["s8", "s9"]],
+  ]);
+  eq(layout.pos, { mobile: { g2: { x: 9, y: 9 } }, tablet: {}, desktop: {} }, "a group's own place stays; the frames' are gone");
+});
+
+test("moveInto drops a group it empties, but not the group the frames are going into", () => {
+  const layout = make();
+  layout.moveInto(["s8", "s9"], "g1", 0);
+  eq(layout.lanes.map((l) => [l.id, l.screens]), [["g1", ["s8", "s9", "s1", "s2", "s3", "s4"]], ["g2", ["s5", "s6", "s7"]]]);
+  /* all of a group's frames, back into that group: it is still there */
+  const again = make();
+  again.moveInto(["s8", "s9"], "g3", 0);
+  eq(again.lanes.map((l) => [l.id, l.screens]).at(-1), ["g3", ["s8", "s9"]]);
+});

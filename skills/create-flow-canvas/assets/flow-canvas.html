@@ -5361,6 +5361,13 @@
                       user's own (scans are the findings still shown). Read through layout every time, never
                       keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
            layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.lanes
+           layout.groupOf(id)        the group a frame is in, or undefined for a loose frame
+           layout.takeOut(ids)       the frames leave their groups; a group left empty (or already empty) goes. Their
+                             places are not touched.
+           layout.moveInto(ids, groupId, idx)
+                             the frames leave their groups and go into `groupId` at slot `idx` among the frames that
+                             stay there; their own places are forgotten on every device; a group left empty goes,
+                             but never the one they are going into. A data change: the caller commits it.
            layout.groupFrames(ids, { device, at? })
                              make a group of these frames, in this order: they leave their groups (a group left
                              empty goes), their own places are forgotten on every device, and the new group is
@@ -5617,14 +5624,30 @@
             layout.save();
           };
           layout.newGroup = (screens) => ({ id: layout.nextId("g"), screens, open: true, ...BLANK_TEXT });
-          layout.groupFrames = (ids, { device, at } = {}) => {
+          const leave = (ids) =>
             layout.lanes.forEach((L) => {
               L.screens = L.screens.filter((x) => !ids.includes(x));
             });
+          const dropEmpty = () => {
             layout.lanes = layout.lanes.filter((L) => L.screens.length);
+          };
+          const forgetPlaces = (ids) => Object.values(layout.pos).forEach((P) => ids.forEach((i) => delete P[i]));
+          layout.groupOf = (id) => layout.lanes.find((l) => l.screens.includes(id));
+          layout.takeOut = (ids) => {
+            leave(ids);
+            dropEmpty();
+          };
+          layout.moveInto = (ids, groupId, idx) => {
+            leave(ids);
+            layout.lanes.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
+            forgetPlaces(ids);
+            dropEmpty();
+          };
+          layout.groupFrames = (ids, { device, at } = {}) => {
+            layout.takeOut(ids);
             const g = layout.newGroup(ids.slice());
             layout.lanes.push(g);
-            Object.values(layout.pos).forEach((p) => ids.forEach((i) => delete p[i]));
+            forgetPlaces(ids);
             if (at) (layout.pos[device] || (layout.pos[device] = {}))[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
             return g;
           };
@@ -6415,8 +6438,8 @@
            gesture.begin({ kind: "group", id, pointer })          a group dragged by its grip
            gesture.move(pointer) -> proposal, or null when no gesture is live
            gesture.end() -> what was done, or null when no gesture is live. Commits the proposal once.
-                          { kind: "lane", ids, group, moved }   into group `group` (moved: it was not in it before)
-                          { kind: "free", ids, moved }          let go on the canvas (moved: it was in a group)
+                          { kind: "into", ids, group, moved }   into group `group` (moved: it was not in it before)
+                          { kind: "loose", ids, moved }         let go on the canvas (moved: it was in a group)
                           { kind: "merge", ids, group }         dropped onto a loose frame: `group` is the new one
                           { kind: "move", id }                  a group moved
                           { kind: "stay", ids }                 let go without moving
@@ -6428,9 +6451,9 @@
                           groups: [{ id, group, open, screens }]  (`group` is the layout's group, for its title etc.)
            gesture.active() -> a gesture is live
 
-         Proposal   { kind: "lane", id, idx }   into group `id`, at slot `idx` among the frames that stay
+         Proposal   { kind: "into", id, idx }   into group `id`, at slot `idx` among the frames that stay
                     { kind: "merge", id }        onto the loose frame `id`
-                    { kind: "free", at }         on the canvas; at: { [frameId]: { x, y } }
+                    { kind: "loose", at }        on the canvas; at: { [frameId]: { x, y } }
                     { kind: "move", id, at }     group `id` to `at`
                     { kind: "stay" }             nothing: not moved yet, or held over the slot it started in
          Preview    { kind: "frame"|"group", proposal, held: { [frameId]: { x, y } }, regrouped, dropGroup, mergeFrame }
@@ -6444,7 +6467,6 @@
 
         function create({ layout, commit, device, metrics, adapter }) {
           let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal, last, base } */
-          const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
 
           /* where a drop at this point (the centre of the frame under the pointer) would land */
           function targetAt(c, ids) {
@@ -6464,7 +6486,7 @@
                 ) {
                   const idx = clamp(Math.round((c.x - B.x - M.colW / 2) / (M.colW + M.gap)), 0, m),
                     dist = Math.abs(c.x - (B.x + rowW / 2));
-                  if (!best || dist < best.dist) best = { kind: "lane", id: L.id, idx, dist };
+                  if (!best || dist < best.dist) best = { kind: "into", id: L.id, idx, dist };
                 }
               } else if (
                 c.x >= B.x - 30 &&
@@ -6472,17 +6494,17 @@
                 c.y >= B.top - 30 &&
                 c.y <= B.top + M.collH + 20
               ) {
-                best = { kind: "lane", id: L.id, idx: m, dist: 0 };
+                best = { kind: "into", id: L.id, idx: m, dist: 0 };
               }
             }
-            if (best) return { kind: "lane", id: best.id, idx: best.idx };
+            if (best) return { kind: "into", id: best.id, idx: best.idx };
             for (const id of adapter.frames()) {
-              if (ids.includes(id) || laneOf(id)) continue;
+              if (ids.includes(id) || layout.groupOf(id)) continue;
               const f = adapter.place(id);
               if (f && c.x > f.x && c.x < f.x + M.colW && c.y > f.y + M.phTop && c.y < f.y + M.phTop + M.phH)
                 return { kind: "merge", id };
             }
-            return { kind: "free" };
+            return { kind: "loose" };
           }
 
           function announce(regrouped) {
@@ -6492,7 +6514,7 @@
               proposal: p,
               held: g.held,
               regrouped,
-              dropGroup: p.kind === "lane" ? p.id : null,
+              dropGroup: p.kind === "into" ? p.id : null,
               mergeFrame: p.kind === "merge" ? p.id : null,
             });
           }
@@ -6501,28 +6523,17 @@
           function apply(d) {
             const p = d.proposal,
               dev = device();
-            const take = () =>
-              layout.lanes.forEach((L) => {
-                L.screens = L.screens.filter((x) => !d.ids.includes(x));
-              });
-            const prune = () => {
-              layout.lanes = layout.lanes.filter((L) => L.screens.length);
-            };
             const places = () => layout.pos[dev] || (layout.pos[dev] = {});
-            if (p.kind === "lane") {
-              take();
-              layout.lanes.find((l) => l.id === p.id).screens.splice(p.idx, 0, ...d.ids);
-              Object.values(layout.pos).forEach((P) => d.ids.forEach((i) => delete P[i]));
-              prune();
-              return { kind: "lane", ids: d.ids, group: p.id, moved: d.ids.some((i) => (d.was.get(i) || null) !== p.id) };
+            if (p.kind === "into") {
+              layout.moveInto(d.ids, p.id, p.idx);
+              return { kind: "into", ids: d.ids, group: p.id, moved: d.ids.some((i) => (d.was.get(i) || null) !== p.id) };
             }
-            if (p.kind === "free") {
-              take();
-              prune();
+            if (p.kind === "loose") {
+              layout.takeOut(d.ids);
               d.ids.forEach((i) => {
                 places()[i] = { x: Math.round(p.at[i].x), y: Math.round(p.at[i].y) };
               });
-              return { kind: "free", ids: d.ids, moved: d.ids.some((i) => d.was.get(i)) };
+              return { kind: "loose", ids: d.ids, moved: d.ids.some((i) => d.was.get(i)) };
             }
             if (p.kind === "merge") {
               /* the group sits where the frame it was dropped on is, whether the others came from a group or not */
@@ -6563,7 +6574,7 @@
                   held[i] = { x: r.x, y: r.y };
                 });
                 /* where the frame under the pointer is now: holding it there proposes nothing */
-                const L0 = laneOf(press.pid);
+                const L0 = layout.groupOf(press.pid);
                 g = {
                   kind: "frame",
                   ids: press.ids,
@@ -6572,7 +6583,7 @@
                   held,
                   was: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
                   proposal: { kind: "stay" },
-                  last: keyOf(L0 ? { kind: "lane", id: L0.id, idx: L0.screens.indexOf(press.pid) } : { kind: "free" }),
+                  last: keyOf(L0 ? { kind: "into", id: L0.id, idx: L0.screens.indexOf(press.pid) } : { kind: "loose" }),
                   base: layout.snapshot(),
                 };
               }
@@ -6596,13 +6607,13 @@
               const M = metrics(),
                 p0 = held[g.pid];
               const t = targetAt({ x: p0.x + M.colW / 2, y: p0.y + M.phTop + M.phH / 2 }, g.ids);
-              const next = t.kind === "free" ? { kind: "free", at: held } : t;
+              const next = t.kind === "loose" ? { kind: "loose", at: held } : t;
               const key = keyOf(next),
                 same = key === g.last;
               g.held = held;
               g.last = key;
               /* still where it started: no proposal (a loose frame's own spot is a proposal, it carries where it is) */
-              if (next.kind === "free" || !same) g.proposal = next;
+              if (next.kind === "loose" || !same) g.proposal = next;
               announce(!same);
               return g.proposal;
             },
@@ -6633,7 +6644,7 @@
               if (!p || p.kind === "stay") return { groups, pos };
               if (p.kind === "move") return { groups, pos: { ...pos, [p.id]: p.at } };
               const out = groups.map((x) => ({ ...x, screens: x.screens.filter((s) => !g.ids.includes(s)) }));
-              if (p.kind === "lane") {
+              if (p.kind === "into") {
                 const t = out.find((x) => x.id === p.id);
                 t.screens = [...t.screens.slice(0, p.idx), ...g.ids, ...t.screens.slice(p.idx)];
               }
@@ -7278,7 +7289,7 @@
          take part in the ownership check, so a press on one is never a press on the canvas behind it */
       const captionKind = { name: "caption", owns: (t) => !!t.closest("[data-f],.cx,.cadd") };
       const annotations = FlowAnnotations.create({ commit, kinds: [noteKind, scanKind, linkKind, captionKind] });
-      const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
+      const laneOf = (id) => layout.groupOf(id);
       const isFree = (id) => !laneOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${id}"]`);
       const laneEl = (id) => document.getElementById(id);
@@ -8682,9 +8693,6 @@
         });
         toast(done ? "Undone" : "Nothing to undo");
       }
-      function pruneLanes() {
-        layout.lanes = layout.lanes.filter((L) => L.screens.length);
-      }
       function readingOrder(ids) {
         return [...ids]
           .sort((a, b) => geo.place(a).y - geo.place(b).y || geo.place(a).x - geo.place(b).x)
@@ -8746,10 +8754,9 @@
                   y: Math.round(L.open ? geo.place(i).y : box.top + HEAD),
                 };
                 k++;
-                L.screens = L.screens.filter((x) => x !== i);
               });
             });
-            pruneLanes();
+            layout.takeOut(ids);
           },
           { redraw: ["layout"] },
         );
@@ -8771,8 +8778,7 @@
                 y: Math.round(box.top + HEAD),
               };
             });
-            L.screens = [];
-            pruneLanes();
+            layout.takeOut([...L.screens]);
           },
           { redraw: ["layout"] },
         );
@@ -8999,10 +9005,10 @@
         const r = gesture.end();
         if (!r) return;
         if (r.kind === "merge") afterGrouped(r.group, r.ids, { fly: false });
-        else if (r.kind === "lane") {
+        else if (r.kind === "into") {
           const where = layout.lanes.find((l) => l.id === r.group);
           toast((r.moved ? `Moved into “${laneName(where)}”` : "Reordered") + ". ⌘Z to undo.");
-        } else if (r.kind === "free" && r.moved) toast("Taken out of its group. ⌘Z to undo.");
+        } else if (r.kind === "loose" && r.moved) toast("Taken out of its group. ⌘Z to undo.");
       }
       /* Escape and pointercancel: the pointer is taken off whatever it was dragging. Nothing was written, so there is
          nothing to put back; what is left of the press does nothing. */
@@ -9592,8 +9598,9 @@
       function updateAllBtn() {
         const b = $("#btnAll");
         if (!b) return;
-        const L = layout.lanes.filter((l) => l.screens.length),
-          all = L.length > 0 && L.every((l) => l.open);
+        /* what is drawn: a group a drag has emptied does not count */
+        const L = gesture.view().groups.filter((g) => g.screens.length),
+          all = L.length > 0 && L.every((g) => g.open);
         b.querySelector("span").textContent = all ? "Close all" : "Open all";
         b.querySelector("use").setAttribute(
           "href",
