@@ -12,7 +12,7 @@ import { builtinKinds } from "./kinds.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tiny = JSON.parse(fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8"));
-const KEY = "flow-canvas.layout.v1";
+const KEY = FlowScan.storageKey(readScan(tiny).scan);
 const plain = (o) => JSON.parse(JSON.stringify(o));
 const eq = (actual, expected, message) => assert.deepEqual(plain(actual), plain(expected), message);
 
@@ -56,10 +56,46 @@ const layoutFor = (raw, storage, over = {}) => {
   const scan = readScan(raw).scan;
   const defaults = () => ({ groups: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} } });
   const kinds = FlowScan.dataKinds(() => scan);
-  return FlowLayout.create({ key: KEY, storage, hasScreen: (id) => scan.screens.some((s) => s.id === id), defaults, kinds, ...over });
+  return FlowLayout.create({ key: FlowScan.storageKey(scan), storage, hasScreen: (id) => scan.screens.some((s) => s.id === id), defaults, kinds, ...over });
 };
 const members = (layout) => Object.fromEntries(layout.groups.map((l) => [l.id, l.screens]));
 const cap = (layout, id) => layout.caps.find((c) => c.id === id);
+
+test("two products on one origin keep separate edits, and reopening each finds its own layout", () => {
+  const storage = memory({ "flow-canvas.layout.v1": "unscoped legacy data" });
+  const first = v1(), second = v1();
+  first.product.id = "first";
+  second.product.id = "second";
+  const a = layoutFor(first, storage);
+  a.setGroupText("g1", { title: "First product's edits" });
+  a.save();
+  const b = layoutFor(second, storage);
+  assert.equal(b.groups[0].title, "Tally: count fast");
+  b.setGroupText("g1", { title: "Second product's edits" });
+  b.save();
+  assert.equal(layoutFor(first, storage).groups[0].title, "First product's edits");
+  assert.equal(layoutFor(second, storage).groups[0].title, "Second product's edits");
+  assert.equal(storage.data["flow-canvas.layout.v1"], "unscoped legacy data", "unknown legacy ownership is never guessed");
+});
+
+test("a saved user's group keeps its edits, place and view when a rescan adds a screen with its id", () => {
+  const storage = memory();
+  const a = layoutFor(v1(), storage);
+  const made = a.groupFrames(["settings"], { device: "tablet", at: { x: 5, y: 6 } });
+  a.setGroupText(made.id, { title: "My group" });
+  a.setOpen(made.id, false);
+  a.save();
+  const rescanned = v1();
+  rescanned.screens.push(screen(made.id, "New screen"));
+  const b = layoutFor(rescanned, storage);
+  const mine = b.groups.find((g) => g.title === "My group");
+  assert.notEqual(mine.id, made.id, "the group and new screen must have separate positions");
+  eq(mine.screens, ["settings"]);
+  eq(b.pos.tablet[mine.id], { x: 5, y: 6 });
+  assert.equal(b.pos.tablet[made.id], undefined, "the new screen cannot inherit the group's position");
+  assert.equal(mine.open, false);
+  assert.equal(layoutFor(rescanned, storage).snapshot(), b.snapshot(), "the repaired identity is saved");
+});
 
 /* the user's session against version 1 */
 const userSession = () => {

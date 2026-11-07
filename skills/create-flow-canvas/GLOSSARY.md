@@ -40,8 +40,12 @@ One sort of annotation (notes, findings, connectors, captions), declared as one 
 _Avoid_: Layer, type, adapter. (A finding's own `kind` field, "unreachable states" or "reused component", is its sort of finding, not an annotation kind.)
 
 **Scan**:
-What the scanner found in a product's code: its screens, their states, the groups and links between them, findings, notes and captions. The canvas shows a scan; it does not own it. The Loam canvas is one scan, the **sample**. Everything in it is text, shown as text and never as markup (a route may contain "<", "&" or "[id]"), except a screen's own render, which is markup by design.
+What the scanner found in a product's code: its screens, their states, the groups and links between them, findings, notes and captions. The canvas shows a scan; it does not own it. The Loam canvas is one scan, the **sample**. Everything in it is text, shown as text and never as markup (a route may contain "<", "&" or "[id]"), except a screen's own render and its SVG symbols (`icons`), which are markup by design. The replaceable styles supply the product's colours, fonts and reset.
 _Avoid_: Demo data, seed, fixture
+
+**Scan identity**:
+A stable `product.id` scopes saved layouts; an item's stable id keeps its edits attached on a rescan. Ids are unique within each annotation kind; screens and groups also have distinct ids because they share saved positions. A duplicate explicit id or an invalid id rejects the scan with a problem, before a layout is loaded. Missing annotation ids use their facts, then occurrence suffixes (`~2`, `~3`, …); these depend on order, so repeated facts that may reorder need explicit stable ids. A saved user group whose id a rescan uses for a screen gets a fresh id, carrying its membership, text, place and view state. Group ids stay data in the page's element registry and `data-group-id`, never document ids. In code, `FlowScan.read` and `FlowScan.storageKey`.
+_Avoid_: DOM id (for a scanned id), generated id (for a stable scanner-supplied id)
 
 **Screen**:
 One route or view of the product, as the scan found it. A **frame** is how a screen is drawn on the canvas.
@@ -104,7 +108,7 @@ One way a screen can look (empty, denied, error). A state is **reachable** when 
 _Avoid_: Variant, mode
 
 **Render**:
-A screen's own markup for one device and one state: what the product's screen looks like when it is shown. It is markup by design, the one thing in a scan that is. A render is shown whole, so what someone tapped inside a screen (a plant picked, a switch turned, a time chosen) belongs to the render on show and is gone when another is shown, whether that is another state or another device. Which state a frame shows is kept across devices; its taps are not.
+A screen's own markup for one device and one state: what the product's screen looks like when it is shown. It is markup by design, as are the product's SVG symbols. A render is shown whole, so what someone tapped inside a screen (a plant picked, a switch turned, a time chosen) belongs to the render on show and is gone when another is shown, whether that is another state or another device. Which state a frame shows is kept across devices; its taps are not.
 _Avoid_: Template, markup (alone)
 
 **Mount**:

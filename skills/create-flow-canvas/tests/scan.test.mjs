@@ -40,6 +40,43 @@ test("a clean scan reads with no problems, and ids the scanner left out are made
   eq(scan.components, { Button: "button", Total: ".total" });
 });
 
+test("repeated inferred ids keep every annotation and leave explicit ids available", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.links.push({ from: "home", to: "detail", label: "Again" }, { id: "home>detail~2", from: "detail", to: "home" });
+  raw.findings.push({ kind: "unreachable-states", frame: "home", source: "Other.tsx" });
+  raw.notes.push({ frame: "home", who: "Ana", text: "A second note" });
+  const { scan, problems } = readScan(raw);
+  eq(problems, []);
+  eq(scan.links.map((l) => l.id), ["home>detail", "home>detail~3", "home>detail~2"]);
+  eq(scan.findings.map((f) => f.id), ["home:unreachable-states", "detail:reused-component", "home:unreachable-states~2"]);
+  eq(scan.notes.map((n) => n.id), ["home:Ana", "home:Ana~2"]);
+  const edited = FlowScan.merge(scan.notes, null);
+  edited[1].text = "Edited separately";
+  eq(FlowScan.merge(scan.notes, FlowScan.diff(scan.notes, edited)).map((n) => n.text),
+    ["Is zero the right empty state?", "Edited separately"]);
+});
+
+test("discarded annotations cannot rename inferred ids or detach their saved edits", () => {
+  const raw = JSON.parse(tinyRaw);
+  const original = readScan(raw).scan;
+  const collections = [
+    ["links", { ...raw.links[0], id: "home>detail", to: "missing" }],
+    ["findings", { ...raw.findings[0], id: "home:unreachable-states", frame: "missing" }],
+    ["notes", { ...raw.notes[0], id: "home:Ana", frame: "missing" }],
+  ];
+  for (const [kind, invalid] of collections) {
+    const edited = FlowScan.merge(original[kind], null);
+    edited[0].review = "My saved edit";
+    const saved = FlowScan.diff(original[kind], edited);
+    const next = JSON.parse(tinyRaw);
+    next[kind].push(invalid);
+    const { scan, problems } = readScan(next);
+    assert.ok(problems.length > 0);
+    assert.equal(scan[kind][0].id, original[kind][0].id, `${kind} changed identity`);
+    assert.equal(FlowScan.merge(scan[kind], saved)[0].review, "My saved edit");
+  }
+});
+
 test("a screen gets every field the engine reads, even when the scanner left some out", () => {
   const { scan } = readScan(tinyRaw);
   const detail = scan.screens[1];
@@ -69,7 +106,7 @@ test("the scanner's own words are kept: a state says whether the UI reaches it, 
 
 test("whatever points at a screen the scan does not have is dropped, and each drop is reported", () => {
   const raw = JSON.parse(tinyRaw);
-  raw.screens.push({ name: "no id" }, { id: "home", name: "twice" });
+  raw.screens.push({ name: "no id" });
   raw.groups.push({ id: "g2", screens: ["ghost", "home"] }); // home is already in g1, ghost does not exist
   raw.links.push({ from: "home", to: "ghost" }, { from: "home", to: "home" });
   raw.findings.push({ kind: "reused-component", frame: "ghost", component: "Button" });
@@ -82,22 +119,117 @@ test("whatever points at a screen the scan does not have is dropped, and each dr
   assert.equal(scan.findings.length, 2);
   eq(scan.notes.map((n) => n.id), ["home:Ana"]);
   assert.equal(scan.start, null);
-  /* every one of the nine things dropped says what it was: none is dropped silently */
-  for (const word of ["no id", "twice", "ghost", "itself", "start"]) assert.ok(problems.some((p) => p.includes(word)), `no problem mentions "${word}": ${problems.join(" | ")}`);
-  assert.ok(problems.length >= 9, problems.join("\n"));
+  /* every drop says what it was */
+  for (const word of ["no id", "ghost", "itself", "start"]) assert.ok(problems.some((p) => p.includes(word)), `no problem mentions "${word}": ${problems.join(" | ")}`);
+  assert.ok(problems.length >= 8, problems.join("\n"));
 });
 
-test("two scanned items with one id are not both kept: the second is dropped and reported", () => {
+test("duplicate explicit ids reject the scan instead of returning data that would lose an item", () => {
+  for (const kind of ["screens", "groups", "links", "findings", "notes"]) {
+    const raw = JSON.parse(tinyRaw);
+    const first = raw[kind][0];
+    first.id = first.id || "explicit";
+    raw[kind].push({ ...first });
+    const { scan, problems } = readScan(raw);
+    assert.equal(scan, null, `${kind} returned a partial scan`);
+    assert.ok(problems.some((p) => p.includes(kind) && p.includes("same id") && p.includes(first.id)), problems.join("\n"));
+  }
+});
+
+test("duplicate explicit ids are rejected even when an item also has a missing screen reference", () => {
+  for (const kind of ["links", "findings", "notes"]) {
+    const raw = JSON.parse(tinyRaw);
+    raw[kind][0].id = "duplicate";
+    raw[kind].push({ ...raw[kind][0], ...(kind === "links" ? { to: "missing" } : { frame: "missing" }) });
+    const { scan, problems } = readScan(raw);
+    assert.ok(scan === null, `${kind} returned a partial scan`);
+    assert.ok(problems.some((p) => p.includes("same id")), problems.join("\n"));
+  }
+});
+
+test("ids unsafe for saved records and group ids shared with screens reject the scan", () => {
+  for (const kind of ["screens", "groups", "links", "findings", "notes"]) {
+    for (const id of ["", " ", "__proto__", "constructor", "toString", "line\nbreak", 42]) {
+      const raw = JSON.parse(tinyRaw);
+      raw[kind][0].id = id;
+      const { scan, problems } = readScan(raw);
+      assert.ok(scan === null, `${kind} accepted ${JSON.stringify(id)}`);
+      assert.ok(problems.some((p) => p.includes("invalid id")), problems.join("\n"));
+    }
+  }
   const raw = JSON.parse(tinyRaw);
-  raw.groups.push({ id: "g1", screens: ["detail"] });
-  raw.links.push({ id: "home>detail", from: "detail", to: "home" });
-  raw.findings.push({ id: "home:unreachable-states", kind: "unreachable-states", frame: "home" });
-  raw.notes.push({ id: "home:Ana", frame: "detail", who: "Ana", text: "again" });
+  raw.groups[0].id = "home";
   const { scan, problems } = readScan(raw);
-  eq(scan.links.map((l) => l.from), ["home"]);
-  assert.equal(scan.findings.length, 2);
-  assert.equal(scan.notes.length, 1);
-  assert.equal(problems.filter((p) => /same id/.test(p)).length, 4, problems.join("\n"));
+  assert.equal(scan, null);
+  assert.ok(problems.some((p) => p.includes("group") && p.includes("screen id")));
+});
+
+test("product identity scopes saved layouts and survives a product rename", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.product.id = "tally/web";
+  const first = readScan(raw).scan;
+  raw.product.name = "Renamed";
+  raw.product.scanned = "now";
+  raw.screens.reverse();
+  const renamed = readScan(raw).scan;
+  assert.equal(FlowScan.storageKey(first), "flow-canvas.layout.v1:tally%2Fweb");
+  assert.equal(FlowScan.storageKey(renamed), FlowScan.storageKey(first));
+  raw.product.id = "another-product";
+  assert.notEqual(FlowScan.storageKey(readScan(raw).scan), FlowScan.storageKey(first));
+  assert.notEqual(FlowScan.storageKey(readScan(tinyRaw).scan), "flow-canvas.layout.v1", "legacy scans also get a product scope");
+});
+
+test("malformed product ids return a problem before a storage key can throw", () => {
+  for (const id of ["", " ", 42, "line\nbreak", "\ud800"]) {
+    const raw = JSON.parse(tinyRaw);
+    raw.product.id = id;
+    const { scan, problems } = readScan(raw);
+    assert.ok(scan === null, `product accepted ${JSON.stringify(id)}`);
+    assert.ok(problems.some((p) => p.includes("product") && p.includes("invalid id")), problems.join("\n"));
+  }
+});
+
+test("id diagnostics never coerce an object supplied in JSON", () => {
+  for (const kind of ["screens", "groups", "links", "findings", "notes", "product"]) {
+    const raw = JSON.parse(tinyRaw);
+    const item = kind === "product" ? raw.product : raw[kind][0];
+    item.id = { toString: null, valueOf: null };
+    const { scan, problems } = readScan(JSON.stringify(raw));
+    assert.ok(scan === null, `${kind} accepted an object as an id`);
+    assert.ok(problems.some((p) => p.includes("invalid id")), problems.join("\n"));
+  }
+});
+
+test("component selectors are validated by the host parser; a bad one is reported and cannot reach Inspect", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.components = { Button: "button", Broken: "[", Empty: " ", Number: 3, Total: ".total" };
+  raw.screens[0].components.push("Broken");
+  const { scan, problems } = FlowScan.read(raw, {
+    devices: ["mobile"],
+    validateSelector(selector) {
+      if (selector === "[") throw new SyntaxError("invalid selector"); // the browser parser is the host seam
+      return true;
+    },
+  });
+  eq(scan.components, { Button: "button", Total: ".total" });
+  assert.ok(scan.screens[0].components.includes("Broken"), "component inventory is still available");
+  for (const name of ["Broken", "Empty", "Number"]) {
+    assert.ok(problems.some((p) => p.includes(name) && p.includes("selector")), problems.join("\n"));
+  }
+});
+
+test("any thrown selector rejection is reported without crashing the scan", () => {
+  for (const rejection of [null, undefined, "bad selector", new SyntaxError("bad selector")]) {
+    const { scan, problems } = FlowScan.read(tinyRaw, {
+      devices: ["mobile"],
+      validateSelector() { throw rejection; },
+    });
+    assert.ok(scan);
+    eq(scan.components, {});
+    for (const name of ["Button", "Total"]) {
+      assert.ok(problems.some((p) => p.includes(name) && p.includes("bad selector")), problems.join("\n"));
+    }
+  }
 });
 
 test("a scan that is not JSON, or not a scan, reads as nothing, with the reason", () => {

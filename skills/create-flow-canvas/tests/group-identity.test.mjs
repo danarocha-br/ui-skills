@@ -4,7 +4,7 @@
    Run:  node --test skills/create-flow-canvas/tests/group-identity.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FlowLayout, FlowCommit } from "./modules.mjs";
+import { FlowLayout, FlowCommit, html, readScan } from "./modules.mjs";
 import { builtinKinds } from "./kinds.mjs";
 
 const KEY = "flow-canvas.layout.v1";
@@ -31,6 +31,24 @@ const make = (storage = memory(), over = {}) =>
 const eq = (actual, expected, message) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, message);
 const groupById = (layout, id) => layout.groups.find((l) => l.id === id);
 
+test("groups may use shell element names without exposing those ids to the page DOM", () => {
+  const { scan, problems } = readScan({
+    screens: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    groups: [
+      { id: "panel", screens: ["a"] },
+      { id: "stage", screens: ["b"] },
+      { id: "q", screens: ["c"] },
+    ],
+  });
+  eq(problems, []);
+  eq(scan.groups.map((g) => g.id), ["panel", "stage", "q"]);
+  // The page keeps a registry for group elements. A scanned id must never become a document id or a lookup there.
+  assert.ok(!/el\.id\s*=\s*L\.id|document\.getElementById\(L\.id\)|const groupEl = .*getElementById/.test(html), "group ids cannot be assigned or looked up as document ids");
+  assert.ok(!/closest\("\.lane"\)\.id/.test(html), "group gestures must read the data id, too");
+  const groupDOM = html.slice(html.indexOf("function makeGroup("), html.indexOf("function sizeDz("));
+  assert.ok(!/\bel\.id\b/.test(groupDOM), "group header controls must resolve the data id, too");
+});
+
 /* a group made the way the page does it: the frames leave their groups, and a blank new one is added */
 function addGroup(layout, screens) {
   return layout.groupFrames(screens, { device: "mobile" });
@@ -52,6 +70,11 @@ test("the original bug: a group named Billing, Reset layout, a new group with th
 test("a new group starts blank and open, with no description shown", () => {
   const layout = make();
   eq(addGroup(layout, ["s9"]), { id: "g4", screens: ["s9"], open: true, title: "Untitled group", sub: "", subOn: false });
+});
+
+test("a new group's id skips screen ids because both share saved positions", () => {
+  const layout = make(memory(), { hasScreen: (id) => SCREENS.has(id) || id === "g4" });
+  assert.equal(addGroup(layout, ["s9"]).id, "g5");
 });
 
 test("a group's name is the part of its title before the colon, and reading it never changes anything", () => {

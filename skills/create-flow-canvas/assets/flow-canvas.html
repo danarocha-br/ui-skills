@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -23,18 +23,11 @@
         --cream-ink: #443b14;
         --mint: #ddf6e6;
         --mint-ink: #025e50;
-        --bone: #f3f0e6;
-        --card: #fbf9f3;
-        --moss: #34503a;
-        --sage: #d5dec8;
-        --pink: #1f2a21;
-        --pmuted: #5d685b;
         --sans: "Inter", system-ui, -apple-system, sans-serif;
         --mono: "JetBrains Mono", ui-monospace, monospace;
-        --serif: "Fraunces", Georgia, serif;
         --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
       }
-      * {
+      *:not(.phone *) {
         box-sizing: border-box;
         margin: 0;
         padding: 0;
@@ -48,7 +41,7 @@
         color: var(--ink);
         -webkit-font-smoothing: antialiased;
       }
-      button {
+      button:not(.phone *) {
         font-family: inherit;
       }
       body.boot * {
@@ -684,10 +677,8 @@
         height: var(--ch);
         border-radius: var(--cr);
         overflow: hidden;
-        background: var(--bone);
         display: flex;
         flex-direction: column;
-        color: var(--pink);
         box-shadow:
           0 0 0 0 #fff,
           0 0 0 0 rgba(16, 19, 19, 0),
@@ -1749,7 +1740,7 @@
       #ptitle {
         min-width: 0;
         margin: 5px 0 0;
-        font: 500 22px/28px var(--serif);
+        font: 500 22px/28px Georgia, serif;
         letter-spacing: -0.01em;
         color: var(--ink);
         text-wrap: balance;
@@ -2504,6 +2495,29 @@
       }
     </style>
     <style id="flow-scan-styles">
+      @import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+      :where(.phone, .phone *) {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      .phone button {
+        font-family: inherit;
+      }
+      .phone {
+        --bone: #f3f0e6;
+        --card: #fbf9f3;
+        --moss: #34503a;
+        --sage: #d5dec8;
+        --pink: #1f2a21;
+        --pmuted: #5d685b;
+        --serif: "Fraunces", Georgia, serif;
+        --sans: "Inter", system-ui, -apple-system, sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, monospace;
+        background: var(--bone);
+        color: var(--pink);
+        font-family: var(--sans);
+      }
       /* The product's own styles: part of the scan, like its screens. The generator writes this block with
          the scan; the canvas's styles above never name a product class. */
       /* ================= product (Loam) ================= */
@@ -3991,89 +4005,9 @@
     </style>
   </head>
   <body>
+    <svg id="scan-icons" width="0" height="0" style="position: absolute" aria-hidden="true"></svg>
     <svg width="0" height="0" style="position: absolute">
       <defs>
-        <symbol id="leaf" viewBox="0 0 100 100">
-          <path
-            fill="currentColor"
-            d="M50 98C48 62 58 30 88 6c5 36-6 70-38 92Z"
-          />
-          <path
-            fill="currentColor"
-            opacity=".72"
-            d="M50 98C50 64 38 40 10 26c-2 32 10 58 40 72Z"
-          />
-        </symbol>
-        <symbol id="check" viewBox="0 0 12 12">
-          <path
-            d="M2 6.5l2.6 2.6L10 3.4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </symbol>
-        <symbol id="drop" viewBox="0 0 20 20">
-          <path
-            d="M10 2.5C7 6.6 4.8 9 4.8 12.2a5.2 5.2 0 0010.4 0C15.2 9 13 6.6 10 2.5z"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linejoin="round"
-          />
-        </symbol>
-        <symbol id="sun" viewBox="0 0 20 20">
-          <circle
-            cx="10"
-            cy="10"
-            r="3.4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-          />
-          <path
-            d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-          />
-        </symbol>
-        <symbol id="bell" viewBox="0 0 20 20">
-          <path
-            d="M5 14V9a5 5 0 0110 0v5l1.5 1.5h-13L5 14zM8.2 17.5a2 2 0 003.6 0"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-          />
-        </symbol>
-        <symbol id="plus" viewBox="0 0 20 20">
-          <path
-            d="M10 4v12M4 10h12"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          />
-        </symbol>
-        <symbol id="srch" viewBox="0 0 20 20">
-          <circle
-            cx="9"
-            cy="9"
-            r="5.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-          />
-          <path
-            d="M13.2 13.2L17 17"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-          />
-        </symbol>
-
         <symbol
           id="i-search"
           viewBox="0 0 20 20"
@@ -4560,7 +4494,9 @@
          ====================================================================== -->
     <script type="application/json" id="flow-scan">
 {
+  "icons": "<defs>\n<symbol id=\"leaf\" viewBox=\"0 0 100 100\">\n          <path\n            fill=\"currentColor\"\n            d=\"M50 98C48 62 58 30 88 6c5 36-6 70-38 92Z\"\n          />\n          <path\n            fill=\"currentColor\"\n            opacity=\".72\"\n            d=\"M50 98C50 64 38 40 10 26c-2 32 10 58 40 72Z\"\n          />\n        <\/symbol>\n        <symbol id=\"check\" viewBox=\"0 0 12 12\">\n          <path\n            d=\"M2 6.5l2.6 2.6L10 3.4\"\n            fill=\"none\"\n            stroke=\"currentColor\"\n            stroke-width=\"2\"\n            stroke-linecap=\"round\"\n            stroke-linejoin=\"round\"\n          />\n        <\/symbol>\n        <symbol id=\"drop\" viewBox=\"0 0 20 20\">\n          <path\n            d=\"M10 2.5C7 6.6 4.8 9 4.8 12.2a5.2 5.2 0 0010.4 0C15.2 9 13 6.6 10 2.5z\"\n            fill=\"none\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.6\"\n            stroke-linejoin=\"round\"\n          />\n        <\/symbol>\n        <symbol id=\"sun\" viewBox=\"0 0 20 20\">\n          <circle\n            cx=\"10\"\n            cy=\"10\"\n            r=\"3.4\"\n            fill=\"none\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.6\"\n          />\n          <path\n            d=\"M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.6\"\n            stroke-linecap=\"round\"\n          />\n        <\/symbol>\n        <symbol id=\"bell\" viewBox=\"0 0 20 20\">\n          <path\n            d=\"M5 14V9a5 5 0 0110 0v5l1.5 1.5h-13L5 14zM8.2 17.5a2 2 0 003.6 0\"\n            fill=\"none\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.6\"\n            stroke-linejoin=\"round\"\n            stroke-linecap=\"round\"\n          />\n        <\/symbol>\n        <symbol id=\"plus\" viewBox=\"0 0 20 20\">\n          <path\n            d=\"M10 4v12M4 10h12\"\n            stroke=\"currentColor\"\n            stroke-width=\"2\"\n            stroke-linecap=\"round\"\n          />\n        <\/symbol>\n        <symbol id=\"srch\" viewBox=\"0 0 20 20\">\n          <circle\n            cx=\"9\"\n            cy=\"9\"\n            r=\"5.5\"\n            fill=\"none\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.7\"\n          />\n          <path\n            d=\"M13.2 13.2L17 17\"\n            stroke=\"currentColor\"\n            stroke-width=\"1.7\"\n            stroke-linecap=\"round\"\n          />\n        <\/symbol>\n<\/defs>",
   "product": {
+    "id": "loam",
     "name": "Loam",
     "scanned": "2m ago"
   },
@@ -5100,8 +5036,8 @@
          MARKUP MODULE
          Where text meets markup. Everything a scanner writes (routes, names, ids, meta, notes) is text, and
          enters the page only through here, so a "<", an "&", a quote or a "[id]" in a route cannot break it.
-         The one thing that is markup by design is a screen's own render (its "html"), which is never passed
-         through. No DOM, no product knowledge.
+         A screen's render (its "html") and the product's SVG symbols are markup by design and are never
+         passed through. No DOM, no product knowledge.
 
          Interface
            FlowMarkup.esc(text)      text made safe in an element and in a quoted attribute (& < > " ');
@@ -5234,8 +5170,10 @@
          No DOM, no product knowledge, and no other module: the devices a scan is read for are handed to read().
 
          A scan
-           { product: { name, scanned? }, start?,           scanned: when, in words; start: the screen selected
+           { product: { id?, name, scanned? }, start?,      id: stable product identity, also scopes saved layouts;
+                                                            scanned: when, in words; start: the screen selected
                                                             when the canvas opens
+             icons?: "<defs>...</defs>",                   product SVG symbols, mounted in the scan's own sprite
              components: { Name: cssSelector },             where each component shows up in a screen's HTML
              screens:  [{ id, name, route, file, components: [Name], note,
                           states: [{ name, reachable, html? }],   html: a state's own render, per device
@@ -5248,24 +5186,41 @@
              notes:    [{ id?, frame, who, t, text, pos?: { device: [x, y] } }] }  id defaults to "frame:who"
 
          Interface
-           FlowScan.read(raw, { devices })   devices: the device ids, e.g. FlowDevice.ids(); every screen gets one
+           FlowScan.read(raw, { devices, validateSelector? })   devices: the device ids, e.g. FlowDevice.ids(); every screen gets one
                                   render per device (blank when the scan has none). Required: it throws without.
+                                  validateSelector(selector): the host's CSS parser, false or a throw means invalid.
+                                  The browser supplies its native parser; without it only selector types/emptiness are checked.
                                   raw: the JSON text, or the object. Gives { scan, problems }: the scan with every
-                                  field the engine reads filled in, and what was wrong (a screen with no id or an
-                                  id seen twice is skipped; a group member, link, finding, note or start that
-                                  names a screen the scan does not have is dropped). Not a scan at all: scan null.
+                                  field the engine reads filled in, and what was wrong. Unknown screen references and
+                                  missing screen/group ids are dropped and reported; bad selectors are reported and
+                                  omitted from components, leaving their inventory on screens intact. Invalid or duplicate
+                                  explicit ids reject the scan (scan null), so a partial scan cannot overwrite saved edits.
+           FlowScan.storageKey(scan)   the product-scoped localStorage key. product.id falls back to the trimmed name
+                                  for older scans; generators must supply an id to keep edits through a rename. The old,
+                                  unscoped key is not read or migrated because its product cannot be identified.
+
+         Id policy
+           Ids are nonempty, trimmed, well-formed strings, without control characters or Object prototype names.
+           Explicit ids must be unique within screens, groups, links, findings and notes; screen/group ids must also
+           be disjoint because their saved positions share a map. Group ids are data, never document ids. The same
+           id in different annotation kinds is fine. Missing annotation ids keep the fact-based defaults above, then
+           use ~2, ~3, ... for repeated facts, reserving every explicit id first. These defaults depend on occurrence
+           order: scanners must supply distinct stable ids when repeated facts may reorder across scans.
+
+         Edits
            FlowScan.merge(scanned, saved)   the items as the user sees them: each scanned item with its edits
                                   laid over it (an edit { gone: true } leaves it out), then the user's own items.
                                   saved is { edits: { id: fields }, mine: [item] }, or nothing. Fresh copies.
            FlowScan.diff(scanned, items)    the reverse: { edits, mine } holding only what differs from the scan,
                                   down to one key of a nested object (one device's position). A field the user
                                   took away is saved as null. Edits to items the scan no longer has are dropped.
-           FlowScan.mergeGroups(scanned, saved, { fresh? })   the same for groups, whose frames are not a field but a
+           FlowScan.mergeGroups(scanned, saved, { fresh?, hasScreen? })   the same for groups, whose frames are not a field but a
                                   relation: saved is { edits, mine, place, order, seq }, where place says, one frame at a
                                   time, which group the user put it in (or null: loose), order the frames of a group the
                                   user rearranged, seq the groups' own order. A frame with no place follows the scan; a
                                   place that points at a group that is gone falls back to the scan; a group left with no
-                                  frames is dropped. A group of the user's whose id the scan now uses is given fresh(id).
+                                  frames is dropped. A group of the user's whose id a scanned group or a screen now
+                                  uses is given fresh(id); hasScreen(id) tells it about screen ids, and the layout supplies it.
                                   Gives { groups, renamed: { oldId: newId } }.
            FlowScan.diffGroups(scanned, groups)   the reverse: { edits, mine, place, order, seq } holding only what the
                                   user changed (order and seq only where they differ from what the scan gives).
@@ -5287,13 +5242,18 @@
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const str = (v, d = "") => (typeof v === "string" ? v : d);
         const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+        const validId = (id) => {
+          if (typeof id !== "string" || !id || id !== id.trim() || /[\x00-\x1f\x7f]/.test(id) ||
+              Object.prototype.hasOwnProperty.call(Object.prototype, id)) return false;
+          try { encodeURIComponent(id); return true; } catch { return false; } // reject unpaired UTF-16 surrogates
+        };
         const perDevice = (devices) => (h) => {
           const out = {};
           devices.forEach((d) => (out[d] = str(isObj(h) ? h[d] : "")));
           return out;
         };
 
-        function read(raw, { devices } = {}) {
+        function read(raw, { devices, validateSelector = () => true } = {}) {
           if (!Array.isArray(devices) || !devices.length) throw new Error("FlowScan.read: devices is required (the device ids a render is wanted for)");
           const perDev = perDevice(devices);
           const problems = [];
@@ -5308,12 +5268,33 @@
           if (!isObj(src)) return { scan: null, problems: ["the scan is not an object"] };
           const list = (k) => (Array.isArray(src[k]) ? src[k] : []);
 
+          let badIdentity = false;
+          const unique = (kind, seen, id) => {
+            if (!validId(id)) {
+              const label = typeof id === "string" ? JSON.stringify(id) : "of type " + typeof id;
+              problems.push(`${kind} has invalid id ${label}: use a nonempty, trimmed, well-formed id without control characters or Object prototype names`);
+              badIdentity = true;
+              return false;
+            }
+            if (seen.has(id)) {
+              problems.push(`two ${kind} have the same id "${id}": supply distinct stable ids`);
+              badIdentity = true;
+              return false;
+            }
+            seen.add(id);
+            return true;
+          };
+          /* Identity is checked before pruning references: an invalid item must not hide an ambiguous id. */
+          for (const kind of ["screens", "groups", "links", "findings", "notes"]) {
+            const declared = new Set();
+            list(kind).forEach((item) => isObj(item) && item.id != null && unique(kind, declared, item.id));
+          }
+          if (badIdentity) return { scan: null, problems };
           const screens = [],
             ids = new Set();
           list("screens").forEach((s, i) => {
-            if (!isObj(s) || typeof s.id !== "string" || !s.id) return problems.push(`screen ${i} has no id: skipped`);
-            if (ids.has(s.id)) return problems.push(`screen "${s.id}" appears twice: the second is skipped`);
-            ids.add(s.id);
+            if (!isObj(s) || s.id == null) return problems.push(`screen ${i} has no id: skipped`);
+            if (!unique("screens", ids, s.id)) return;
             const cap = isObj(s.caption) ? s.caption : {};
             screens.push({
               id: s.id,
@@ -5331,21 +5312,33 @@
           });
           const known = (id) => ids.has(id);
 
-          /* two items of one kind may not share an id: edits are kept by id, so the second would be lost */
-          const unique = (kind, seen, id) => {
-            if (seen.has(id)) {
-              problems.push(`two ${kind} have the same id "${id}": the second is dropped`);
-              return false;
-            }
-            seen.add(id);
-            return true;
+          /* Reserve ids of valid annotations before inferring any, including ones later in the list. Repeated
+             facts get occurrence suffixes; scanners should supply stable ids when those items may reorder. */
+          const validItems = (kind, problemOf) => list(kind).filter((item, i) => {
+            const problem = problemOf(item, i);
+            if (problem) problems.push(problem);
+            return !problem;
+          });
+          const inferIds = (items) => {
+            const taken = new Set(items.map((item) => item.id).filter((id) => typeof id === "string"));
+            return (given, base) => {
+              if (given != null) return given;
+              let id = base, n = 2;
+              while (taken.has(id)) id = base + "~" + n++;
+              taken.add(id);
+              return id;
+            };
           };
           const placed = new Set(),
             groupIds = new Set(),
             groups = [];
           list("groups").forEach((g, i) => {
-            if (!isObj(g) || typeof g.id !== "string") return problems.push(`group ${i} has no id: skipped`);
+            if (!isObj(g) || g.id == null) return problems.push(`group ${i} has no id: skipped`);
             if (!unique("groups", groupIds, g.id)) return;
+            if (known(g.id)) {
+              badIdentity = true;
+              return problems.push(`group id "${g.id}" is also a screen id: supply a distinct stable id`);
+            }
             const members = [];
             (Array.isArray(g.screens) ? g.screens : []).forEach((id) => {
               if (!known(id)) problems.push(`group "${g.id}" names screen "${id}", which the scan does not have`);
@@ -5362,34 +5355,36 @@
             groups.push(out);
           });
 
-          const links = [],
-            linkIds = new Set();
-          list("links").forEach((l, i) => {
-            if (!isObj(l) || !known(l.from) || !known(l.to)) return problems.push(`link ${i} joins a screen the scan does not have: dropped`);
-            if (l.from === l.to) return problems.push(`link ${i} leads from "${l.from}" to itself: dropped`);
-            const id = str(l.id, l.from + ">" + l.to);
+          const linkItems = validItems("links", (l, i) => {
+            if (!isObj(l) || !known(l.from) || !known(l.to)) return `link ${i} joins a screen the scan does not have: dropped`;
+            if (l.from === l.to) return `link ${i} leads from "${l.from}" to itself: dropped`;
+          });
+          const linkId = inferIds(linkItems), links = [], linkIds = new Set();
+          linkItems.forEach((l) => {
+            const id = linkId(l.id, l.from + ">" + l.to);
             if (unique("links", linkIds, id)) links.push({ id, from: l.from, to: l.to, label: str(l.label) });
           });
 
-          const findings = [],
-            findingIds = new Set();
-          list("findings").forEach((f, i) => {
-            if (!isObj(f) || !known(f.frame)) return problems.push(`finding ${i} points at a screen the scan does not have: dropped`);
+          const findingItems = validItems("findings", (f, i) =>
+            !isObj(f) || !known(f.frame) ? `finding ${i} points at a screen the scan does not have: dropped` : null);
+          const findingId = inferIds(findingItems), findings = [], findingIds = new Set();
+          findingItems.forEach((f) => {
             const kind = str(f.kind, "note");
-            const id = str(f.id, f.frame + ":" + kind);
+            const id = findingId(f.id, f.frame + ":" + kind);
             if (unique("findings", findingIds, id)) findings.push(Object.assign(clone(f), { id, kind }));
           });
 
-          const notes = [],
-            noteIds = new Set();
-          list("notes").forEach((n, i) => {
-            if (!isObj(n)) return problems.push(`note ${i} is not a note: dropped`);
-            if (n.frame != null && !known(n.frame)) return problems.push(`note ${i} is on a screen the scan does not have: dropped`);
-            if (typeof n.text !== "string") return problems.push(`note ${i} has no text: dropped`);
+          const noteItems = validItems("notes", (n, i) => {
+            if (!isObj(n)) return `note ${i} is not a note: dropped`;
+            if (n.frame != null && !known(n.frame)) return `note ${i} is on a screen the scan does not have: dropped`;
+            if (typeof n.text !== "string") return `note ${i} has no text: dropped`;
+          });
+          const noteId = inferIds(noteItems), notes = [], noteIds = new Set();
+          noteItems.forEach((n) => {
             const out = clone(n);
             out.frame = n.frame || null;
             out.who = str(n.who, "Scanner");
-            out.id = str(n.id, (out.frame || "canvas") + ":" + out.who);
+            out.id = noteId(n.id, (out.frame || "canvas") + ":" + out.who);
             if (unique("notes", noteIds, out.id)) notes.push(out);
           });
 
@@ -5398,13 +5393,30 @@
             if (known(src.start)) start = src.start;
             else problems.push(`start screen "${src.start}" is not in the scan`);
           }
-          const components = {};
-          if (isObj(src.components)) for (const k in src.components) if (typeof src.components[k] === "string") components[k] = src.components[k];
+          const components = Object.create(null);
+          if (isObj(src.components)) for (const [name, selector] of Object.entries(src.components)) {
+            try {
+              if (typeof selector !== "string" || !selector.trim() || validateSelector(selector) === false) throw new Error("invalid selector");
+              components[name] = selector;
+            } catch {
+              problems.push(`component "${name}" has a bad selector`);
+            }
+          }
 
+          const product = isObj(src.product) ? src.product : {};
+          const name = str(product.name, "Product");
+          const productId = product.id == null ? name.trim() || "Product" : product.id;
+          unique("product", new Set(), productId);
+          if (badIdentity) return { scan: null, problems };
           return {
             scan: {
-              product: { name: str(isObj(src.product) ? src.product.name : "", "Product"), scanned: str(isObj(src.product) ? src.product.scanned : "") },
+              product: {
+                id: productId,
+                name,
+                scanned: str(product.scanned),
+              },
               start,
+              icons: str(src.icons),
               components,
               screens,
               groups,
@@ -5496,7 +5508,7 @@
           });
           return into;
         }
-        function mergeGroups(scanned, saved, { fresh } = {}) {
+        function mergeGroups(scanned, saved, { fresh, hasScreen = () => false } = {}) {
           const sv = isObj(saved) ? saved : {};
           const place = {};
           if (isObj(sv.place)) for (const id in sv.place) if (sv.place[id] === null || typeof sv.place[id] === "string") place[id] = sv.place[id];
@@ -5508,7 +5520,7 @@
           const renamed = {};
           const mine = (Array.isArray(sv.mine) ? sv.mine : []).filter((m) => isObj(m) && typeof m.id === "string").map(bare);
           mine.forEach((m) => {
-            if (!scannedIds.has(m.id)) return;
+            if (!scannedIds.has(m.id) && !hasScreen(m.id)) return;
             const to = fresh ? fresh(m.id) : m.id + "-mine";
             renamed[m.id] = to;
             m.id = to;
@@ -5594,7 +5606,8 @@
           ];
         }
 
-        return { read, merge, diff, mergeGroups, diffGroups, dataKinds };
+        const storageKey = (scan) => "flow-canvas.layout.v1:" + encodeURIComponent(scan.product.id);
+        return { read, storageKey, merge, diff, mergeGroups, diffGroups, dataKinds };
       })();
     </script>
 
@@ -5916,7 +5929,7 @@
              user's own groups had to take a new id because the scan now uses theirs, and (from a layout saved when
              open was still an edit) which groups were open. */
           function groupsFrom(saved, d) {
-            const merged = FlowScan.mergeGroups(d.groups, saved, { fresh: () => layout.nextId("g") });
+            const merged = FlowScan.mergeGroups(d.groups, saved, { fresh: () => layout.nextId("g"), hasScreen });
             const seenIds = new Set();
             const wasOpen = {};
             const groups = merged.groups
@@ -5931,8 +5944,14 @@
           }
           /* the view record as saved, for the groups that exist; a layout from before it was kept falls back to the
              groups' own open (then an edit) */
-          function viewFrom(st, groups, wasOpen) {
-            const said = isObj(st.view) && isObj(st.view.open) ? st.view.open : isObj(st.view) ? {} : wasOpen;
+          function viewFrom(st, groups, wasOpen, renamed) {
+            const said = { ...(isObj(st.view) && isObj(st.view.open) ? st.view.open : isObj(st.view) ? {} : wasOpen) };
+            Object.entries(renamed).forEach(([from, to]) => {
+              if (Object.prototype.hasOwnProperty.call(said, from)) {
+                said[to] = said[from];
+                delete said[from];
+              }
+            });
             const out = {};
             groups.forEach((g) => {
               if (typeof said[g.id] === "boolean" && said[g.id] !== openDefault(g.id)) out[g.id] = said[g.id];
@@ -5974,7 +5993,7 @@
               const out = Object.assign({ groups: g.groups, pos: d.pos }, overlays(st, d));
               tidyPos(out.pos, out.groups, g.renamed);
               adopt(out);
-              setView(viewFrom(st, g.groups, g.wasOpen));
+              setView(viewFrom(st, g.groups, g.wasOpen, g.renamed));
               counters = counted(counters, (c) => S[c.field]);
               freshIds();
               /* a user's group whose id the scan now uses took a new one: write that down at once */
@@ -6164,7 +6183,7 @@
 
           layout.nextId = (kind) => {
             if (!(kind in counters)) throw new Error("FlowLayout.nextId: unknown kind " + kind);
-            counters[kind] += 1;
+            do { counters[kind] += 1; } while (kind === "g" && hasScreen(kind + counters[kind]));
             return kind + counters[kind];
           };
           layout.mark = (s) => {
@@ -8140,7 +8159,10 @@
    product class names, no product words. Problems are reported in the console; a scan that cannot be read
    at all leaves a message instead of a canvas.
    ====================================================================== */
-      const READ = FlowScan.read((document.getElementById("flow-scan") || {}).textContent || "", { devices: FlowDevice.ids() });
+      const READ = FlowScan.read((document.getElementById("flow-scan") || {}).textContent || "", {
+        devices: FlowDevice.ids(),
+        validateSelector: (selector) => { document.createDocumentFragment().querySelector(selector); },
+      });
       READ.problems.forEach((p) => console.warn("flow-scan:", p));
       if (!READ.scan) {
         document.body.innerHTML =
@@ -8151,6 +8173,7 @@
         throw new Error("flow-scan: " + READ.problems[0]);
       }
       const SCAN = READ.scan;
+      document.getElementById("scan-icons").innerHTML = SCAN.icons;
       const SCREENS = Object.fromEntries(SCAN.screens.map((s) => [s.id, s]));
       const ORDER = SCAN.screens.map((s) => s.id);
       const DEFAULT_GROUPS = SCAN.groups;
@@ -8715,7 +8738,7 @@
    The page reads the layout and asks it to change (its mutators, through commit); it never writes to it.
    ====================================================================== */
       const layout = FlowLayout.create({
-        key: "flow-canvas.layout.v1",
+        key: FlowScan.storageKey(SCAN),
         storage: {
           getItem: (k) => localStorage.getItem(k),
           setItem: (k, v) => localStorage.setItem(k, v),
@@ -8736,9 +8759,9 @@
       const groupOf = (id) => layout.groupOf(id);
       const isFree = (id) => !groupOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${cssStr(id)}"]`);
-      const groupEl = (id) => document.getElementById(id);
       /* a group's element, by id: the page's own handle; the layout's groups carry none */
       const groupEls = new Map();
+      const groupEl = (id) => groupEls.get(id);
       function sameAsDefault(L) {
         const d = DEFAULT_GROUPS.find((x) => x.id === L.id);
         return (
@@ -8829,7 +8852,7 @@
       function makeGroup(L) {
         const el = document.createElement("section");
         el.className = "lane";
-        el.id = L.id;
+        el.dataset.groupId = L.id;
         el.innerHTML = `<div class="ghead">
       <div class="gt"><button class="grip" title="Drag to move this group" aria-label="Drag to move group"><svg><use href="#i-grip"/></svg></button><button class="chev" title="Open or close this group" aria-label="Open or close group"><svg><use href="#i-chevup"/></svg></button><h2 class="gtitle" contenteditable="${CE}" spellcheck="false" data-k="${esc(L.id)}" data-f="title" data-ph="Name this group" role="textbox" aria-label="Group name">${esc(L.title)}</h2></div>
       ${gsubHTML(L)}
@@ -8839,7 +8862,7 @@
         world.insertBefore(el, notesEl);
         el.querySelector(".ghead").addEventListener("click", (e) => {
           e.stopPropagation();
-          const Lc = layout.groups.find((l) => l.id === el.id);
+          const Lc = layout.groups.find((l) => l.id === el.dataset.groupId);
           if (!Lc) return;
           if (e.target.closest(".grip")) return;
           if (e.target.closest(".fmore")) {
@@ -8880,13 +8903,14 @@
       function syncGroups() {
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
-        document.querySelectorAll(".lane").forEach((e) => {
-          if (!ids.has(e.id)) e.remove();
+        groupEls.forEach((el, id) => {
+          if (!ids.has(id)) {
+            el.remove();
+            groupEls.delete(id);
+          }
         });
-        /* the page's handles follow the groups shown, however a group's element went (the world is rebuilt too) */
-        groupEls.forEach((el, id) => ids.has(id) || groupEls.delete(id));
         shown.forEach(({ group: L, screens }) => {
-          let el = document.getElementById(L.id);
+          let el = groupEl(L.id);
           if (!el) el = makeGroup(L);
           groupEls.set(L.id, el);
           showGroupText(L);
@@ -9051,6 +9075,7 @@
       }
       function buildWorld() {
         document.querySelectorAll(".lane,.col").forEach((e) => e.remove());
+        groupEls.clear();
         ORDER.forEach(makeCol);
         KINDS.forEach((k) => k.refresh());
         geo.reset();
@@ -10263,7 +10288,7 @@
         const port = t.closest(".port");
         if (port) return { kind: "port", id: port.closest(".col").dataset.id, side: port.dataset.side };
         const grip = t.closest(".grip");
-        if (grip) return { kind: "grip", group: layout.groups.find((l) => l.id === grip.closest(".lane").id) };
+        if (grip) return { kind: "grip", group: layout.groups.find((l) => l.id === grip.closest(".lane").dataset.groupId) };
         const col = t.closest(".col");
         if (col && !t.closest(".states,button,[contenteditable]"))
           return col.classList.contains("deck")
@@ -10364,7 +10389,7 @@
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = layout.groups.find((l) => l.id === h.closest(".lane").id);
+          const L = layout.groups.find((l) => l.id === h.closest(".lane").dataset.groupId);
           if (L && !L.open) fanGroup(L.id, true);
         }
       });
@@ -10381,7 +10406,7 @@
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = layout.groups.find((l) => l.id === h.closest(".lane").id);
+          const L = layout.groups.find((l) => l.id === h.closest(".lane").dataset.groupId);
           if (L && !(e.relatedTarget && h.contains(e.relatedTarget)))
             fanGroup(L.id, false);
         }

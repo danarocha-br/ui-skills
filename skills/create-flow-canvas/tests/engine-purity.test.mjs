@@ -17,6 +17,35 @@ const productCss = html.match(/<style id="flow-scan-styles">([\s\S]*?)<\/style>/
 const canvasCss = html.slice(html.indexOf("<style>"), html.indexOf('<style id="flow-scan-styles">'));
 const classesIn = (css) => new Set([...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
 
+test("the product's colour and display-font tokens belong to the replaceable styles", () => {
+  const tokens = [...new Set([...productCss.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))]
+    .filter((name) => !["--sans", "--mono"].includes(name)); // both surfaces have their own body and code fonts
+  assert.ok(tokens.length > 0, "the sample exercises product tokens");
+  for (const name of tokens) {
+    assert.ok(productCss.includes(name + ":"), `${name} is not supplied by the scan`);
+    assert.ok(!canvasCss.includes(name), `${name} leaks into the shell`);
+  }
+});
+
+test("every icon the sample renders is supplied by the scan, outside the shell's sprite", () => {
+  const renders = scan.screens.flatMap((s) => [s.html, ...s.states.map((st) => st.html || {})]);
+  const icons = [...new Set(renders.flatMap((render) => Object.values(render))
+    .flatMap((markup) => [...markup.matchAll(/href="#([^"]+)"/g)].map((m) => m[1])))];
+  const shell = html.replace(/<script\b[\s\S]*?<\/script>/g, "");
+  assert.ok(icons.length > 0, "the sample exercises SVG icons");
+  for (const id of icons) {
+    assert.ok((scan.icons || "").includes(`id="${id}"`), `${id} is missing from the scan`);
+    assert.ok(!shell.includes(`id="${id}"`), `${id} leaks into the shell's sprite`);
+  }
+});
+
+test("the product supplies its own reset and font import without depending on the shell", () => {
+  assert.ok(!/\n\s*\*\s*\{/.test(canvasCss), "the shell's reset reaches into every product element");
+  assert.ok(/:where\(\.phone, \.phone \*\)/.test(productCss), "the replaceable product styles supply their reset");
+  assert.ok(productCss.includes("Fraunces"), "the sample supplies its display font");
+  assert.ok(!html.slice(0, html.indexOf('<style id="flow-scan-styles">')).includes("Fraunces"), "the shell imports the product's font");
+});
+
 test("the engine is there to be checked", () => {
   assert.ok(scan, "the sample scan reads");
   assert.ok(engine.includes("FlowScan.read("), "the page script is among the engine blocks");
