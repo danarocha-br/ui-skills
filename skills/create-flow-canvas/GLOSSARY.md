@@ -41,6 +41,18 @@ _Avoid_: Slot (that is one place in a row), coordinates
 A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Someone who asks for reduced motion gets no slide: frames are simply at their places.
 _Avoid_: Transition, animation (those name the browser mechanism, not the thing the user sees)
 
+**Gesture**:
+A drag of frames, or of a whole group by its grip. While the pointer is down it only proposes; letting go commits, and cancelling (Escape, or the pointer being taken away) ends it with nothing changed. In code, `FlowGesture`.
+_Avoid_: Drag state
+
+**Proposal**:
+Where a gesture's drop would land: into a group at a slot, onto a loose frame (to make a group), onto the canvas, or, for a group, to a new place. It is never written into the layout. The canvas shows the layout as it would be if the proposal were dropped (the **view**), so there is nothing to put back when it is thrown away.
+_Avoid_: Preview (that is how it is drawn), pending change
+
+**Drop**:
+Letting go of a gesture: its proposal is committed once, as one undo step. Dropping frames onto a loose frame makes a group of them, pinned where that frame was; dropping them into a group puts them in the slot shown.
+_Avoid_: Commit (that is the module that records every edit)
+
 **State**:
 One way a screen can look (empty, denied, error). A state is **reachable** when something in the product's UI leads to it, and **only reachable in code** when nothing does.
 _Avoid_: Variant, mode

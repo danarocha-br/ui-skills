@@ -5361,6 +5361,11 @@
                       user's own (scans are the findings still shown). Read through layout every time, never
                       keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
            layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.lanes
+           layout.groupFrames(ids, { device, at? })
+                             make a group of these frames, in this order: they leave their groups (a group left
+                             empty goes), their own places are forgotten on every device, and the new group is
+                             added last and returned. With `at` { x, y } the group is pinned there on `device`;
+                             without it, it takes the next free place. A data change: the caller commits it.
            layout.resetGroupText()   every group's title, description and visibility back to the scanned
                                      text (blank for a group that was not scanned); the caller commits it
            layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
@@ -5612,6 +5617,17 @@
             layout.save();
           };
           layout.newGroup = (screens) => ({ id: layout.nextId("g"), screens, open: true, ...BLANK_TEXT });
+          layout.groupFrames = (ids, { device, at } = {}) => {
+            layout.lanes.forEach((L) => {
+              L.screens = L.screens.filter((x) => !ids.includes(x));
+            });
+            layout.lanes = layout.lanes.filter((L) => L.screens.length);
+            const g = layout.newGroup(ids.slice());
+            layout.lanes.push(g);
+            Object.values(layout.pos).forEach((p) => ids.forEach((i) => delete p[i]));
+            if (at) (layout.pos[device] || (layout.pos[device] = {}))[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
+            return g;
+          };
           layout.resetGroupText = () => layout.lanes.forEach((l) => Object.assign(l, scannedText(l.id)));
           layout.nextId = (kind) => {
             if (!COUNTER_FIELD[kind]) throw new Error("FlowLayout.nextId: unknown kind " + kind);
@@ -5655,10 +5671,13 @@
                redraw  "all" (layout, scans, notes, conns) or a list of kinds; default none.
                        Always drawn in this order: world, layout, scans, notes, conns.
                undo    false for edits that are saved and redrawn but are not undo steps (folding a group)
+               force   true to redraw even if nothing changed: a drag moved things on screen (a preview) and
+                       the page must be drawn from the layout again, whether the drop changed it or not
              Only the outermost commit decides: a commit inside another one can add redraws, but its own
              undo option and since() are ignored.
            commit.since(before, { redraw, undo })
-             For a drag: the change already happened live, `before` is layout.snapshot() from the start.
+             For an edit typed in place: the change already happened live, `before` is layout.snapshot() from the
+             start. (Dragging frames or a group does not need it: FlowGesture commits its proposal on the drop.)
              Marks and saves only if something changed, but always redraws.
            commit.undo(afterRestore)
              Undoes one step, runs afterRestore() (the page's own clean-up), redraws everything.
@@ -5710,7 +5729,7 @@
               wanted = [...running];
               running = null;
             }
-            finish(before, opts, wanted, false);
+            finish(before, opts, wanted, !!opts.force);
             return result;
           }
           commit.since = (before, opts = {}) => finish(before, opts, kindsOf(opts.redraw), true);
@@ -6370,6 +6389,242 @@
     </script>
 
 
+    <script id="gesture-module">
+      /* ======================================================================
+         GESTURE MODULE
+         A drag of frames, or of a whole group, proposes; the drop commits. While the pointer is down the
+         layout is never touched: the gesture holds a *proposal* (where the drop would land) and the page draws
+         the layout as it would be if the proposal were dropped (the *view*). Letting go hands the proposal to
+         FlowCommit once, as one undo step. Cancelling (Escape, pointercancel) throws the proposal away: there is
+         nothing in the layout to put back. It knows nothing about the DOM: the page hands it an adapter.
+
+         Interface
+           const gesture = FlowGesture.create({ layout, commit, device, metrics, adapter })
+             layout   a FlowLayout            commit  a FlowCommit
+             device   () => id of the device whose positions a drop writes
+             metrics  () => { colW gap head phTop phH cap collH deckW peekX }, the sizes on this device
+             adapter  the page's side:
+               frames()        every frame id
+               box(groupId)    { x, top } the group's corner, as the arrangement has it now
+               place(frameId)  { x, y } where a frame is meant to be
+               rect(frameId)   { x, y } where a frame is drawn right now (it may be sliding)
+               show(preview)   draw the preview, see below; called after every change, and as the drag begins
+               settle(ids)     the drag is over, dropped or cancelled: let go of the held frames and clear
+                               everything show() put up. The page is drawn from the layout right after.
+           gesture.begin({ kind: "frame", ids, pid, pointer })    pointer in world px; pid is the frame under it
+           gesture.begin({ kind: "group", id, pointer })          a group dragged by its grip
+           gesture.move(pointer) -> proposal, or null when no gesture is live
+           gesture.end() -> what was done, or null when no gesture is live. Commits the proposal once.
+                          { kind: "lane", ids, group, moved }   into group `group` (moved: it was not in it before)
+                          { kind: "free", ids, moved }          let go on the canvas (moved: it was in a group)
+                          { kind: "merge", ids, group }         dropped onto a loose frame: `group` is the new one
+                          { kind: "move", id }                  a group moved
+                          { kind: "stay", ids }                 let go without moving
+           gesture.cancel() -> true, or false when no gesture was live. Commits nothing.
+           gesture.view() -> { groups, pos }   what to arrange now. The layout's own groups and positions when no
+                          proposal is live; with one, the groups as they would be and the group's new place.
+                          groups: [{ id, group, open, screens }]  (`group` is the layout's group, for its title etc.)
+           gesture.active() -> a gesture is live
+
+         Proposal   { kind: "lane", id, idx }   into group `id`, at slot `idx` among the frames that stay
+                    { kind: "merge", id }        onto the loose frame `id`
+                    { kind: "free", at }         on the canvas; at: { [frameId]: { x, y } }
+                    { kind: "move", id, at }     group `id` to `at`
+                    { kind: "stay" }             nothing yet
+         Preview    { kind: "frame"|"group", proposal, held: { [frameId]: { x, y } }, regrouped, dropGroup, mergeFrame }
+                    regrouped: the arrangement changed (draw the whole layout), not only where the held frames are
+                    dropGroup: the group to light up; mergeFrame: the loose frame to light up (or null)
+         ====================================================================== */
+      var FlowGesture = (function () {
+        "use strict";
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+        const keyOf = (p) => p.kind + "|" + (p.id || "") + "|" + (p.idx === undefined ? "" : p.idx);
+
+        function create({ layout, commit, device, metrics, adapter }) {
+          let g = null; /* the live gesture: { kind, ids, pid, off, was, start, w0, held, proposal } */
+          const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
+
+          /* where a drop at this point (the centre of the frame under the pointer) would land */
+          function targetAt(c, ids) {
+            const M = metrics();
+            let best = null;
+            for (const L of layout.lanes) {
+              const m = L.screens.filter((x) => !ids.includes(x)).length;
+              const B = adapter.box(L.id);
+              if (!B) continue;
+              if (L.open) {
+                const rowW = Math.max(1, m) * (M.colW + M.gap);
+                if (
+                  c.x >= B.x - 90 &&
+                  c.x <= B.x + m * (M.colW + M.gap) + M.colW * 1.4 &&
+                  c.y >= B.top - 30 &&
+                  c.y <= B.top + M.head + M.phTop + M.phH + M.cap + 70
+                ) {
+                  const idx = clamp(Math.round((c.x - B.x - M.colW / 2) / (M.colW + M.gap)), 0, m),
+                    dist = Math.abs(c.x - (B.x + rowW / 2));
+                  if (!best || dist < best.dist) best = { kind: "lane", id: L.id, idx, dist };
+                }
+              } else if (
+                c.x >= B.x - 30 &&
+                c.x <= B.x + M.deckW + M.peekX * 3 + 70 &&
+                c.y >= B.top - 30 &&
+                c.y <= B.top + M.collH + 20
+              ) {
+                best = { kind: "lane", id: L.id, idx: m, dist: 0 };
+              }
+            }
+            if (best) return { kind: "lane", id: best.id, idx: best.idx };
+            for (const id of adapter.frames()) {
+              if (ids.includes(id) || laneOf(id)) continue;
+              const f = adapter.place(id);
+              if (f && c.x > f.x && c.x < f.x + M.colW && c.y > f.y + M.phTop && c.y < f.y + M.phTop + M.phH)
+                return { kind: "merge", id };
+            }
+            return { kind: "free" };
+          }
+
+          function announce(regrouped) {
+            const p = g.proposal;
+            adapter.show({
+              kind: g.kind,
+              proposal: p,
+              held: g.held,
+              regrouped,
+              dropGroup: p.kind === "lane" ? p.id : null,
+              mergeFrame: p.kind === "merge" ? p.id : null,
+            });
+          }
+
+          /* the data change a drop makes; runs inside a commit */
+          function apply(d) {
+            const p = d.proposal,
+              dev = device();
+            const take = () =>
+              layout.lanes.forEach((L) => {
+                L.screens = L.screens.filter((x) => !d.ids.includes(x));
+              });
+            const prune = () => {
+              layout.lanes = layout.lanes.filter((L) => L.screens.length);
+            };
+            const places = () => layout.pos[dev] || (layout.pos[dev] = {});
+            if (p.kind === "lane") {
+              take();
+              layout.lanes.find((l) => l.id === p.id).screens.splice(p.idx, 0, ...d.ids);
+              Object.values(layout.pos).forEach((P) => d.ids.forEach((i) => delete P[i]));
+              prune();
+              return { kind: "lane", ids: d.ids, group: p.id, moved: d.ids.some((i) => (d.was.get(i) || null) !== p.id) };
+            }
+            if (p.kind === "free") {
+              take();
+              prune();
+              d.ids.forEach((i) => {
+                places()[i] = { x: Math.round(p.at[i].x), y: Math.round(p.at[i].y) };
+              });
+              return { kind: "free", ids: d.ids, moved: d.ids.some((i) => d.was.get(i)) };
+            }
+            if (p.kind === "merge") {
+              /* the group sits where the frame it was dropped on is, whether the others came from a group or not */
+              const at = adapter.place(p.id);
+              const ids = [p.id, ...d.ids];
+              const group = layout.groupFrames(ids, { device: dev, at: { x: at.x, y: at.y - metrics().head } });
+              return { kind: "merge", ids, group };
+            }
+            if (p.kind === "move") {
+              places()[p.id] = { x: p.at.x, y: p.at.y };
+              return { kind: "move", id: p.id };
+            }
+            return { kind: "stay", ids: d.ids };
+          }
+
+          return {
+            active: () => !!g,
+            begin(press) {
+              if (g) throw new Error("FlowGesture: a gesture is already live");
+              if (press.kind === "group") {
+                const b = adapter.box(press.id);
+                g = { kind: "group", ids: [], id: press.id, start: { x: b.x, y: b.top }, w0: press.pointer, held: {}, proposal: { kind: "stay" } };
+              } else {
+                const off = {},
+                  held = {};
+                press.ids.forEach((i) => {
+                  const r = adapter.rect(i);
+                  off[i] = { x: press.pointer.x - r.x, y: press.pointer.y - r.y };
+                  held[i] = { x: r.x, y: r.y };
+                });
+                g = {
+                  kind: "frame",
+                  ids: press.ids,
+                  pid: press.pid,
+                  off,
+                  held,
+                  was: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
+                  proposal: { kind: "stay" },
+                };
+              }
+              announce(false);
+            },
+            move(pointer) {
+              if (!g) return null;
+              if (g.kind === "group") {
+                g.proposal = {
+                  kind: "move",
+                  id: g.id,
+                  at: { x: Math.round(g.start.x + (pointer.x - g.w0.x)), y: Math.round(g.start.y + (pointer.y - g.w0.y)) },
+                };
+                announce(true);
+                return g.proposal;
+              }
+              const held = {};
+              g.ids.forEach((i) => {
+                held[i] = { x: pointer.x - g.off[i].x, y: pointer.y - g.off[i].y };
+              });
+              const M = metrics(),
+                p0 = held[g.pid];
+              const t = targetAt({ x: p0.x + M.colW / 2, y: p0.y + M.phTop + M.phH / 2 }, g.ids);
+              const next = t.kind === "free" ? { kind: "free", at: held } : t;
+              const regrouped = keyOf(next) !== keyOf(g.proposal);
+              g.held = held;
+              g.proposal = next;
+              announce(regrouped);
+              return next;
+            },
+            end() {
+              if (!g) return null;
+              const d = g;
+              g = null;
+              adapter.settle(d.ids);
+              let result;
+              /* force: the preview moved things on screen, so the page is drawn from the layout whether or not it changed */
+              commit(() => (result = apply(d)), { redraw: ["layout"], force: true });
+              return result;
+            },
+            cancel() {
+              if (!g) return false;
+              const d = g;
+              g = null;
+              adapter.settle(d.ids);
+              commit(() => {}, { redraw: ["layout"], force: true });
+              return true;
+            },
+            view() {
+              const pos = layout.pos[device()] || {};
+              const groups = layout.lanes.map((L) => ({ id: L.id, group: L, open: L.open, screens: L.screens }));
+              const p = g && g.proposal;
+              if (!p || p.kind === "stay") return { groups, pos };
+              if (p.kind === "move") return { groups, pos: { ...pos, [p.id]: p.at } };
+              const out = groups.map((x) => ({ ...x, screens: x.screens.filter((s) => !g.ids.includes(s)) }));
+              if (p.kind === "lane") {
+                const t = out.find((x) => x.id === p.id);
+                t.screens = [...t.screens.slice(0, p.idx), ...g.ids, ...t.screens.slice(p.idx)];
+              }
+              return { groups: out, pos };
+            },
+          };
+        }
+        return { create };
+      })();
+    </script>
+
     <script>
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
@@ -7021,12 +7276,28 @@
       const laneName = FlowLayout.groupName;
       const groupById = (id) => layout.lanes.find((l) => l.id === id);
 
-      /* what the geometry is asked to arrange: the groups, every frame, and where this device has things saved */
-      const geoInput = () => ({
-        groups: layout.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
-        screens: ORDER,
-        pos: posOf(),
+      /* A drag of frames or of a group proposes; the drop commits (FlowGesture). While one is live the page is drawn from
+         gesture.view(): the layout as it would be if the proposal were dropped. The layout itself is not touched. */
+      const gesture = FlowGesture.create({
+        layout,
+        commit,
+        device: () => DEV.id,
+        metrics: () => ({ colW: COL_W, gap: GAP, head: HEAD, phTop: PH_TOP, phH: PH_H, cap: CAP, collH: COLL_H, deckW: DECK_W, peekX: PEEK_X }),
+        adapter: {
+          frames: () => ORDER,
+          box: (id) => geo.box(id),
+          place: (id) => geo.place(id),
+          rect: (id) => geo.rect(id, performance.now()),
+          show: showGesture,
+          settle: settleGesture,
+        },
       });
+
+      /* what the geometry is asked to arrange: the groups, every frame, and where this device has things saved */
+      const geoInput = () => {
+        const v = gesture.view();
+        return { groups: v.groups.map(({ id, screens, open }) => ({ id, screens, open })), screens: ORDER, pos: v.pos };
+      };
       const geoMove = FlowGeometry.MOVES;
       for (const k of ["open", "deck"]) {
         const root = document.documentElement.style;
@@ -7112,9 +7383,8 @@
         });
         return el;
       }
-      function sizeDz(L, extra) {
-        const dz = L.el.querySelector(".dz"),
-          n = L.screens.length;
+      function sizeDz(L, n = L.screens.length) {
+        const dz = L.el.querySelector(".dz");
         if (L.open) {
           const w = Math.max(1, n) * (COL_W + GAP) - GAP;
           Object.assign(dz.style, {
@@ -7144,16 +7414,17 @@
         L.el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
       function syncLanes() {
-        const ids = new Set(layout.lanes.map((l) => l.id));
+        const shown = gesture.view().groups;
+        const ids = new Set(shown.map((g) => g.id));
         document.querySelectorAll(".lane").forEach((e) => {
           if (!ids.has(e.id)) e.remove();
         });
-        layout.lanes.forEach((L) => {
+        shown.forEach(({ group: L, screens }) => {
           let el = document.getElementById(L.id);
           if (!el) el = makeLane(L);
           L.el = el;
           showGroupText(L);
-          const n = L.screens.length;
+          const n = screens.length;
           const box = geo.box(L.id);
           el.style.left = box.x + "px";
           el.style.top = box.top + "px";
@@ -7182,7 +7453,7 @@
                   ? " · " + dm.meta.split(" · ").slice(1).join(" · ")
                   : "")
               : "";
-          sizeDz(L);
+          sizeDz(L, n);
         });
       }
       function relayout(opts) {
@@ -8394,13 +8665,6 @@
       function pruneLanes() {
         layout.lanes = layout.lanes.filter((L) => L.screens.length);
       }
-      function dropPos(ids) {
-        ids.forEach((i) =>
-          Object.values(layout.pos).forEach((p) => {
-            delete p[i];
-          }),
-        );
-      }
       function readingOrder(ids) {
         return [...ids]
           .sort((a, b) => geo.place(a).y - geo.place(b).y || geo.place(a).x - geo.place(b).x)
@@ -8411,40 +8675,29 @@
           );
       }
 
-      function groupFrames(ids, opts = {}) {
-        ids = [...new Set(ids)].filter((id) => SCREENS[id]);
-        if (!ids.length) return null;
-        const allFree = ids.every(isFree);
-        if (!opts.keepOrder) ids = readingOrder(ids);
-        const minX = Math.min(...ids.map((i) => geo.place(i).x)),
-          minY = Math.min(...ids.map((i) => geo.place(i).y));
-        const make = () => {
-          layout.lanes.forEach((L) => {
-            L.screens = L.screens.filter((x) => !ids.includes(x));
-          });
-          pruneLanes();
-          const L = layout.newGroup(ids);
-          layout.lanes.push(L);
-          dropPos(ids);
-          if (allFree)
-            posOf()[L.id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
-          return L;
-        };
-        /* a drag-end merge commits itself, from the snapshot taken when the drag began */
-        let L;
-        if (opts.uncommitted) {
-          L = make();
-          relayout();
-        } else L = commit(make, { redraw: ["layout"] });
-        const id = L.id;
+      /* what follows a new group, however it was made: select it, bring it into view if it was placed for the user,
+         and ask for its name */
+      function afterGrouped(L, ids, { fly: bring }) {
         setSel(ids, ids[ids.length - 1]);
-        if (!allFree) fly(fitRect(laneRect(L), 40));
-        setTimeout(() => focusTitle(id), 650);
+        if (bring) fly(fitRect(laneRect(L), 40));
+        setTimeout(() => focusTitle(L.id), 650);
         toast(
           ids.length === 1
             ? "Grouped. Name it, then drag frames in."
             : `Grouped ${ids.length} frames. Name the group.`,
         );
+      }
+      function groupFrames(ids) {
+        ids = [...new Set(ids)].filter((id) => SCREENS[id]);
+        if (!ids.length) return null;
+        const allFree = ids.every(isFree);
+        ids = readingOrder(ids);
+        const minX = Math.min(...ids.map((i) => geo.place(i).x)),
+          minY = Math.min(...ids.map((i) => geo.place(i).y));
+        /* frames that were all loose keep their spot; otherwise the group takes the next free one */
+        const at = allFree ? { x: minX, y: minY - HEAD } : undefined;
+        const L = commit(() => layout.groupFrames(ids, { device: DEV.id, at }), { redraw: ["layout"] });
+        afterGrouped(L, ids, { fly: !allFree });
         return L;
       }
       function removeFromGroup(ids) {
@@ -8609,7 +8862,6 @@
       /* ---------- dragging ---------- */
       let pan = null,
         moved = false,
-        drag = null,
         press = null,
         mq = null,
         handMode = false,
@@ -8659,219 +8911,85 @@
       const hint = $("#hint");
       const hideHint = () => hint.classList.add("gone");
       setTimeout(hideHint, 9000);
-      function findTarget(c, ids) {
-        let best = null;
-        for (const L of layout.lanes) {
-          const others = L.screens.filter((x) => !ids.includes(x)),
-            m = others.length,
-            B = geo.box(L.id);
-          if (L.open) {
-            const rowW = Math.max(1, m) * (COL_W + GAP);
-            if (
-              c.x >= B.x - 90 &&
-              c.x <= B.x + m * (COL_W + GAP) + COL_W * 1.4 &&
-              c.y >= B.top - 30 &&
-              c.y <= B.top + HEAD + PH_TOP + PH_H + CAP + 70
-            ) {
-              const idx = clamp(
-                  Math.round((c.x - B.x - COL_W / 2) / (COL_W + GAP)),
-                  0,
-                  m,
-                ),
-                dist = Math.abs(c.x - (B.x + rowW / 2));
-              if (!best || dist < best.dist)
-                best = { kind: "lane", id: L.id, idx, dist };
-            }
-          } else if (
-            c.x >= B.x - 30 &&
-            c.x <= B.x + DECK_W + PEEK_X * 3 + 70 &&
-            c.y >= B.top - 30 &&
-            c.y <= B.top + COLL_H + 20
-          ) {
-            best = { kind: "lane", id: L.id, idx: m, dist: 0 };
+      /* the page's side of a gesture: draw its preview, and clean up after it. Everything a drag puts on the page is
+         drawn from the preview and cleared in settleGesture, which a drop and a cancel both end in. */
+      function showGesture(pv) {
+        if (pv.kind === "group") {
+          document.body.classList.add("gdrag");
+          document.querySelectorAll(".col.fan").forEach((c) => c.classList.remove("fan"));
+          /* a group dragged by its grip moves as one piece with its header: the frames do not slide after it */
+          if (pv.regrouped) {
+            arrangeFrames({ snap: true });
+            syncLanes();
+            updateBars();
+            drawConns();
           }
-        }
-        if (best) return best;
-        for (const id of ORDER) {
-          if (ids.includes(id) || !isFree(id)) continue;
-          const f = geo.place(id);
-          if (
-            c.x > f.x &&
-            c.x < f.x + COL_W &&
-            c.y > f.y + PH_TOP &&
-            c.y < f.y + PH_TOP + PH_H
-          )
-            return { kind: "merge", id };
-        }
-        return { kind: "free" };
-      }
-      function applyTarget(t, ids) {
-        const cur = drag.target;
-        if (cur && cur.kind === t.kind && cur.id === t.id && cur.idx === t.idx)
           return;
-        layout.lanes.forEach((L) => {
-          L.screens = L.screens.filter((x) => !ids.includes(x));
+        }
+        selbox.classList.add("live");
+        Object.entries(pv.held).forEach(([id, at]) => {
+          const c = colOf(id);
+          if (!c) return;
+          geo.hold(id, at.x, at.y);
+          c.classList.add("dragging");
+          c.classList.remove("deck");
         });
-        if (t.kind === "lane") {
-          const L = layout.lanes.find((l) => l.id === t.id);
-          L.screens.splice(t.idx, 0, ...ids);
-        }
-        drag.target = t;
-        document
-          .querySelectorAll(".col.merge")
-          .forEach((c) => c.classList.remove("merge"));
-        if (t.kind === "merge") {
-          const c = colOf(t.id);
-          if (c) c.classList.add("merge");
-        }
-        relayout();
-        layout.lanes.forEach((L) =>
-          L.el.classList.toggle("drop", t.kind === "lane" && t.id === L.id),
-        );
-        if (t.kind === "lane") {
-          const L = layout.lanes.find((l) => l.id === t.id);
-          sizeDz(L);
+        document.querySelectorAll(".col.merge").forEach((c) => c.dataset.id !== pv.mergeFrame && c.classList.remove("merge"));
+        if (pv.mergeFrame) colOf(pv.mergeFrame)?.classList.add("merge");
+        layout.lanes.forEach((L) => L.el && L.el.classList.toggle("drop", L.id === pv.dropGroup));
+        if (pv.regrouped) relayout();
+        else {
+          Object.keys(pv.held).forEach((id) => putFrame(id));
+          updateSelBox();
+          drawConns();
         }
       }
-      function beginDrag(e) {
+      function settleGesture(ids) {
+        geo.release(ids);
+        document.body.classList.remove("gdrag");
+        selbox.classList.remove("live");
+        document.querySelectorAll(".col.dragging,.col.merge").forEach((c) => c.classList.remove("dragging", "merge"));
+        layout.lanes.forEach((L) => L.el && L.el.classList.remove("drop"));
+      }
+      function beginDrag() {
         moved = true;
         stage.classList.remove("fly");
         hideHint();
+        const pointer = toWorld(press.sx, press.sy);
         if (press.kind === "group") {
-          const L = press.lane;
-          if (!L) {
+          if (!press.lane) {
             press = null;
             return;
           }
-          const w = toWorld(press.sx, press.sy);
-          drag = {
-            kind: "group",
-            L,
-            start: { x: geo.box(L.id).x, y: geo.box(L.id).top },
-            w0: w,
-            snapshot: layout.snapshot(),
-          };
-          document.body.classList.add("gdrag");
-          document
-            .querySelectorAll(".col.fan")
-            .forEach((c) => c.classList.remove("fan"));
+          gesture.begin({ kind: "group", id: press.lane.id, pointer });
           return;
         }
         const id = press.id;
-        let ids =
+        const ids =
           selSet.has(id) && selSet.size > 1
             ? [...selSet].filter((x) => geo.place(x) && !geo.place(x).deck)
             : [id];
         if (!selSet.has(id) || selSet.size <= 1) setSel([id], id);
-        const w = toWorld(press.sx, press.sy);
-        drag = {
-          kind: "frame",
-          ids,
-          pid: id,
-          off: {},
-          snapshot: layout.snapshot(),
-          wasIn: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
-          target: null,
-        };
-        const t0 = performance.now();
-        ids.forEach((i) => {
-          const r = geo.rect(i, t0);
-          drag.off[i] = { x: w.x - r.x, y: w.y - r.y };
-          geo.hold(i, r.x, r.y);
-          const c = colOf(i);
-          c.classList.add("dragging");
-          c.classList.remove("deck");
-        });
-        const L0 = laneOf(id);
-        drag.target = {
-          kind: L0 ? "lane" : "free",
-          id: L0 && L0.id,
-          idx: L0 ? L0.screens.indexOf(id) : undefined,
-        };
+        gesture.begin({ kind: "frame", ids, pid: id, pointer });
       }
       function updateDrag(e) {
-        const w = toWorld(e.clientX, e.clientY);
-        if (drag.kind === "group") {
-          const L = drag.L;
-          posOf()[L.id] = {
-            x: Math.round(drag.start.x + (w.x - drag.w0.x)),
-            y: Math.round(drag.start.y + (w.y - drag.w0.y)),
-          };
-          /* a group dragged by its grip moves as one piece with its header: the frames do not slide after it */
-          arrangeFrames({ snap: true });
-          syncLanes();
-          updateBars();
-          drawConns();
-          return;
-        }
-        selbox.classList.add("live");
-        const np = {};
-        drag.ids.forEach((i) => {
-          np[i] = { x: w.x - drag.off[i].x, y: w.y - drag.off[i].y };
-        });
-        const hold = () =>
-          drag.ids.forEach((i) => {
-            geo.hold(i, np[i].x, np[i].y);
-            putFrame(i);
-          });
-        hold();
-        const p = np[drag.pid],
-          c = { x: p.x + COL_W / 2, y: p.y + PH_TOP + PH_H / 2 };
-        applyTarget(findTarget(c, drag.ids), drag.ids);
-        hold();
-        updateSelBox();
-        drawConns(); // a regroup re-lays everything out; keep the dragged cards under the pointer
+        gesture.move(toWorld(e.clientX, e.clientY));
       }
       function endDrag() {
-        const d = drag;
-        drag = null;
-        if (!d) return;
-        selbox.classList.remove("live");
-        if (d.kind === "group") {
-          document.body.classList.remove("gdrag");
-          commit.since(d.snapshot);
-          return;
-        }
-        const t = d.target || { kind: "free" };
-        document
-          .querySelectorAll(".col.merge")
-          .forEach((c) => c.classList.remove("merge"));
-        layout.lanes.forEach((L) => L.el && L.el.classList.remove("drop"));
-        let msg = "";
-        if (t.kind === "merge") {
-          const target = t.id,
-            ids = d.ids;
-          d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
-          geo.release(d.ids);
-          groupFrames([target, ...ids], { keepOrder: true, uncommitted: true });
-          commit.since(d.snapshot, { redraw: ["layout"] });
-          return;
-        }
-        if (t.kind === "free") {
-          d.ids.forEach((i) => {
-            posOf()[i] = { x: Math.round(geo.place(i).x), y: Math.round(geo.place(i).y) };
-          });
-        } else {
-          d.ids.forEach((i) =>
-            Object.values(layout.pos).forEach((p) => {
-              delete p[i];
-            }),
-          );
-        }
-        const moved0 = d.ids.some(
-          (i) => (d.wasIn.get(i) || null) !== (t.kind === "lane" ? t.id : null),
-        );
-        const nm =
-          t.kind === "lane" ? laneName(layout.lanes.find((l) => l.id === t.id)) : "";
-        pruneLanes();
-        d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
-        geo.release(d.ids);
-        commit.since(d.snapshot, { redraw: ["layout"] });
-        if (moved0)
-          msg =
-            t.kind === "lane" ? `Moved into “${nm}”` : "Taken out of its group";
-        else if (t.kind === "lane") msg = "Reordered";
-        if (msg) toast(msg + ". ⌘Z to undo.");
+        const r = gesture.end();
+        if (!r) return;
+        if (r.kind === "merge") afterGrouped(r.group, r.ids, { fly: false });
+        else if (r.kind === "lane") {
+          const where = layout.lanes.find((l) => l.id === r.group);
+          toast((r.moved ? `Moved into “${laneName(where)}”` : "Reordered") + ". ⌘Z to undo.");
+        } else if (r.kind === "free" && r.moved) toast("Taken out of its group. ⌘Z to undo.");
+      }
+      /* Escape and pointercancel: the pointer is taken off whatever it was dragging. Nothing was written, so there is
+         nothing to put back; what is left of the press does nothing. */
+      function cancelDrag() {
+        annotations.cancel();
+        gesture.cancel();
+        press = null;
       }
       function marqueeHits(r) {
         const a = toWorld(r.x, r.y),
@@ -9006,11 +9124,11 @@
         }
         if (
           press &&
-          !drag &&
+          !gesture.active() &&
           Math.hypot(e.clientX - press.sx, e.clientY - press.sy) > 5
         )
-          beginDrag(e);
-        if (drag) {
+          beginDrag();
+        if (gesture.active()) {
           updateDrag(e);
           return;
         }
@@ -9040,26 +9158,15 @@
           return;
         }
         annotations.up();
-        if (drag) endDrag();
+        endDrag();
         if (mq) endMarquee();
         press = null;
         pan = null;
         stage.classList.remove("panning");
       });
       addEventListener("pointercancel", () => {
-        annotations.cancel();
+        cancelDrag();
         if (connDrag) endConnDrag(true);
-        if (drag) {
-          const d = drag;
-          drag = null;
-          document.body.classList.remove("gdrag");
-          layout.restore(d.snapshot);
-          geo.release(d.ids || []);
-          document
-            .querySelectorAll(".col.dragging")
-            .forEach((c) => c.classList.remove("dragging"));
-          relayout();
-        }
         press = null;
         pan = null;
         mq = null;
@@ -9099,7 +9206,7 @@
         if (L)
           L.screens.forEach((s) => {
             const c = colOf(s);
-            if (c) c.classList.toggle("fan", on && !drag);
+            if (c) c.classList.toggle("fan", on && !gesture.active());
           });
       }
       world.addEventListener("pointerover", (e) => {
@@ -9384,8 +9491,9 @@
             markActive();
             return;
           }
-          if (drag && drag.kind === "frame") {
+          if (gesture.active() || annotations.dragging()) {
             e.preventDefault();
+            cancelDrag();
             return;
           }
           if (usageComp !== null) {

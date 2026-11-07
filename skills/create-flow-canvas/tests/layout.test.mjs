@@ -310,3 +310,48 @@ test("restore never leaves a counter below an id it has just brought back, so un
   assert.equal(layout.nextId("c"), "c8");
   assert.equal(layout.nextId("g"), "g5");
 });
+
+/* layout.groupFrames: the one data change that makes a group out of frames (⌘G and a drop onto a frame share it) */
+test("groupFrames takes the frames out of their groups, drops empty groups, and adds one new group, in the order given", () => {
+  const layout = make();
+  const g = layout.groupFrames(["s6", "s1", "s5"], { device: "mobile" });
+  assert.equal(g.id, "g4");
+  eq(g.screens, ["s6", "s1", "s5"]);
+  assert.equal(g.open, true);
+  assert.equal(layout.lanes.at(-1), g);
+  eq(layout.lanes.map((l) => [l.id, l.screens]), [
+    ["g1", ["s2", "s3", "s4"]],
+    ["g2", ["s7"]],
+    ["g3", ["s8", "s9"]],
+    ["g4", ["s6", "s1", "s5"]],
+  ]);
+  const emptied = make().groupFrames(["s8", "s9"], { device: "mobile" });
+  assert.equal(emptied.id, "g4");
+});
+
+test("groupFrames leaves no empty group behind", () => {
+  const layout = make();
+  layout.groupFrames(["s8", "s9"], { device: "mobile" });
+  eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g4"]);
+});
+
+test("groupFrames forgets the frames' own places on every device and pins the group only when asked", () => {
+  const layout = make();
+  layout.pos.mobile = { s1: { x: 1, y: 1 }, s7: { x: 2, y: 2 } };
+  layout.pos.tablet = { s1: { x: 3, y: 3 } };
+  const g = layout.groupFrames(["s1", "s7"], { device: "mobile" });
+  eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
+  const h = layout.groupFrames(["s2"], { device: "mobile", at: { x: 10.4, y: 20.6 } });
+  eq(layout.pos.mobile, { [h.id]: { x: 10, y: 21 } });
+  assert.notEqual(g.id, h.id);
+});
+
+test("groupFrames is a change like any other: snapshot, undo", () => {
+  const layout = make();
+  const before = layout.snapshot();
+  layout.mark();
+  layout.groupFrames(["s1", "s2"], { device: "mobile" });
+  assert.notEqual(layout.snapshot(), before);
+  assert.equal(layout.undo(), true);
+  assert.equal(layout.snapshot(), before);
+});

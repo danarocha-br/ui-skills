@@ -184,3 +184,17 @@ test("a nested commit's own undo and redraw choices do not override the outer on
   eq(layout.pos.mobile, {}); // both edits were one undo step, although the inner one asked for none
   assert.equal(layout.undo(), false);
 });
+
+test("force redraws even when nothing changed, with no undo step and no save (a drag that was cancelled or let go in place)", () => {
+  const { layout, commit, calls } = setup();
+  commit(() => {}, { redraw: ["layout"], force: true });
+  assert.deepEqual(calls, ["redraw:layout"]);
+  assert.equal(layout.undo(), false);
+});
+
+test("force does not change what a real change does: undo point, save, redraw", () => {
+  const { layout, commit, calls } = setup();
+  commit(() => (layout.pos.mobile.s1 = { x: 1, y: 1 }), { redraw: ["layout"], force: true });
+  assert.deepEqual(calls, ["save", "redraw:layout"]);
+  assert.equal(layout.undo(), true);
+});
