@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const html = fs.readFileSync(path.join(here, "../assets/flow-canvas.html"), "utf8");
 export const ENGINE_BLOCKS = [
+  "markup-module",
   "device-module",
   "scan-module",
   "layout-module",
@@ -27,6 +28,10 @@ export const block = (id) => {
 };
 const sandbox = {};
 for (const id of ENGINE_BLOCKS) vm.runInNewContext(block(id), sandbox);
-export const { FlowDevice, FlowScan, FlowLayout, FlowCommit, FlowAnnotations, FlowRouting, FlowGeometry, FlowGesture, FlowPanel } = sandbox;
+export const { FlowMarkup, FlowDevice, FlowScan, FlowLayout, FlowCommit, FlowAnnotations, FlowRouting, FlowGeometry, FlowGesture, FlowPanel } = sandbox;
 /* "" when the canvas has no sample yet, so the module tests still load and the sample's own test says why */
 export const sampleScan = html.match(/^\s*<script\b[^>]*\bid="flow-scan"/m) ? block("flow-scan") : "";
+
+/* the devices a scan is read for: the caller says, so the scan module never has to look at the device module */
+export const DEVICES = ["mobile", "tablet", "desktop"];
+export const readScan = (raw) => FlowScan.read(raw, { devices: DEVICES });

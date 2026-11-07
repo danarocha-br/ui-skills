@@ -5091,6 +5091,42 @@
         },
       };
     </script>
+    <script id="markup-module">
+      /* ======================================================================
+         MARKUP MODULE
+         Where text meets markup. Everything a scanner writes (routes, names, ids, meta, notes) is text, and
+         enters the page only through here, so a "<", an "&", a quote or a "[id]" in a route cannot break it.
+         The one thing that is markup by design is a screen's own render (its "html"), which is never passed
+         through. No DOM, no product knowledge.
+
+         Interface
+           FlowMarkup.esc(text)      text made safe in an element and in a quoted attribute (& < > " ');
+                                     null and undefined are empty
+           FlowMarkup.html`...`      a template whose every ${value} is escaped; a value made by raw() or by
+                                     another html`...` goes in as it is; an array is joined with nothing between.
+                                     Assign it to innerHTML: it turns into its markup as a string.
+           FlowMarkup.raw(markup)    markup that is already safe, for html`...`
+           FlowMarkup.sel(value)     a value made safe inside a quoted attribute selector: [data-k="${sel(id)}"]
+         ====================================================================== */
+      var FlowMarkup = (function () {
+        "use strict";
+        const ENTITY = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+        const esc = (t) => (t == null ? "" : String(t)).replace(/[&<>"']/g, (c) => ENTITY[c]);
+        class Raw {
+          constructor(markup) {
+            this.markup = markup;
+          }
+          toString() {
+            return this.markup;
+          }
+        }
+        const raw = (markup) => new Raw(String(markup));
+        const part = (v) => (v instanceof Raw ? v.markup : Array.isArray(v) ? v.map(part).join("") : esc(v));
+        const html = (strings, ...values) => raw(strings.reduce((out, s, i) => out + s + (i < values.length ? part(values[i]) : ""), ""));
+        const sel = (v) => String(v).replace(/[\\"]/g, "\\$&");
+        return { esc, raw, html, sel };
+      })();
+    </script>
     <script id="device-module">
       /* ======================================================================
          DEVICE MODULE
@@ -5184,8 +5220,7 @@
          The seam between what a scanner found in a product's code and the engine that draws it. The scan is
          the scanner's (the generator writes it into <script id="flow-scan">); the engine only reads it, and the
          user's changes are kept as edits laid over it, so a new scan still reaches someone who has edits.
-         No DOM, no product knowledge. Reads FlowDevice.ids() when it loads (one rendering of each screen per
-         device), so the device module comes first.
+         No DOM, no product knowledge, and no other module: the devices a scan is read for are handed to read().
 
          A scan
            { product: { name, scanned? }, start?,           scanned: when, in words; start: the screen selected
@@ -5202,7 +5237,9 @@
              notes:    [{ id?, frame, who, t, text, pos?: { device: [x, y] } }] }  id defaults to "frame:who"
 
          Interface
-           FlowScan.read(raw)     raw: the JSON text, or the object. Gives { scan, problems }: the scan with every
+           FlowScan.read(raw, { devices })   devices: the device ids, e.g. FlowDevice.ids(); every screen gets one
+                                  render per device (blank when the scan has none). Required: it throws without.
+                                  raw: the JSON text, or the object. Gives { scan, problems }: the scan with every
                                   field the engine reads filled in, and what was wrong (a screen with no id or an
                                   id seen twice is skipped; a group member, link, finding, note or start that
                                   names a screen the scan does not have is dropped). Not a scan at all: scan null.
@@ -5215,18 +5252,19 @@
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
-        const RENDER_KEYS = FlowDevice.ids(); /* one rendering of each screen per device */
         const clone = (o) => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const str = (v, d = "") => (typeof v === "string" ? v : d);
         const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-        const perDevice = (h) => {
+        const perDevice = (devices) => (h) => {
           const out = {};
-          RENDER_KEYS.forEach((d) => (out[d] = str(isObj(h) ? h[d] : "")));
+          devices.forEach((d) => (out[d] = str(isObj(h) ? h[d] : "")));
           return out;
         };
 
-        function read(raw) {
+        function read(raw, { devices } = {}) {
+          if (!Array.isArray(devices) || !devices.length) throw new Error("FlowScan.read: devices is required (the device ids a render is wanted for)");
+          const perDev = perDevice(devices);
           const problems = [];
           let src = raw;
           if (typeof raw === "string") {
@@ -5254,10 +5292,10 @@
               components: Array.isArray(s.components) ? s.components.filter((c) => typeof c === "string") : [],
               states: (Array.isArray(s.states) ? s.states : [])
                 .filter((st) => isObj(st) && typeof st.name === "string")
-                .map((st) => Object.assign({ name: st.name, reachable: st.reachable !== false }, isObj(st.html) ? { html: perDevice(st.html) } : {})),
+                .map((st) => Object.assign({ name: st.name, reachable: st.reachable !== false }, isObj(st.html) ? { html: perDev(st.html) } : {})),
               note: str(s.note),
               caption: { title: str(cap.title), body: str(cap.body), on: cap.on === true },
-              html: perDevice(s.html),
+              html: perDev(s.html),
             });
           });
           const known = (id) => ids.has(id);
@@ -5400,41 +5438,125 @@
           return { edits, mine };
         }
 
-        return { read, merge, diff };
+        /* ---------- groups: the same edits, plus which frames are in which group ---------- */
+        const bare = (g) => {
+          const c = clone(g);
+          delete c.screens;
+          return c;
+        };
+        const owners = (groups) => {
+          const m = new Map();
+          groups.forEach((g) => g.screens.forEach((id) => m.has(id) || m.set(id, g.id)));
+          return m;
+        };
+        const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+        /* who is in which of the live groups: the scan's members in the scan's order, then the frames the user
+           put there. A frame the user placed is where they put it; if that group is gone it goes back to where the
+           scan has it, and a group it cannot be in leaves it loose. */
+        function arrange(liveIds, scanned, place) {
+          const into = new Map(liveIds.map((id) => [id, []]));
+          const put = (id, group) => into.has(group) && into.get(group).push(id);
+          const scanOf = owners(scanned);
+          scanned.forEach((g) => g.screens.forEach((id) => has(place, id) || put(id, g.id)));
+          Object.keys(place).forEach((id) => {
+            const to = place[id];
+            if (typeof to === "string" && into.has(to)) put(id, to);
+            else if (to !== null) put(id, scanOf.get(id));
+          });
+          return into;
+        }
+        function mergeGroups(scanned, saved, { fresh } = {}) {
+          const sv = isObj(saved) ? saved : {};
+          const place = {};
+          if (isObj(sv.place)) for (const id in sv.place) if (sv.place[id] === null || typeof sv.place[id] === "string") place[id] = sv.place[id];
+          const hint = isObj(sv.order) ? Object.assign({}, sv.order) : {};
+          const seq = Array.isArray(sv.seq) ? sv.seq.slice() : [];
+          const edits = {};
+          if (isObj(sv.edits)) for (const id in sv.edits) if (isObj(sv.edits[id])) edits[id] = bare(sv.edits[id]);
+          const scannedIds = new Set(scanned.map((g) => g.id));
+          const renamed = {};
+          const mine = (Array.isArray(sv.mine) ? sv.mine : []).filter((m) => isObj(m) && typeof m.id === "string").map(bare);
+          mine.forEach((m) => {
+            if (!scannedIds.has(m.id)) return;
+            const to = fresh ? fresh(m.id) : m.id + "-mine";
+            renamed[m.id] = to;
+            m.id = to;
+          });
+          Object.keys(place).forEach((id) => has(renamed, place[id]) && (place[id] = renamed[place[id]]));
+          Object.keys(renamed).forEach((from) => {
+            if (has(hint, from)) (hint[renamed[from]] = hint[from]), delete hint[from];
+            const i = seq.indexOf(from);
+            if (i >= 0) seq[i] = renamed[from];
+          });
+          const groups = merge(scanned.map(bare), { edits, mine });
+          const into = arrange(groups.map((g) => g.id), scanned, place);
+          groups.forEach((g) => {
+            const at = Array.isArray(hint[g.id]) ? hint[g.id] : null;
+            const rank = (id) => (at && at.includes(id) ? at.indexOf(id) : Infinity);
+            g.screens = into.get(g.id).slice().sort((a, b) => rank(a) - rank(b));
+          });
+          const rank = (g) => (seq.includes(g.id) ? seq.indexOf(g.id) : Infinity);
+          return { groups: groups.filter((g) => g.screens.length).sort((a, b) => rank(a) - rank(b)), renamed };
+        }
+        function diffGroups(scanned, groups) {
+          const live = (groups || []).filter((g) => g.screens.length);
+          const { edits, mine } = diff(scanned.map(bare), live.map(bare));
+          const was = owners(scanned),
+            now = owners(live);
+          const place = {};
+          [...new Set([...was.keys(), ...now.keys()])].forEach((id) => {
+            const a = was.has(id) ? was.get(id) : null,
+              b = now.has(id) ? now.get(id) : null;
+            if (a !== b) place[id] = b;
+          });
+          /* an order is kept only where it is not the one the scan and the placements already give */
+          const given = arrange(live.map((g) => g.id), scanned, place);
+          const order = {};
+          live.forEach((g) => g.screens.length > 1 && !same(g.screens, given.get(g.id)) && (order[g.id] = g.screens.slice()));
+          const natural = [...scanned.map((g) => g.id).filter((id) => live.some((g) => g.id === id)), ...mine.map((g) => g.id)];
+          const ids = live.map((g) => g.id);
+          return { edits, mine, place, order, seq: same(ids, natural) ? [] : ids };
+        }
+
+        return { read, merge, diff, mergeGroups, diffGroups };
       })();
     </script>
 
     <script id="layout-module">
       /* ======================================================================
          LAYOUT MODULE
-         Owns the persisted layout: groups (saved as "lanes"), positions per device, connectors,
-         findings and notes, plus the id counters and the undo history. It knows nothing about
-         the page: no DOM, no screens, no demo data. Everything it needs is handed to create().
+         Owns the persisted layout: groups (saved as "lanes"), positions per device, connectors, findings,
+         notes and frame captions, plus the id counters and the undo history. It knows nothing about the page:
+         no DOM, no screens, no demo data. Everything it needs is handed to create().
 
-         Connectors, findings and notes come from the scan, and the scan stays the scanner's: what is saved
-         is only what the user changed on them and the ones the user made (FlowScan.diff), and loading lays
-         that over the scan it is given (FlowScan.merge). So a new scan reaches a saved layout, and the
-         user's edits win where they touched it. Groups and positions are saved whole. Needs FlowScan.
-      
+         Everything the scan provides is saved the same way, as the user's edits over it and the things the user
+         made (FlowScan.merge and diff; for groups, mergeGroups and diffGroups, which add which frames are in
+         which group). Loading lays those over the scan it is given. So a new scan reaches a saved layout in
+         every kind, and the user's edits win where they touched it. The saved layout holds edits, never copies.
+
          A group is { id, screens, open, title, sub, subOn }: its frames, whether it is fanned out, its
          title (the text before a colon is its name), its description, and whether the description is
          shown. The text belongs to the group, so it is saved, snapshotted, undone and reset with it, and
-         is gone when the group is. Frame captions are not part of the layout.
+         is gone when the group is. A caption is { id, title, body, on }, one per screen.
 
          Interface
-           const layout = FlowLayout.create({ key, storage, hasScreen, defaults, legacyGroupText? })
+           const layout = FlowLayout.create({ key, storage, hasScreen, defaults, legacyGroupText?, legacyCaptions? })
              key        localStorage key the layout is saved under
              storage    anything with getItem(key) / setItem(key, value)
              hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
-             defaults   () => { lanes, pos, conns, scans?, notes }: the scan's groups, connectors (links),
-                        findings and notes, and empty positions. Called for a fresh copy each time; a default
-                        group may carry title, sub and subOn (blank when it does not)
+             defaults   () => { lanes, pos, conns, scans?, notes, caps? }: the scan's groups, connectors (links),
+                        findings, notes and captions (one per screen, { id, title, body, on }), and empty
+                        positions. Called for a fresh copy each time; a default group may carry title, sub and
+                        subOn (blank when it does not)
              legacyGroupText  () => { [groupId]: { title, sub, on } }, the group text an older build kept
                         elsewhere. Read once at load, only for groups that were saved without text, then
                         saved into the layout. Optional; a throwing reader is ignored.
+             legacyCaptions   () => { [screenId]: { title?, body?, on? } }, the captions an older build kept
+                        elsewhere (only what the user had changed, or whole captions). Read once, for a layout
+                        saved without captions, then saved into the layout. Optional; a throwing reader is ignored.
            FlowLayout.groupName(group)   the short name: the title before its first colon, or
                                          "Untitled group". Pure; never changes the group.
-           layout.lanes layout.pos layout.conns layout.scans layout.notes
+           layout.lanes layout.pos layout.conns layout.scans layout.notes layout.caps
                       Live state, as the user sees it: scanned items with their edits laid over, then the
                       user's own (scans are the findings still shown). Read through layout every time, never
                       keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
@@ -5451,33 +5573,37 @@
                              empty goes), their own places are forgotten on every device, and the new group is
                              added last and returned. With `at` { x, y } the group is pinned there on `device`;
                              without it, it takes the next free place. A data change: the caller commits it.
-           layout.resetGroupText()   every group's title, description and visibility back to the scanned
-                                     text (blank for a group that was not scanned); the caller commits it
+           layout.resetText()        every group's title, description and visibility, and every caption, back
+                                     to the scanned text (blank for a group that was not scanned); the caller
+                                     commits it
            layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
                              save by themselves.
-           layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string. Connectors,
-                             findings and notes are in it as { edits, mine }.
+           layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string.
            layout.restore(s)       put a snapshot back and save. Two things are not restored: the counters
                              (they never fall below an id the snapshot brings back) and the open state
                              of groups that still exist (view state, not an edit).
-           layout.reset()          back to the defaults, counters included, and save
+           layout.reset()          groups, positions, connectors, findings and notes back to the scan, counters
+                             included, and save. Captions are left as they are (resetText puts them back).
            layout.nextId("c"|"g")  the next connector / group id, "c7" / "g4"
            layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
                              is its caller)
            layout.undo()           restore the latest mark; false when there is none
-      
-         A new persisted kind is added here, in persisted() and load()/restore() (through overlays()), and nowhere else; a kind the scan
-         provides and the user edits goes in OVERLAID as well.
 
-         On disk: { v: 2, lanes, pos, conns, scans, notes, cc, gc }. A layout saved before v2 kept connectors
-         and notes as full lists and findings as { id: { gone, pos } }; it is read as it was and saved as edits.
+         A new kind the scan provides and the user edits is added to KINDS, to freshDefaults() and to adopt(),
+         and nowhere else: load, save, snapshot and restore go through the one table.
+
+         On disk: { v: 3, lanes, pos, conns, scans, notes, caps, cc, gc }. Each of the first kinds (not pos) is
+         { edits, mine }, and lanes also has place (a frame the user put in a group or freed), order (a group
+         the user arranged) and seq (the order of the groups). Older layouts are read as they were and saved as
+         edits: groups saved whole (v2 and before), connectors and notes as full lists, findings as
+         { id: { gone, pos } }, captions in a store of their own.
          ====================================================================== */
       var FlowLayout = (function () {
         "use strict";
         const MAX_UNDO = 40;
-        const VERSION = 2;
+        const VERSION = 3;
         /* the kinds the scan provides and the user edits: saved as edits over the scan */
-        const OVERLAID = ["conns", "scans", "notes"];
+        const KINDS = ["lanes", "conns", "scans", "notes", "caps"];
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const list = (x) => (Array.isArray(x) ? x : []);
         /* id prefix -> the field the counter is saved in */
@@ -5504,8 +5630,10 @@
           });
           return top;
         }
+        /* a saved kind is in the edits form when it has an edits or mine part */
+        const isEdits = (saved) => isObj(saved) && ("edits" in saved || "mine" in saved || "place" in saved);
 
-        function create({ key, storage, hasScreen, defaults, legacyGroupText }) {
+        function create({ key, storage, hasScreen, defaults, legacyGroupText, legacyCaptions }) {
           const layout = {};
           let history = [];
           let counters = { c: 0, g: 0 };
@@ -5518,10 +5646,9 @@
               conns: list(d.conns),
               scans: list(d.scans),
               notes: list(d.notes),
+              caps: list(d.caps),
             };
           }
-          /* what the scan says for each overlaid kind: what the edits are taken against */
-          const scanned = (kind) => freshDefaults()[kind];
           /* a scanned item an older layout cannot have held, so its absence there is not a deletion: before v2
              every connector had a numbered id no higher than the saved counter. With no counter saved, nothing
              can be told to be new, and an absent connector counts as deleted. */
@@ -5537,20 +5664,21 @@
             });
             return out;
           }
-          /* one kind as it was saved, as the user sees it: edits laid over the scan. A full list (notes and
-             connectors) or an { id: edit } map (findings) from before v2 is read as it was, and what the scan
-             has that it could not have had is added. Says whether it found the old form. */
-          function overlaid(kind, saved, cc) {
-            if (isObj(saved) && ("edits" in saved || "mine" in saved)) return { items: FlowScan.merge(scanned(kind), saved), old: false };
+          /* one of connectors, findings, notes and captions as it was saved, as the user sees it: edits laid over
+             the scan. A full list (notes and connectors) or an { id: edit } map (findings) from before v2 is read
+             as it was, and what the scan has that it could not have had is added. Says whether it found the old
+             form. Nothing saved for the kind: null. */
+          function overlaid(kind, scannedItems, saved, cc) {
+            if (isEdits(saved)) return { items: FlowScan.merge(scannedItems, saved), old: false };
             if (Array.isArray(saved)) {
-              const fresh = scanned(kind).filter(couldNotHaveHad(kind, cc));
+              const fresh = scannedItems.filter(couldNotHaveHad(kind, cc));
               const had = saved.filter((x) => x && typeof x === "object" && typeof x.id === "string");
-              const edits = FlowScan.diff(scanned(kind), kind === "conns" ? adoptByEnds(had, fresh) : had);
+              const edits = FlowScan.diff(scannedItems, kind === "conns" ? adoptByEnds(had, fresh) : had);
               /* what the old layout could not have held was not deleted by the user */
               fresh.forEach((f) => edits.edits[f.id] && edits.edits[f.id].gone && delete edits.edits[f.id]);
-              return { items: FlowScan.merge(scanned(kind), edits), old: true };
+              return { items: FlowScan.merge(scannedItems, edits), old: true };
             }
-            if (kind === "scans" && isObj(saved)) return { items: FlowScan.merge(scanned(kind), { edits: saved }), old: true };
+            if (kind === "scans" && isObj(saved)) return { items: FlowScan.merge(scannedItems, { edits: saved }), old: true };
             return null;
           }
           /* the scanned text of a group, or blank when it is not a scanned group */
@@ -5577,23 +5705,40 @@
               return () => null;
             }
           }
+          /* captions an older build kept outside the layout, laid over the scanned ones; says whether any applied */
+          function withLegacyCaptions(caps) {
+            try {
+              const all = (legacyCaptions && legacyCaptions()) || {};
+              const edits = {};
+              caps.forEach((c) => {
+                const e = all[c.id];
+                if (!isObj(e)) return;
+                const out = {};
+                if (typeof e.title === "string") out.title = e.title;
+                if (typeof e.body === "string") out.body = e.body;
+                if (typeof e.on === "boolean") out.on = e.on;
+                if (Object.keys(out).length) edits[c.id] = out;
+              });
+              return Object.keys(edits).length ? { caps: FlowScan.merge(caps, { edits }), applied: true } : { caps, applied: false };
+            } catch (e) {
+              return { caps, applied: false };
+            }
+          }
           const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.lanes, "g") });
           function adopt(state) {
-            layout.lanes = state.lanes;
+            KINDS.forEach((k) => (layout[k] = state[k]));
             layout.pos = state.pos;
-            layout.conns = state.conns;
-            layout.scans = state.scans;
-            layout.notes = state.notes;
           }
-          /* what is saved and snapshotted: lanes keep id, screens and open; the page keeps its own
-             DOM handle on the same objects (el), which is not persisted */
-          const persisted = () => ({
-            lanes: layout.lanes.map(groupRecord),
-            pos: layout.pos,
-            conns: FlowScan.diff(scanned("conns"), layout.conns),
-            scans: FlowScan.diff(scanned("scans"), layout.scans),
-            notes: FlowScan.diff(scanned("notes"), layout.notes),
-          });
+          /* what is saved and snapshotted: the edits over the scan for each kind, and the positions. A group's
+             DOM handle and the like (el, x, top) are the page's own and never reach here. */
+          function persisted() {
+            const d = freshDefaults();
+            const out = {};
+            out.lanes = FlowScan.diffGroups(d.lanes, layout.lanes.map(groupRecord));
+            out.pos = layout.pos;
+            ["conns", "scans", "notes", "caps"].forEach((k) => (out[k] = FlowScan.diff(d[k], layout[k])));
+            return out;
+          }
           /* a connector of the user's own whose id a new scan now uses gets a fresh one */
           function freshIds(conns) {
             const seen = new Set();
@@ -5603,17 +5748,71 @@
             });
           }
 
-          /* connectors, findings and notes as saved, laid over the scan, cleaned; d supplies the fallbacks */
+          /* connectors, findings, notes and captions as saved, laid over the scan, cleaned; d supplies the
+             fallbacks. Says whether any was in an older form. */
           function overlays(st, d) {
             const out = { old: false };
-            OVERLAID.forEach((k) => {
-              const o = overlaid(k, st[k], st.cc == null ? NaN : Number(st.cc));
+            ["conns", "scans", "notes", "caps"].forEach((k) => {
+              const o = overlaid(k, d[k], st[k], st.cc == null ? NaN : Number(st.cc));
               out[k] = o ? o.items.filter((x) => x && typeof x === "object") : d[k];
               if (o && o.old) out.old = true;
             });
             out.conns = out.conns.filter((c) => hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to);
             out.notes = out.notes.filter((n) => n.id && typeof n.text === "string");
+            out.caps = out.caps.filter((c) => hasScreen(c.id));
             return out;
+          }
+          /* groups saved whole by an older build (a list), as groups: only frames that still exist, each in one
+             group, with their text (an older build's, or the scan's, for a group saved before groups had text) */
+          function wholeGroups(saved, legacy, d) {
+            const seen = new Set(),
+              lanes = [];
+            let migrated = false;
+            saved.forEach((l) => {
+              const sc = ((l && l.screens) || []).filter((id) => hasScreen(id) && !seen.has(id));
+              sc.forEach((id) => seen.add(id));
+              if (!sc.length) return;
+              const g = { id: l.id, screens: sc, open: !!l.open };
+              if (typeof l.title === "string") Object.assign(g, groupRecord({ ...l, screens: sc, open: g.open }));
+              else {
+                /* saved before groups carried their text: the old annotations, else the scanned text */
+                Object.assign(g, scannedText(l.id), legacy(l.id));
+                migrated = true;
+              }
+              lanes.push(g);
+            });
+            return { lanes, migrated };
+          }
+          /* groups as the user sees them: the scan's, with the saved edits laid over, cleaned. `saved` is the
+             edits form, or a list of whole groups (read against the scan as edits first). Says which of the
+             user's own groups had to take a new id because the scan now uses theirs. */
+          function groupsFrom(saved, d, legacy, gc) {
+            let migrated = false;
+            if (Array.isArray(saved)) {
+              const whole = wholeGroups(saved, legacy, d);
+              migrated = true;
+              /* a scanned group an older layout cannot have held (its id is above the saved counter) is new, not dissolved */
+              const isNew = (g) => Number.isFinite(gc) && /^g\d+$/.test(g.id) && Number(g.id.slice(1)) > gc;
+              saved = FlowScan.diffGroups(d.lanes.filter((g) => !isNew(g)), whole.lanes);
+            }
+            const { groups, renamed } = FlowScan.mergeGroups(d.lanes, saved, { fresh: () => layout.nextId("g") });
+            const seen = new Set();
+            const lanes = groups
+              .map((g) => {
+                const screens = g.screens.filter((id) => hasScreen(id) && !seen.has(id));
+                screens.forEach((id) => seen.add(id));
+                return groupRecord({ ...g, screens });
+              })
+              .filter((g) => g.screens.length);
+            return { lanes, renamed, migrated };
+          }
+          /* places only for things that exist, and a renamed group of the user's keeps its place */
+          function tidyPos(pos, lanes, renamed) {
+            const groupIds = new Set(lanes.map((g) => g.id));
+            Object.values(pos).forEach((P) => {
+              Object.keys(renamed).forEach((from) => from in P && ((P[renamed[from]] = P[from]), delete P[from]));
+              Object.keys(P).forEach((id) => (hasScreen(id) || groupIds.has(id)) || delete P[id]);
+            });
           }
 
           function load() {
@@ -5622,7 +5821,7 @@
             const legacy = legacyText();
             let migrated = false;
             const fallBack = () => {
-              /* no layout yet: the user's old group text, if there is any, goes onto the default groups */
+              /* no layout yet: the user's old group text and captions, if there are any, go onto the scan's */
               d.lanes.forEach((l) => {
                 const old = legacy(l.id);
                 if (old) {
@@ -5630,6 +5829,9 @@
                   migrated = true;
                 }
               });
+              const c = withLegacyCaptions(d.caps);
+              d.caps = c.caps;
+              if (c.applied) migrated = true;
               adopt(d);
               counters = start;
               if (migrated) layout.save();
@@ -5638,30 +5840,28 @@
             try {
               st = JSON.parse(storage.getItem(key) || "null");
             } catch (e) {}
-            if (!st || !Array.isArray(st.lanes)) return fallBack();
+            if (!st || !(Array.isArray(st.lanes) || isObj(st.lanes))) return fallBack();
             try {
-              const seen = new Set(),
-                lanes = [];
-              st.lanes.forEach((l) => {
-                const sc = ((l && l.screens) || []).filter((id) => hasScreen(id) && !seen.has(id));
-                sc.forEach((id) => seen.add(id));
-                if (!sc.length) return;
-                const g = { id: l.id, screens: sc, open: !!l.open };
-                if (typeof l.title === "string") Object.assign(g, groupRecord({ ...l, screens: sc, open: g.open }));
-                else {
-                  /* saved before groups carried their text: the old annotations, else the scanned text */
-                  Object.assign(g, scannedText(l.id), legacy(l.id));
-                  migrated = true;
-                }
-                lanes.push(g);
-              });
-              const out = Object.assign({ lanes, pos: Object.assign(d.pos, st.pos || {}) }, overlays(st, d));
-              if (out.old) migrated = true;
+              /* ids the user's own groups hold are taken before any is handed out */
+              counters = {
+                c: Math.max(Number(st.cc) || start.c, start.c),
+                g: Math.max(Number(st.gc) || start.g, start.g, highestId(Array.isArray(st.lanes) ? st.lanes : list(st.lanes.mine), "g")),
+              };
+              const g = groupsFrom(st.lanes, d, legacy, Number(st.gc));
+              const out = Object.assign({ lanes: g.lanes, pos: Object.assign(d.pos, st.pos || {}) }, overlays(st, d));
+              if (st.caps === undefined) {
+                const c = withLegacyCaptions(out.caps);
+                out.caps = c.caps;
+                if (c.applied) migrated = true;
+              }
+              if (g.migrated || out.old) migrated = true;
               delete out.old;
+              tidyPos(out.pos, out.lanes, g.renamed);
+              if (Object.keys(g.renamed).length) migrated = true;
               adopt(out);
               counters = {
-                c: Math.max(Number(st.cc) || start.c, highestId(out.conns, "c")),
-                g: Math.max(Number(st.gc) || start.g, highestId(out.lanes, "g")),
+                c: Math.max(counters.c, highestId(out.conns, "c")),
+                g: Math.max(counters.g, highestId(out.lanes, "g")),
               };
               freshIds(layout.conns);
               if (migrated) layout.save();
@@ -5681,12 +5881,14 @@
           layout.snapshot = () => JSON.stringify(persisted());
           layout.restore = (s) => {
             const st = JSON.parse(s);
+            const d = freshDefaults();
             /* open or closed is view state: a group still here keeps how it is shown now */
             const shown = new Map(layout.lanes.map((l) => [l.id, l.open]));
-            st.lanes.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
-            const kinds = overlays(st, layout);
+            const g = groupsFrom(st.lanes, d, () => null, NaN);
+            g.lanes.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
+            const kinds = overlays(st, d);
             delete kinds.old;
-            adopt(Object.assign({ lanes: st.lanes.map(groupRecord), pos: st.pos }, kinds));
+            adopt(Object.assign({ lanes: g.lanes, pos: st.pos }, kinds));
             freshIds(layout.conns);
             /* ids that came back with the snapshot must not be handed out again */
             counters = {
@@ -5697,6 +5899,7 @@
           };
           layout.reset = () => {
             const d = freshDefaults();
+            d.caps = layout.caps;
             adopt(d);
             counters = startCounters(d);
             layout.save();
@@ -5729,7 +5932,10 @@
             if (at) (layout.pos[device] || (layout.pos[device] = {}))[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
             return g;
           };
-          layout.resetGroupText = () => layout.lanes.forEach((l) => Object.assign(l, scannedText(l.id)));
+          layout.resetText = () => {
+            layout.lanes.forEach((l) => Object.assign(l, scannedText(l.id)));
+            layout.caps = freshDefaults().caps;
+          };
           layout.nextId = (kind) => {
             if (!COUNTER_FIELD[kind]) throw new Error("FlowLayout.nextId: unknown kind " + kind);
             counters[kind] += 1;
@@ -6860,7 +7066,7 @@
    product class names, no product words. Problems are reported in the console; a scan that cannot be read
    at all leaves a message instead of a canvas.
    ====================================================================== */
-      const READ = FlowScan.read((document.getElementById("flow-scan") || {}).textContent || "");
+      const READ = FlowScan.read((document.getElementById("flow-scan") || {}).textContent || "", { devices: FlowDevice.ids() });
       READ.problems.forEach((p) => console.warn("flow-scan:", p));
       if (!READ.scan) {
         document.body.innerHTML =
@@ -6878,7 +7084,7 @@
       const NOTES = SCAN.notes;
       const COMP_SEL = SCAN.components;
       const shortName = (x) => SCREENS[x].name.split(" · ")[0];
-      const hopTo = (x) => `<button class="hop" data-to="${x}">${shortName(x)}</button>`;
+      const hopTo = (x) => String(html`<button class="hop" data-to="${x}">${shortName(x)}</button>`);
       const andList = (a) =>
         a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
       /* the states a frame can switch between: the first (the screen's own render) and every one with a render of
@@ -6973,43 +7179,23 @@
    ANNOTATIONS: the author's voice. A caption per screen is kept here (ANN_KEY). A group's title and description
    are part of the layout (FlowLayout, saved under the layout key and undone with it). Both are edited in place.
    ====================================================================== */
-      /* each frame's caption as the scan wrote it; the user's changes are kept as edits over it */
-      const ANN_DEFAULT = Object.fromEntries(SCAN.screens.map((s) => [s.id, s.caption]));
-      const ANN_KEY = "flow-canvas.annotations.v1";
       const clone = (o) => JSON.parse(JSON.stringify(o));
-      /* captions as a list, for FlowScan's edits; and back */
-      const capList = (m) => Object.keys(m).map((id) => ({ id, ...m[id] }));
-      const capMap = (l) => Object.fromEntries(l.map(({ id, ...c }) => [id, c]));
-      /* saved: { screenId: { field: value } }, only what differs from the scan. A caption saved whole by an
-         older build reads the same way: its fields win, and the next save keeps only those that differ. */
-      function loadAnn() {
-        let edits = {};
-        try {
-          edits = JSON.parse(localStorage.getItem(ANN_KEY) || "{}") || {};
-        } catch (e) {}
-        return capMap(FlowScan.merge(capList(ANN_DEFAULT), { edits }));
-      }
-      /* Group titles and descriptions used to be kept here, under the group's id. They live on the group
-         now; this is read once, so a layout saved before the move keeps its names. */
-      function legacyGroupText() {
+      /* An older build kept captions, and group titles and descriptions, in a store of its own (ANN_KEY). The layout
+         reads it once on load, keeps what it finds as its own, and the store is removed below. */
+      const ANN_KEY = "flow-canvas.annotations.v1";
+      function legacyAnnotations(wanted) {
         const out = {};
         try {
           const st = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
-          for (const k in st) if (/^g\d+$/.test(k)) out[k] = st[k];
+          for (const k in st) if (wanted(k)) out[k] = st[k];
         } catch (e) {}
         return out;
       }
-      let ANN = loadAnn(),
-        annT;
-      function saveAnn() {
-        clearTimeout(annT);
-        annT = setTimeout(() => {
-          try {
-            localStorage.setItem(ANN_KEY, JSON.stringify(FlowScan.diff(capList(ANN_DEFAULT), capList(ANN)).edits));
-          } catch (e) {}
-        }, 250);
-      }
-      if (localStorage.getItem(ANN_KEY)) saveAnn(); /* a caption saved whole by an older build goes back as edits */
+      const isGroupId = (k) => /^g\d+$/.test(k);
+      const legacyGroupText = () => legacyAnnotations(isGroupId);
+      const legacyCaptions = () => legacyAnnotations((k) => !isGroupId(k));
+      /* a screen's caption, as the layout has it (read through the layout every time: undo swaps the objects) */
+      const capOf = (id) => layout.caps.find((c) => c.id === id);
       const CE = (() => {
         const d = document.createElement("div");
         try {
@@ -7019,27 +7205,28 @@
           ? "plaintext-only"
           : "true";
       })();
-      const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      /* scanned text enters markup only through here (see FlowMarkup) */
+      const { esc, html, raw, sel: cssStr } = FlowMarkup;
       const X_ICON =
         '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 2l6 6M8 2L2 8"/></svg>';
       const ADD_ICON = '<svg viewBox="0 0 20 20"><use href="#i-plus"/></svg>';
       function capHTML(id, i) {
-        const a = ANN[id];
-        return `<div class="cap ann${a.on ? "" : " off"}" data-k="${id}">
+        const a = capOf(id);
+        return `<div class="cap ann${a.on ? "" : " off"}" data-k="${esc(id)}">
     <h3 class="ct"><span class="cn">${i + 1}</span><span class="ctt" contenteditable="${CE}" spellcheck="false" data-f="title" data-ph="Add a title" role="textbox" aria-label="Screen title">${esc(a.title)}</span></h3>
     <p class="cb" contenteditable="${CE}" spellcheck="false" data-f="body" data-ph="Say what happens here" role="textbox" aria-label="Screen description">${esc(a.body)}</p>
     <button class="cx" title="Remove annotation" aria-label="Remove annotation">${X_ICON}</button>
     <button class="cadd">${ADD_ICON}Add description</button></div>`;
       }
       function gsubHTML(L) {
-        return `<div class="gsubw ann${L.subOn ? "" : " off"}" data-k="${L.id}">
+        return `<div class="gsubw ann${L.subOn ? "" : " off"}" data-k="${esc(L.id)}">
     <p class="gsub" contenteditable="${CE}" spellcheck="false" data-f="sub" data-ph="Say what this flow is for" role="textbox" aria-label="Flow description">${esc(L.sub)}</p>
     <button class="cx" title="Remove description" aria-label="Remove description">${X_ICON}</button>
     <button class="cadd">${ADD_ICON}Add description</button></div>`;
       }
       function fillAnn() {
         document.querySelectorAll("[data-k]").forEach((w) => {
-          const a = ANN[w.dataset.k];
+          const a = capOf(w.dataset.k);
           if (!a) return;
           if (w.classList.contains("ann")) w.classList.toggle("off", !a.on);
           w.querySelectorAll("[data-f]").forEach((f) => {
@@ -7047,13 +7234,9 @@
           });
         });
       }
+      /* captions and the groups' text are part of the layout: put back by one commit, so ⌘Z brings them back */
       function resetAnn() {
-        ANN = clone(ANN_DEFAULT);
-        try {
-          localStorage.removeItem(ANN_KEY);
-        } catch (e) {}
-        /* the groups' text is part of the layout: put back by a commit, so ⌘Z brings it back */
-        commit(() => layout.resetGroupText(), { redraw: ["layout"] });
+        commit(() => layout.resetText(), { redraw: ["layout"] });
         fillAnn();
         toast("Annotations reset to the scanned copy");
       }
@@ -7077,18 +7260,19 @@
           /* live while typing; the undo step is recorded when the field is left (below) */
           L[f.dataset.f] = f.textContent;
           saveNotesSoon();
-        } else if (ANN[w.dataset.k]) {
-          ANN[w.dataset.k][f.dataset.f] = f.textContent;
-          saveAnn();
+        } else if (capOf(w.dataset.k)) {
+          capOf(w.dataset.k)[f.dataset.f] = f.textContent;
+          saveNotesSoon();
         }
       });
-      /* one undo step per visit to a group's title or description, not one per keystroke */
+      /* one undo step per visit to a group's or a frame's title or description, not one per keystroke */
       let groupEdit = null;
+      const TYPED = ".gtitle,.gsub,.ctt,.cb";
       world.addEventListener("focusin", (e) => {
-        if (e.target.closest(".gtitle,.gsub")) groupEdit = { before: layout.snapshot() };
+        if (e.target.closest(TYPED)) groupEdit = { before: layout.snapshot() };
       });
       world.addEventListener("focusout", (e) => {
-        if (!groupEdit || !e.target.closest(".gtitle,.gsub")) return;
+        if (!groupEdit || !e.target.closest(TYPED)) return;
         const { before } = groupEdit;
         groupEdit = null;
         commit.since(before);
@@ -7132,10 +7316,7 @@
             on = b.classList.contains("cadd");
           const L = groupById(k);
           if (L) commit(() => (L.subOn = on));
-          else {
-            ANN[k].on = on;
-            saveAnn();
-          }
+          else commit(() => (capOf(k).on = on));
           w.classList.toggle("off", !on);
           if (on)
             caretEnd(
@@ -7264,6 +7445,7 @@
           setItem: (k, v) => localStorage.setItem(k, v),
         },
         legacyGroupText,
+        legacyCaptions,
         hasScreen: (id) => !!SCREENS[id],
         /* the scan's groups, links (drawn as connectors), findings and notes; the layout keeps the user's edits */
         defaults: () => ({
@@ -7272,17 +7454,13 @@
           conns: SCAN.links,
           notes: NOTES,
           scans: FINDINGS,
+          caps: SCAN.screens.map((x) => ({ id: x.id, ...x.caption })),
         }),
       });
-      /* the layout has taken in the old copies of the groups' text (and saved them), so they can go */
-      (function dropLegacyGroupText() {
-        try {
-          const st = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
-          const old = Object.keys(st).filter((k) => /^g\d+$/.test(k));
-          old.forEach((k) => delete st[k]);
-          if (old.length) localStorage.setItem(ANN_KEY, JSON.stringify(st));
-        } catch (e) {}
-      })();
+      /* the layout has taken in the old store's copies (and saved them), so it can go */
+      try {
+        localStorage.removeItem(ANN_KEY);
+      } catch (e) {}
       /* open or closed is view state: saved and redrawn, never an undo step */
       const VIEW_STATE = { undo: false, redraw: ["layout"] };
       /* every edit ends here: undo point, save, redraw, in one fixed order */
@@ -7401,7 +7579,7 @@
       const annotations = FlowAnnotations.create({ commit, kinds: [noteKind, scanKind, linkKind, captionKind] });
       const laneOf = (id) => layout.groupOf(id);
       const isFree = (id) => !laneOf(id);
-      const colOf = (id) => document.querySelector(`.col[data-id="${id}"]`);
+      const colOf = (id) => document.querySelector(`.col[data-id="${cssStr(id)}"]`);
       const laneEl = (id) => document.getElementById(id);
       function posOf() {
         return layout.pos[DEV.id] || (layout.pos[DEV.id] = {});
@@ -7500,7 +7678,7 @@
         el.className = "lane";
         el.id = L.id;
         el.innerHTML = `<div class="ghead">
-      <div class="gt"><button class="grip" title="Drag to move this group" aria-label="Drag to move group"><svg><use href="#i-grip"/></svg></button><button class="chev" title="Open or close this group" aria-label="Open or close group"><svg><use href="#i-chevup"/></svg></button><h2 class="gtitle" contenteditable="${CE}" spellcheck="false" data-k="${L.id}" data-f="title" data-ph="Name this group" role="textbox" aria-label="Group name">${esc(L.title)}</h2></div>
+      <div class="gt"><button class="grip" title="Drag to move this group" aria-label="Drag to move group"><svg><use href="#i-grip"/></svg></button><button class="chev" title="Open or close this group" aria-label="Open or close group"><svg><use href="#i-chevup"/></svg></button><h2 class="gtitle" contenteditable="${CE}" spellcheck="false" data-k="${esc(L.id)}" data-f="title" data-ph="Name this group" role="textbox" aria-label="Group name">${esc(L.title)}</h2></div>
       ${gsubHTML(L)}
       <div class="gs"><span class="gcount"></span><span class="gmeta"></span><button class="fplay" title="Play flow"><svg><use href="#i-play"/></svg><span>Play flow</span></button><button class="fmore" title="Group options" aria-label="Group options"><svg><use href="#i-more"/></svg></button></div>
     </div>
@@ -7590,10 +7768,10 @@
           el.querySelector(".gmeta").innerHTML =
             dm && sameAsDefault(L)
               ? " · <code>" +
-                dm.meta.split(" · ")[0] +
+                esc(dm.meta.split(" · ")[0]) +
                 "</code>" +
                 (dm.meta.includes(" · ")
-                  ? " · " + dm.meta.split(" · ").slice(1).join(" · ")
+                  ? " · " + esc(dm.meta.split(" · ").slice(1).join(" · "))
                   : "")
               : "";
           sizeDz(L, n);
@@ -7757,7 +7935,7 @@
         col.className = "col" + (many ? " hasstack" : "");
         col.dataset.id = id;
         col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}</div>
-    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}<div class="phone ${DEV.cls}" id="p-${id}" data-state="${stateIndex(id)}">${screenHTML(id)}</div><i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
+    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}<div class="phone ${DEV.cls}" id="p-${esc(id)}" data-state="${stateIndex(id)}">${screenHTML(id)}</div><i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
         layout.scans.filter((f) => f.frame === id).forEach((f) => buildScan(col, f));
         if (many)
           col.querySelector(".states").addEventListener("click", (e) => {
@@ -8180,7 +8358,7 @@
         return `<ul class="uses" aria-label="Screens that use ${esc(sw.component)}">${sw.uses
           .map((x) => {
             const S = SCREENS[x];
-            return `<li><button data-uid="${x}"${x === selected ? ' aria-current="true"' : ""}><span class="un">${esc(S.name)}</span><span class="ur">${S.route}</span></button></li>`;
+            return `<li><button data-uid="${esc(x)}"${x === selected ? ' aria-current="true"' : ""}><span class="un">${esc(S.name)}</span><span class="ur">${esc(S.route)}</span></button></li>`;
           })
           .join("")}</ul>`;
       }
@@ -8210,7 +8388,7 @@
           const el = document.activeElement;
           if (!el || !pbody.contains(el)) return null;
           const d = el.dataset;
-          return d.comp ? `[data-comp="${d.comp}"]` : d.uid ? `[data-uid="${d.uid}"]` : d.st ? `[data-st="${d.st}"]` : null;
+          return d.comp ? `[data-comp="${cssStr(d.comp)}"]` : d.uid ? `[data-uid="${cssStr(d.uid)}"]` : d.st ? `[data-st="${cssStr(d.st)}"]` : null;
         })();
         if (st.mode === "search") renderSearchBody();
         else if (st.subject) renderInspect(st.subject, st.sweep, still);
@@ -8326,7 +8504,7 @@
     <select id="fWhere"><option value="any">Anywhere</option>${layout.lanes.filter(
       (l) => l.screens.length,
     )
-      .map((l) => `<option value="${l.id}">${esc(laneName(l))}</option>`)
+      .map((l) => `<option value="${esc(l.id)}">${esc(laneName(l))}</option>`)
       .join(
         "",
       )}<option value="free">On the canvas</option></select></div><div id="results"></div>`;
@@ -8770,6 +8948,7 @@
    ====================================================================== */
       function undo() {
         const done = commit.undo(() => {
+          fillAnn(); /* captions are part of the layout now: the frames show what it brought back */
           selConn = null;
           document.querySelectorAll(".lane").forEach((e) => delete e.dataset.sig);
           setSel(
@@ -9479,7 +9658,7 @@
           layout.lanes.filter((l) => l.screens.length)
             .map(
               (l, i) =>
-                `<button class="mi" data-view="${l.id}"><svg><use href="#i-frame"/></svg>${esc(laneName(l))}<span class="k">${i < 3 ? i + 2 : ""}</span></button>`,
+                `<button class="mi" data-view="${esc(l.id)}"><svg><use href="#i-frame"/></svg>${esc(laneName(l))}<span class="k">${i < 3 ? i + 2 : ""}</span></button>`,
             )
             .join("");
         $("#mViews")

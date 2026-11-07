@@ -3,11 +3,12 @@
    what the scan says, and take them back off for saving.
    Run:  node --test skills/create-flow-canvas/tests/scan.test.mjs   (from the repo root) */
 import { test } from "node:test";
+import vm from "node:vm";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FlowScan, sampleScan } from "./modules.mjs";
+import { FlowScan, sampleScan, readScan, block } from "./modules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tinyRaw = fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8");
@@ -15,8 +16,20 @@ const eq = (actual, expected, message) => assert.deepEqual(JSON.parse(JSON.strin
 
 /* ---------- read ---------- */
 
+test("the scan module needs no other module: it loads and reads in a bare context", () => {
+  const bare = {};
+  vm.runInNewContext(block("scan-module"), bare);
+  const { scan } = bare.FlowScan.read(tinyRaw, { devices: ["mobile", "watch"] });
+  eq(Object.keys(scan.screens[0].html), ["mobile", "watch"], "the devices the caller names, not a list the module knows");
+});
+
+test("read asks which devices it is for, rather than guessing", () => {
+  assert.throws(() => FlowScan.read(tinyRaw), /devices/);
+  assert.throws(() => FlowScan.read(tinyRaw, { devices: [] }), /devices/);
+});
+
 test("a clean scan reads with no problems, and ids the scanner left out are made from the facts", () => {
-  const { scan, problems } = FlowScan.read(tinyRaw);
+  const { scan, problems } = readScan(tinyRaw);
   eq(problems, []);
   assert.equal(scan.product.name, "Tally");
   assert.equal(scan.start, "home");
@@ -28,11 +41,11 @@ test("a clean scan reads with no problems, and ids the scanner left out are made
 });
 
 test("a screen gets every field the engine reads, even when the scanner left some out", () => {
-  const { scan } = FlowScan.read(tinyRaw);
+  const { scan } = readScan(tinyRaw);
   const detail = scan.screens[1];
   eq(detail.caption, { title: "", body: "", on: false });
   assert.equal(detail.note, "");
-  const minimal = FlowScan.read({ screens: [{ id: "x" }] }).scan.screens[0];
+  const minimal = readScan({ screens: [{ id: "x" }] }).scan.screens[0];
   eq(minimal, {
     id: "x",
     name: "x",
@@ -47,7 +60,7 @@ test("a screen gets every field the engine reads, even when the scanner left som
 });
 
 test("the scanner's own words are kept: a state says whether the UI reaches it, and may bring its own render", () => {
-  const home = FlowScan.read(tinyRaw).scan.screens[0];
+  const home = readScan(tinyRaw).scan.screens[0];
   eq(home.states, [
     { name: "empty", reachable: true },
     { name: "offline", reachable: false, html: { mobile: "<p>offline</p>", tablet: "<p>offline</p>", desktop: "<p>offline</p>" } },
@@ -62,7 +75,7 @@ test("whatever points at a screen the scan does not have is dropped, and each dr
   raw.findings.push({ kind: "reused-component", frame: "ghost", component: "Button" });
   raw.notes.push({ frame: "ghost", who: "Bo", text: "lost" }, { frame: "home", who: "Cy" });
   raw.start = "ghost";
-  const { scan, problems } = FlowScan.read(raw);
+  const { scan, problems } = readScan(raw);
   eq(scan.screens.map((s) => s.id), ["home", "detail"]);
   eq(scan.groups.map((g) => g.id), ["g1"]);
   eq(scan.links.map((l) => l.id), ["home>detail"]);
@@ -80,7 +93,7 @@ test("two scanned items with one id are not both kept: the second is dropped and
   raw.links.push({ id: "home>detail", from: "detail", to: "home" });
   raw.findings.push({ id: "home:unreachable-states", kind: "unreachable-states", frame: "home" });
   raw.notes.push({ id: "home:Ana", frame: "detail", who: "Ana", text: "again" });
-  const { scan, problems } = FlowScan.read(raw);
+  const { scan, problems } = readScan(raw);
   eq(scan.links.map((l) => l.from), ["home"]);
   assert.equal(scan.findings.length, 2);
   assert.equal(scan.notes.length, 1);
@@ -89,14 +102,14 @@ test("two scanned items with one id are not both kept: the second is dropped and
 
 test("a scan that is not JSON, or not a scan, reads as nothing, with the reason", () => {
   for (const raw of ["{nope", "42", "null", "[]"]) {
-    const { scan, problems } = FlowScan.read(raw);
+    const { scan, problems } = readScan(raw);
     assert.equal(scan, null, raw);
     assert.equal(problems.length, 1, raw);
   }
 });
 
 test("the sample in the canvas is a clean scan", () => {
-  const { scan, problems } = FlowScan.read(sampleScan);
+  const { scan, problems } = readScan(sampleScan);
   eq(problems, []);
   assert.equal(scan.product.name, "Loam");
   assert.equal(scan.screens.length, 9);

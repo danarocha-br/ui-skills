@@ -77,8 +77,7 @@ test("save then load round-trips every kind and the counters", () => {
   a.conns.push({ id: a.nextId("c"), from: "s1", to: "s9", label: "Jump" });
   a.scans[0].pos = { mobile: [1, 2] };
   a.notes.push({ id: "n1", frame: null, who: "You", text: "floating", x: 5, y: 6 });
-  a.lanes[2].screens = ["s8"];
-  a.lanes.push({ id: a.nextId("g"), screens: ["s9"], open: true });
+  a.groupFrames(["s9"], { device: "mobile" });
   a.save();
   const b = make(storage);
   assert.equal(b.snapshot(), a.snapshot());
@@ -92,7 +91,7 @@ test("a layout saved by the real canvas before groups carried their text loads w
   const storage = memory({ [KEY]: raw });
   const layout = make(storage);
   const saved = JSON.parse(raw);
-  eq(plain(layout).lanes, saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })));
+  eq(layout.lanes, saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })));
   /* everything else shows as it did (edits.test.mjs checks how it is saved now) */
   eq(layout.pos, saved.pos);
   eq(layout.conns, saved.conns);
@@ -121,8 +120,8 @@ test("load drops what no longer exists", () => {
     ],
     scans: "nope",
     notes: [{ id: "n1", text: "ok" }, { id: "n2" }, { text: "no id" }, null],
-    cc: 6, // the scan has six links: any layout this build saved has a counter at least that high
-    gc: 1,
+    cc: 6, // the scan has six links and three groups: any layout this build saved has counters at least that high
+    gc: 3,
   };
   const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
   const blank = { title: "Untitled group", sub: "", subOn: false };
@@ -156,15 +155,17 @@ test("snapshot is a copy: later edits do not change it, equal state gives an equ
   layout.lanes[0].screens.push("s9");
   layout.pos.mobile.s1 = { x: 1, y: 1 };
   assert.notEqual(layout.snapshot(), s);
-  eq(JSON.parse(s).lanes[0].screens, ["s1", "s2", "s3", "s4"]);
+  layout.restore(s);
+  eq(layout.lanes[0].screens, ["s1", "s2", "s3", "s4"]);
 });
 
 test("snapshot leaves out page-only group fields and the counters", () => {
   const layout = make();
   Object.assign(layout.lanes[0], { x: 5, top: 6, pinned: true, el: { not: "serialisable" } });
   const s = plain(layout);
-  eq(Object.keys(s), ["lanes", "pos", "conns", "scans", "notes"]);
-  eq(Object.keys(s.lanes[0]), ["id", "screens", "open", "title", "sub", "subOn"]);
+  eq(Object.keys(s), ["lanes", "pos", "conns", "scans", "notes", "caps"]);
+  eq(s.lanes.edits, {}, "nothing the page keeps on a group is an edit");
+  assert.ok(!layout.snapshot().includes("serialisable"));
 });
 
 test("restore puts a snapshot back, replaces the live objects, and saves", () => {
@@ -176,10 +177,10 @@ test("restore puts a snapshot back, replaces the live objects, and saves", () =>
   layout.notes = [];
   layout.restore(s);
   assert.equal(layout.snapshot(), s);
-  assert.equal(JSON.parse(storage.data[KEY]).lanes.length, 3);
+  assert.equal(make(storage).lanes.length, 3);
   // later edits to the restored state do not reach the snapshot string
-  layout.lanes[0].open = false;
-  assert.equal(JSON.parse(s).lanes[0].open, true);
+  layout.lanes[0].title = "changed";
+  eq(JSON.parse(s).lanes.edits, {});
 });
 
 test("restore leaves the counters alone, so undone ids are not reused", () => {
@@ -238,7 +239,7 @@ test("reset returns the defaults with the counters at their starting point, and 
   eq(layout.pos.mobile, {});
   assert.equal(layout.nextId("g"), "g4");
   assert.equal(layout.nextId("c"), "c7");
-  assert.equal(JSON.parse(storage.data[KEY]).lanes.length, 3);
+  assert.equal(make(storage).lanes.length, 3);
 });
 
 test("reset hands out fresh copies, so editing after a reset never touches the defaults", () => {
@@ -302,7 +303,7 @@ test("a group that comes back through restore returns with the open state it had
 
 test("restore never leaves a counter below an id it has just brought back, so undoing a reset cannot hand out a used id", () => {
   const layout = make();
-  layout.lanes.push({ id: "g4", screens: [], open: true });
+  layout.groupFrames(["s9"], { device: "mobile" }); // g4
   layout.conns.push({ id: "c7", from: "s1", to: "s9", label: "Jump" });
   layout.mark();
   layout.reset(); // counters back to c6 / g3

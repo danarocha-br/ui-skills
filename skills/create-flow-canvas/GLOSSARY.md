@@ -5,12 +5,16 @@ An interactive canvas that shows a product's screens as frames, grouped into flo
 ## Language
 
 **Layout**:
-The saved arrangement of a canvas: which frames sit in which groups and what each group is called, where things are placed on each device, the user's edits to the scan's connectors, notes and findings, and the connectors and notes the user made. Frame captions are not part of the layout.
+The saved arrangement of a canvas: which frames sit in which groups and what each group is called, where things are placed on each device, the user's edits to the scan's groups, connectors, notes, findings and captions, and the groups, connectors and notes the user made. Everything the scan provides is saved the same way, as edits over the scan.
 _Avoid_: View state, canvas state
 
 **Group**:
 An ordered set of frames. Open, it fans out into a flow; closed, it stacks into a deck. Membership is shared by every device. A group carries its own **title** and **description**, so they are saved, undone and reset with it and gone when it is dissolved.
 _Avoid_: Lane (the name the code and the saved data still use), cluster
+
+**Membership**:
+Which group a frame is in (or none, so it is loose) and its order there. What the user changed is saved one frame at a time, as "this frame is in group X" or "this frame is loose", and an order only for a group the user rearranged. A frame the user never moved follows the scan, so a rescan that regroups it moves it; one the user moved stays where they put it. A group the user dissolved stays dissolved, and one the user made is kept.
+_Avoid_: Placement (**Place** already means where a frame is drawn)
 
 **Title**:
 The line a group is headed with, typed in place. Its **name** is the part before the first colon ("Onboarding: how fast to a first plant?" is named "Onboarding"), or "Untitled group" when that is empty. The name is what menus and toasts show. The **description** is the optional line under the title; hiding it keeps its text.
@@ -22,7 +26,7 @@ Something laid over the frames rather than part of a screen: a note, a scanner f
 _Avoid_: Overlay, marker, comment
 
 **Scan**:
-What the scanner found in a product's code: its screens, their states, the groups and links between them, findings, notes and captions. The canvas shows a scan; it does not own it. The Loam canvas is one scan, the **sample**.
+What the scanner found in a product's code: its screens, their states, the groups and links between them, findings, notes and captions. The canvas shows a scan; it does not own it. The Loam canvas is one scan, the **sample**. Everything in it is text, shown as text and never as markup (a route may contain "<", "&" or "[id]"), except a screen's own render, which is markup by design.
 _Avoid_: Demo data, seed, fixture
 
 **Screen**:
@@ -74,11 +78,11 @@ Something the scanner wants a reviewer to notice about a frame, shown as a card 
 _Avoid_: Scan card, insight, warning
 
 **Edit**:
-What the user changed on something the scan produced: moved it, rewrote it, relabelled it or dismissed it. The layout keeps edits, not copies, so a new scan still reaches someone who has edits; their edits win where they touched it.
+What the user changed on something the scan produced: moved it, rewrote it, relabelled it, dismissed it, or moved a frame between groups. The layout keeps edits, not copies, so a new scan still reaches someone who has edits; their edits win where they touched it. An edit to something the scan no longer has is dropped.
 _Avoid_: Override, patch
 
 **Caption**:
-A title and a body typed in place under a frame. It is an annotation, but not part of the layout. (A group's own title and description are part of the group, not captions.)
+A title and a body typed in place under a frame. It is an annotation and part of the layout, so it is saved, undone and reset with it ("Reset annotations" puts captions and group text back; "Reset layout" leaves captions alone). (A group's own title and description are part of the group, not captions.)
 _Avoid_: Heading
 
 **Panel**:

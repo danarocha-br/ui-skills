@@ -5,9 +5,9 @@
    Run:  node --test skills/create-flow-canvas/tests/engine-purity.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { html, FlowScan, sampleScan } from "./modules.mjs";
+import { html, FlowScan, sampleScan, readScan } from "./modules.mjs";
 
-const scan = FlowScan.read(sampleScan).scan;
+const scan = readScan(sampleScan).scan;
 /* every <script> block that is not part of the scan */
 const engine = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
   .filter((m) => !/id="flow-scan(-behaviour)?"/.test(m[1]))

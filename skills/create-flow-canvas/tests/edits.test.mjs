@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FlowLayout, FlowScan } from "./modules.mjs";
+import { FlowLayout, FlowScan, readScan } from "./modules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const KEY = "flow-canvas.layout.v1";
@@ -55,7 +55,7 @@ test("what is saved is the edits, not copies of the scan", () => {
   layout.scans[0].pos = { mobile: [0, 600] };
   layout.save();
   const onDisk = JSON.parse(storage.data[KEY]);
-  assert.equal(onDisk.v, 2);
+  assert.equal(onDisk.v, 3);
   eq(onDisk.notes, { edits: { "s1:Dana": { text: "my words" } }, mine: [{ id: "n1", frame: null, who: "You", text: "mine", x: 1, y: 2 }] });
   eq(onDisk.conns, { edits: { c1: { label: "Go" } }, mine: [{ id: "c3", from: "s1", to: "s4", label: "Jump" }] });
   eq(onDisk.scans, { edits: { "s3:states": { pos: { mobile: [0, 600] } }, "s2:reuse": { gone: true } }, mine: [] });
@@ -182,7 +182,7 @@ test("a layout saved by the real canvas before edits were split from the scan lo
   eq(layout.pos, saved.pos);
   /* and from now on only the edits are on disk */
   const onDisk = JSON.parse(storage.data[KEY]);
-  assert.equal(onDisk.v, 2);
+  assert.equal(onDisk.v, 3);
   eq(onDisk.conns, { edits: { c2: { gone: true } }, mine: [{ id: "c7", from: "s1", to: "s9", label: "Jump" }] });
   eq(onDisk.scans, { edits: { "s3:states": { gone: true } }, mine: [] });
   eq(onDisk.notes, { edits: {}, mine: saved.notes.slice(3) });
@@ -226,7 +226,7 @@ test("an old layout's findings, saved as positions and dismissals by id, keep th
 /* ---------- another product: the engine has no Loam in it ---------- */
 
 test("a scan of another product reads, lays out, saves and reloads", () => {
-  const { scan, problems } = FlowScan.read(fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8"));
+  const { scan, problems } = readScan(fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8"));
   eq(problems, []);
   const storage = memory();
   const layout = over(scan, storage);

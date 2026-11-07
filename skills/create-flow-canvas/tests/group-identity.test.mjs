@@ -30,11 +30,9 @@ const make = (storage = memory(), over = {}) =>
 const eq = (actual, expected, message) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, message);
 const lane = (layout, id) => layout.lanes.find((l) => l.id === id);
 
-/* a group made the way the page does it: a new id, a blank title, pushed onto the layout */
+/* a group made the way the page does it: the frames leave their groups, and a blank new one is added */
 function addGroup(layout, screens) {
-  const g = layout.newGroup(screens);
-  layout.lanes.push(g);
-  return g;
+  return layout.groupFrames(screens, { device: "mobile" });
 }
 
 test("the original bug: a group named Billing, Reset layout, a new group with the same id has a blank name", () => {
@@ -145,14 +143,14 @@ test("undoing a Reset layout brings back the group as it was named", () => {
   assert.equal(lane(layout, "g4").title, "Billing");
 });
 
-test("resetGroupText puts the scanned text on default groups and blanks the rest, without touching membership", () => {
+test("resetText puts the scanned text on default groups and blanks the rest, without touching membership", () => {
   const layout = make();
   lane(layout, "g2").title = "Mine";
   lane(layout, "g2").subOn = false;
   lane(layout, "g2").screens = ["s5"];
   const added = addGroup(layout, ["s9"]);
   Object.assign(added, { title: "Billing", sub: "x", subOn: true });
-  layout.resetGroupText();
+  layout.resetText();
   eq(lane(layout, "g2"), { id: "g2", screens: ["s5"], open: false, title: "First use: add a plant", sub: "A dialog over Home.", subOn: true });
   eq(lane(layout, "g4"), { id: "g4", screens: ["s9"], open: true, title: "Untitled group", sub: "", subOn: false });
 });
