@@ -289,3 +289,14 @@ test("a group that comes back through restore returns with the open state it had
   assert.equal(layout.undo(), true);
   eq(layout.lanes.map((l) => [l.id, l.open]), [["g1", true], ["g2", true], ["g3", false]]);
 });
+
+test("restore never leaves a counter below an id it has just brought back, so undoing a reset cannot hand out a used id", () => {
+  const layout = make();
+  layout.lanes.push({ id: "g4", screens: [], open: true });
+  layout.conns.push({ id: "c7", from: "s1", to: "s9", label: "Jump" });
+  layout.mark();
+  layout.reset(); // counters back to c6 / g3
+  assert.equal(layout.undo(), true); // the lanes and connectors come back, c7 among them
+  assert.equal(layout.nextId("c"), "c8");
+  assert.equal(layout.nextId("g"), "g5");
+});

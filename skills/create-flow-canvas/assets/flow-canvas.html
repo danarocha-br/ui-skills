@@ -4580,8 +4580,9 @@
            layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
                              save by themselves.
            layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string
-           layout.restore(s)       put a snapshot back and save. Counters are not restored, and groups
-                             that still exist keep their current open state (view state, not an edit).
+           layout.restore(s)       put a snapshot back and save. Two things are not restored: the counters
+                             (they never fall below an id the snapshot brings back) and the open state
+                             of groups that still exist (view state, not an edit).
            layout.reset()          back to the defaults, counters included, and save
            layout.nextId("c"|"g")  the next connector / group id, "c7" / "g4"
            layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
@@ -4701,6 +4702,11 @@
               scans: st.scans || {},
               notes: st.notes || layout.notes,
             });
+            /* ids that came back with the snapshot must not be handed out again */
+            counters = {
+              c: Math.max(counters.c, highestId(layout.conns, "c")),
+              g: Math.max(counters.g, highestId(layout.lanes, "g")),
+            };
             layout.save();
           };
           layout.reset = () => {
@@ -4817,6 +4823,157 @@
             return true;
           };
           return commit;
+        }
+        return { create };
+      })();
+    </script>
+
+    <script id="annotations-module">
+      /* ======================================================================
+         ANNOTATIONS MODULE
+         What notes, scanner cards and connectors share: one drag (threshold, zoom scale, cancel), one
+         keyboard move (arrow keys, bursts count as one undo step), one delete, and one "is this an
+         annotation" check. Each kind brings an adapter for what is its own: finding itself in the DOM,
+         showing and saving a position, cleaning up. The module never touches the DOM and saves only
+         through FlowCommit, so every move and delete is one undoable commit.
+
+         Interface
+           const annotations = FlowAnnotations.create({ commit, kinds, threshold, clock })
+             commit     a FlowCommit
+             kinds      adapters, see below
+             threshold  screen px before a press becomes a drag (default 4)
+             clock      () => ms, for the keyboard burst (default Date.now)
+           annotations.owns(target)             any kind recognises target as its own
+           annotations.down(target, {x, y})     null, or { prevent } when a movable annotation was grabbed
+           annotations.dragging()               a grab is in progress (pressed, moved or not)
+           annotations.move({x, y}, k)          pointer moved; k is the zoom, so places follow in world units
+           annotations.up()                     { moved } or null; saves a drag, or taps if it never moved
+           annotations.cancel()                 the pointer was taken away: put the item back, save nothing
+           annotations.keyDown(target, key, {shift})   true when handled: Delete/Backspace, arrow keys
+           annotations.remove(kindName, item)   the same removal, for a × button
+
+         Adapter. Only name is required; the rest depends on what the kind does, and create() refuses a
+         movable kind that is missing origin, place or save.
+           name
+           owns(target)               is target part of this kind (a kind without it is not part of owns())
+           movable, preventDefault    can it be grabbed and moved; should the page preventDefault on press
+           match(target, how)         the item, or null. how is "pointer", "nudge" or "delete".
+                                      The same item must come back as the same object (a DOM element does).
+           origin(item) -> {x, y}     where it is now, in the units place() takes
+           lift(item)                 a drag began
+           place(item, pos)           show it at pos while it moves (DOM only)
+           save(item, pos, {nudged})  the data change for a move, run inside a commit. nudged is true for an
+                                      arrow-key move, so a note can move in place instead of re-homing.
+           settle(item, {moved, cancelled, nudged})   DOM clean-up, after the commit and its redraws
+           tap(item)                  pressed and released without moving
+           erase(item)                the data change for a delete, run inside a commit (needed to be deletable)
+           erased(item)               DOM clean-up and message after a delete
+           redraw                     FlowCommit kinds to redraw after a save or an erase (default none)
+
+         One order throughout: the data change, then the commit's undo point and save, then its redraws,
+         then settle()/erased(). The drag threshold is 4 screen px for every kind (notes used 3).
+         ====================================================================== */
+      var FlowAnnotations = (function () {
+        "use strict";
+        const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+        const NUDGE = 8,
+          NUDGE_BIG = 32,
+          BURST_MS = 600;
+
+        function create({ commit, kinds, threshold = 4, clock = Date.now }) {
+          kinds.forEach((k) => {
+            if (!k.name) throw new Error("FlowAnnotations: every kind needs a name");
+            if (k.movable)
+              for (const need of ["origin", "place", "save"])
+                if (typeof k[need] !== "function") throw new Error('FlowAnnotations: "' + k.name + '" is movable but has no ' + need);
+          });
+          const redrawOf = (kind) => kind.redraw || [];
+          let grab = null;
+          let burst = null; /* the arrow-key burst in progress: { item, at } */
+          const find = (target, how) => {
+            for (const kind of kinds) {
+              const item = kind.match && kind.match(target, how);
+              if (item) return { kind, item };
+            }
+            return null;
+          };
+          function erase(kind, item) {
+            commit(() => kind.erase(item), { redraw: redrawOf(kind) });
+            if (kind.erased) kind.erased(item);
+          }
+          return {
+            /* does any kind recognise this target as one of its own? Lets the page keep one list of
+               "not canvas background" instead of one per handler */
+            owns: (target) => kinds.some((k) => k.owns && k.owns(target)),
+            /* a × button, or any other way a kind has of asking to be removed */
+            remove(name, item) {
+              const kind = kinds.find((k) => k.name === name);
+              if (!kind) throw new Error('FlowAnnotations: unknown annotation kind "' + name + '"');
+              erase(kind, item);
+            },
+            down(target, pt) {
+              const f = find(target, "pointer");
+              if (!f || !f.kind.movable) return null;
+              burst = null; /* a new gesture: the next arrow press starts a new undo step */
+              const origin = f.kind.origin(f.item);
+              grab = { ...f, start: pt, origin, pos: origin, moved: false };
+              return { prevent: !!f.kind.preventDefault };
+            },
+            dragging: () => !!grab,
+            move(pt, k = 1) {
+              if (!grab) return;
+              const dx = pt.x - grab.start.x,
+                dy = pt.y - grab.start.y;
+              if (!grab.moved) {
+                if (Math.hypot(dx, dy) < threshold) return;
+                grab.moved = true;
+                if (grab.kind.lift) grab.kind.lift(grab.item);
+              }
+              grab.pos = { x: grab.origin.x + dx / k, y: grab.origin.y + dy / k };
+              grab.kind.place(grab.item, grab.pos);
+            },
+            up() {
+              const g = grab;
+              grab = null;
+              if (!g) return null;
+              if (g.moved) commit(() => g.kind.save(g.item, g.pos, {}), { redraw: redrawOf(g.kind) });
+              else if (g.kind.tap) g.kind.tap(g.item);
+              if (g.kind.settle) g.kind.settle(g.item, { moved: g.moved });
+              return { moved: g.moved };
+            },
+            /* arrow keys move the focused item; a quick burst on one item is a single undo step */
+            keyDown(target, key, mods = {}) {
+              if (key === "Delete" || key === "Backspace") {
+                const f = find(target, "delete");
+                if (!f) return false;
+                erase(f.kind, f.item);
+                return true;
+              }
+              const dir = ARROWS[key];
+              if (!dir) return false;
+              const f = find(target, "nudge");
+              if (!f || !f.kind.movable) return false;
+              const by = mods.shift ? NUDGE_BIG : NUDGE;
+              const at = f.kind.origin(f.item);
+              const pos = { x: at.x + dir[0] * by, y: at.y + dir[1] * by };
+              f.kind.place(f.item, pos);
+              const now = clock();
+              const first = !burst || burst.item !== f.item || now - burst.at >= BURST_MS;
+              if (first) burst = { item: f.item, at: now };
+              commit(() => f.kind.save(f.item, pos, { nudged: true }), { undo: first, redraw: redrawOf(f.kind) });
+              if (f.kind.settle) f.kind.settle(f.item, { moved: true, nudged: true });
+              return true;
+            },
+            /* the pointer was taken away (not released): put it back, save nothing */
+            cancel() {
+              const g = grab;
+              grab = null;
+              if (!g) return false;
+              if (g.moved) g.kind.place(g.item, g.origin);
+              if (g.kind.settle) g.kind.settle(g.item, { moved: false, cancelled: true });
+              return true;
+            },
+          };
         }
         return { create };
       })();
@@ -5596,14 +5753,7 @@
         });
         d.querySelector(".nx").addEventListener("click", (e) => {
           e.stopPropagation();
-          removeNote(d);
-        });
-        d.addEventListener("keydown", (e) => {
-          if ((e.key === "Delete" || e.key === "Backspace") && e.target === d) {
-            e.preventDefault();
-            e.stopPropagation();
-            removeNote(d);
-          }
+          annotations.remove("note", d);
         });
         parent.appendChild(d);
         return d;
@@ -5637,35 +5787,29 @@
         }
         return d;
       }
-      function removeNote(d) {
-        commit(() => {
-          layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
-        });
-        d.remove();
-        toast("Note deleted. ⌘Z brings it back.");
-      }
-      /* after a drag: a note dropped on a frame belongs to it from then on; dropped on empty canvas it floats */
-      function rehome(n, d) {
+      /* after a drag or a nudge: a note dropped on a frame belongs to it from then on; dropped on empty canvas it floats.
+         The data change runs inside a commit (FlowAnnotations does that); the DOM follows in rehomeDom. */
+      function rehomeData(n, d) {
         const m = worldM(),
           r = d.getBoundingClientRect(),
           wx = (r.left - m.e) / m.a,
           wy = (r.top - m.f) / m.a,
           f = homeFor(wx + r.width / m.a / 2, wy + r.height / m.a / 2);
-        commit(() => {
-          if (f) {
-            n.pos = f === n.frame ? { ...(n.pos || {}) } : {};
-            n.pos[DEV.id] = localFrom(f, wx, wy);
-            n.frame = f;
-            delete n.x;
-            delete n.y;
-          } else {
-            n.frame = null;
-            delete n.pos;
-            n.x = Math.round(wx);
-            n.y = Math.round(wy);
-          }
-        });
-        const parent = f ? colOf(f) : notesEl,
+        if (f) {
+          n.pos = f === n.frame ? { ...(n.pos || {}) } : {};
+          n.pos[DEV.id] = localFrom(f, wx, wy);
+          n.frame = f;
+          delete n.x;
+          delete n.y;
+        } else {
+          n.frame = null;
+          delete n.pos;
+          n.x = Math.round(wx);
+          n.y = Math.round(wy);
+        }
+      }
+      function rehomeDom(n, d) {
+        const parent = n.frame ? colOf(n.frame) : notesEl,
           [x, y] = notePlace(n);
         if (d.parentNode !== parent) parent.appendChild(d);
         d.style.left = x + "px";
@@ -5701,6 +5845,115 @@
         layout,
         redraw: { world: buildWorld, layout: relayout, scans: refreshScans, notes: refreshNotes, conns: drawConns },
       });
+
+      /* The annotation kinds. FlowAnnotations owns what they share (drag, arrow keys, delete, the ownership
+         check); each adapter below does what is its own. A new kind is one more adapter. */
+      const noteOf = (d) => layout.notes.find((x) => x.id === d.dataset.nid);
+      const noteKind = {
+        name: "note",
+        movable: true,
+        preventDefault: true,
+        owns: (t) => !!t.closest(".note"),
+        match(t, how) {
+          const d = t.closest(".note");
+          if (!d) return null;
+          if (how === "pointer") {
+            /* not on its delete button, and not while its text is being edited */
+            return t.closest(".nx") || document.activeElement === d.querySelector(".txt") ? null : d;
+          }
+          return t === d ? d : null; /* keys: only when the note itself has focus, not while typing in it */
+        },
+        origin: (d) => ({ x: parseFloat(d.style.left), y: parseFloat(d.style.top) }),
+        lift(d) {
+          d.classList.add("dragging");
+          d.style.zIndex = 30;
+        },
+        place(d, p) {
+          d.style.left = p.x + "px";
+          d.style.top = p.y + "px";
+        },
+        save(d, p, how) {
+          const n = noteOf(d);
+          if (!n) return;
+          if (!how.nudged) return rehomeData(n, d); /* a drop: it may land on another frame, or on empty canvas */
+          /* a nudge moves the note where it is: 8 px must not attach it to a frame or let go of one */
+          const at = [Math.round(p.x), Math.round(p.y)];
+          if (n.frame) n.pos = { ...(n.pos || {}), [DEV.id]: at };
+          else [n.x, n.y] = at;
+        },
+        settle(d, how) {
+          d.classList.remove("dragging");
+          d.style.zIndex = "";
+          const n = noteOf(d);
+          if (n && how.moved && !how.nudged) rehomeDom(n, d);
+        },
+        tap(d) {
+          const t = d.querySelector(".txt");
+          t.focus();
+          const r = document.createRange();
+          r.selectNodeContents(t);
+          r.collapse(false);
+          const s = getSelection();
+          s.removeAllRanges();
+          s.addRange(r);
+        },
+        erase(d) {
+          layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
+        },
+        erased(d) {
+          d.remove();
+          toast("Note deleted. ⌘Z brings it back.");
+        },
+      };
+      const scanKind = {
+        name: "scan",
+        movable: true,
+        owns: (t) => !!t.closest(".scan"),
+        match(t, how) {
+          const d = t.closest(".scan");
+          if (!d) return null;
+          if (how === "pointer") return t.closest(".hop,.sx") ? null : d;
+          if (how === "nudge") return t === d ? d : null;
+          return d; /* delete: from anywhere inside the card */
+        },
+        origin: (d) => d._scan.at(),
+        lift(d) {
+          d.classList.add("dragging");
+          document.body.classList.add("selecting");
+        },
+        place: (d, p) => d._scan.place(p.x, p.y),
+        save: (d, p) => d._scan.savePos(p),
+        settle(d, how) {
+          d.classList.remove("dragging");
+          document.body.classList.remove("selecting");
+          if (how.cancelled) d._scan.restore();
+          if (how.moved && !how.nudged) d._scan.dragged(); /* the click that follows a drag is not a click on the card */
+        },
+        erase: (d) => d._scan.erase(),
+        erased: (d) => d._scan.erased(),
+      };
+      /* connectors do not move; they take part in delete and in the ownership check */
+      const linkKind = {
+        name: "link",
+        redraw: ["conns"],
+        owns: (t) => !!t.closest(".echip"),
+        match(t, how) {
+          if (how !== "delete") return null;
+          const chip = t.closest(".echip");
+          if (chip) return chip.querySelector(".lb").isContentEditable ? null : { id: chip.dataset.id };
+          /* a selected connector is deleted from anywhere, unless the user is typing */
+          return selConn && !t.closest("input,select,[contenteditable]") ? { id: selConn } : null;
+        },
+        erase(item) {
+          layout.conns = layout.conns.filter((x) => x.id !== item.id);
+          if (selConn === item.id) selConn = null;
+        },
+        erased: () => toast("Connector deleted. ⌘Z to undo."),
+      };
+      /* captions (titles and descriptions) are typed in place and live in their own store: they only
+         take part in the ownership check, so a press on one is never a press on the canvas behind it */
+      const captionKind = { name: "caption", owns: (t) => !!t.closest("[data-f],.cx,.cadd") };
+      const annotations = FlowAnnotations.create({ commit, kinds: [noteKind, scanKind, linkKind, captionKind] });
       const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
       const isFree = (id) => !laneOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${id}"]`);
@@ -5732,8 +5985,10 @@
         ensureAnn(L.id);
         return (ANN[L.id].title || "").split(":")[0].trim() || "Untitled group";
       }
+      /* a group made now gets a blank caption, even if an old group once had this id (after Reset layout) */
+      const freshAnn = (id) => (ANN[id] = { title: "Untitled group", sub: "", on: false });
       function ensureAnn(id) {
-        if (!ANN[id]) ANN[id] = { title: "Untitled group", sub: "", on: false };
+        if (!ANN[id]) freshAnn(id);
       }
 
       function placeLanes() {
@@ -6019,15 +6274,11 @@
           en.setAttribute("cx", g.end[0]);
           en.setAttribute("cy", g.end[1]);
         };
-        /* undo: false for the repeat steps of one keyboard nudge, which are a single undo step */
-        const remember = (undo = true) =>
-          commit(
-            () => {
-              const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
-              r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(left), Math.round(top)] });
-            },
-            { undo },
-          );
+        /* the data change for a move or a nudge; FlowAnnotations commits it */
+        const savePos = (p) => {
+          const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
+          r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(p.x), Math.round(p.y)] });
+        };
         place(left, top, moved);
         const acts = {
           states: () => {
@@ -6056,70 +6307,29 @@
         d.addEventListener("mouseleave", () => hoverOk() && tie(false));
         d.addEventListener("focusin", () => tie(true));
         d.addEventListener("focusout", () => tie(false));
-        const dismiss = () => {
-          commit(() => {
+        const dismiss = () => annotations.remove("scan", d);
+        /* the shared annotation drag, keys and delete drive the card through this handle (see scanKind) */
+        let justDragged = false;
+        d._scan = {
+          at: () => ({ x: left, y: top }),
+          place: (x, y) => place(x, y, true),
+          /* after a cancelled drag the card is back at its place; draw its leader as it was before (not "moved") */
+          restore: () => place(left, top, moved),
+          savePos,
+          erase: () => {
             (layout.scans[sc.key] || (layout.scans[sc.key] = {})).gone = true;
-          });
-          tie(false);
-          st.remove();
-          d.remove();
-          toast("Finding dismissed. ⌘Z brings it back.");
+          },
+          erased: () => {
+            tie(false);
+            st.remove();
+            d.remove();
+            toast("Finding dismissed. ⌘Z brings it back.");
+          },
+          dragged: () => {
+            justDragged = true;
+            setTimeout(() => (justDragged = false), 0);
+          },
         };
-        /* drag it anywhere; the leader stays attached to the frame */
-        let o = null,
-          justDragged = false;
-        d.addEventListener("pointerdown", (e) => {
-          if (e.button !== 0 || e.target.closest(".hop,.sx")) return;
-          o = { sx: e.clientX, sy: e.clientY, l: left, t: top, moved: false };
-          const mv = (ev) => {
-            const ddx = (ev.clientX - o.sx) / cam.k,
-              ddy = (ev.clientY - o.sy) / cam.k;
-            if (!o.moved) {
-              if (Math.hypot(ddx, ddy) * cam.k < 4) return;
-              o.moved = true;
-              d.classList.add("dragging");
-              document.body.classList.add("selecting");
-            }
-            place(o.l + ddx, o.t + ddy, true);
-          };
-          const up = () => {
-            removeEventListener("pointermove", mv);
-            removeEventListener("pointerup", up);
-            removeEventListener("pointercancel", up);
-            document.body.classList.remove("selecting");
-            d.classList.remove("dragging");
-            if (o && o.moved) {
-              justDragged = true;
-              setTimeout(() => (justDragged = false), 0);
-              remember();
-            }
-            o = null;
-          };
-          addEventListener("pointermove", mv);
-          addEventListener("pointerup", up);
-          addEventListener("pointercancel", up);
-        });
-        d.addEventListener("keydown", (e) => {
-          if (e.key === "Delete" || e.key === "Backspace") {
-            e.preventDefault();
-            e.stopPropagation();
-            dismiss();
-            return;
-          }
-          const step = e.shiftKey ? 32 : 8,
-            dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-          if (dir && e.target === d) {
-            e.preventDefault();
-            e.stopPropagation();
-            const first = !d._nudged;
-            if (first) {
-              d._nudged = true;
-              setTimeout(() => (d._nudged = false), 600);
-            }
-            place(left + dir[0], top + dir[1], true);
-            remember(first);
-          }
-        });
         d.addEventListener("click", (e) => {
           e.stopPropagation(); /* a click on the finding is not a click on the frame behind it */
           if (justDragged) return;
@@ -7230,16 +7440,7 @@
         return c;
       }
       function deleteConn(id) {
-        const c = layout.conns.find((x) => x.id === id);
-        if (!c) return;
-        commit(
-          () => {
-            layout.conns = layout.conns.filter((x) => x.id !== id);
-            if (selConn === id) selConn = null;
-          },
-          { redraw: ["conns"] },
-        );
-        toast("Connector deleted. ⌘Z to undo.");
+        if (layout.conns.some((x) => x.id === id)) annotations.remove("link", { id });
       }
       function selectConn(id) {
         setSel([], null);
@@ -7416,10 +7617,6 @@
           }
         } else if (e.key === "Enter") {
           go(chip.dataset.from, chip.dataset.to);
-        } else if (e.key === "Delete" || e.key === "Backspace") {
-          e.preventDefault();
-          e.stopPropagation();
-          deleteConn(chip.dataset.id);
         } else if (e.key === "F2") {
           e.preventDefault();
           editChip(chip.dataset.id);
@@ -7477,7 +7674,7 @@
           dropPos(ids);
           if (allFree)
             posOf()[L.id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
-          ensureAnn(L.id);
+          freshAnn(L.id);
           saveAnn();
           return L;
         };
@@ -7655,7 +7852,6 @@
         drag = null,
         press = null,
         mq = null,
-        noteDrag = null,
         handMode = false,
         spaceDown = false;
       function setHand(on) {
@@ -7985,21 +8181,13 @@
           return;
         }
         if (e.button !== 0) return;
-        const n = e.target.closest(".note");
-        if (n) {
-          if (e.target.closest(".nx")) return;
-          if (document.activeElement === n.querySelector(".txt")) return;
-          e.preventDefault();
-          noteDrag = {
-            el: n,
-            sx: e.clientX,
-            sy: e.clientY,
-            ox: parseFloat(n.style.left),
-            oy: parseFloat(n.style.top),
-            moved: false,
-          };
+        const grabbed = annotations.down(e.target, { x: e.clientX, y: e.clientY });
+        if (grabbed) {
+          if (grabbed.prevent) e.preventDefault();
           return;
         }
+        /* a press on any part of an annotation (a note's button, a connector chip, a caption) is not a press on the canvas */
+        if (annotations.owns(e.target)) return;
         const port = e.target.closest(".port");
         if (port) {
           startConnDrag(e, port);
@@ -8017,9 +8205,7 @@
         const col = e.target.closest(".col");
         if (
           col &&
-          !e.target.closest(
-            "[data-f],.cx,.cadd,.states,.echip,.scan,button,[contenteditable]",
-          )
+          !e.target.closest(".states,button,[contenteditable]")
         ) {
           stopPlay();
           moved = false;
@@ -8038,8 +8224,7 @@
               };
           return;
         }
-        if (e.target.closest(".echip,.scan,.ghead,button,[contenteditable]"))
-          return;
+        if (e.target.closest(".ghead,button,[contenteditable]")) return;
         stopPlay();
         moved = false;
         if (handMode || spaceDown) {
@@ -8059,18 +8244,8 @@
           updateConnDrag(e);
           return;
         }
-        if (noteDrag) {
-          const dx = (e.clientX - noteDrag.sx) / cam.k,
-            dy = (e.clientY - noteDrag.sy) / cam.k;
-          if (!noteDrag.moved && Math.hypot(dx, dy) * cam.k > 3) {
-            noteDrag.moved = true;
-            noteDrag.el.classList.add("dragging");
-            noteDrag.el.style.zIndex = 30;
-          }
-          if (noteDrag.moved) {
-            noteDrag.el.style.left = noteDrag.ox + dx + "px";
-            noteDrag.el.style.top = noteDrag.oy + dy + "px";
-          }
+        if (annotations.dragging()) {
+          annotations.move({ x: e.clientX, y: e.clientY }, cam.k);
           return;
         }
         if (
@@ -8108,24 +8283,7 @@
           press = null;
           return;
         }
-        if (noteDrag) {
-          noteDrag.el.classList.remove("dragging");
-          if (noteDrag.moved) {
-            const nn = layout.notes.find((x) => x.id === noteDrag.el.dataset.nid);
-            if (nn) rehome(nn, noteDrag.el);
-          }
-          if (!noteDrag.moved) {
-            const t = noteDrag.el.querySelector(".txt");
-            t.focus();
-            const r = document.createRange();
-            r.selectNodeContents(t);
-            r.collapse(false);
-            const s = getSelection();
-            s.removeAllRanges();
-            s.addRange(r);
-          }
-          noteDrag = null;
-        }
+        annotations.up();
         if (drag) endDrag();
         if (mq) endMarquee();
         press = null;
@@ -8133,6 +8291,7 @@
         stage.classList.remove("panning");
       });
       addEventListener("pointercancel", () => {
+        annotations.cancel();
         if (connDrag) endConnDrag(true);
         if (drag) {
           const d = drag;
@@ -8279,7 +8438,7 @@
             setTimeout(() => go(from, to), 180);
           }
         }
-        if (!col && !e.target.closest(".note,.scan,.echip,.ghead")) {
+        if (!col && !annotations.owns(e.target) && !e.target.closest(".ghead")) {
           select(null);
         }
       });
@@ -8289,8 +8448,10 @@
           col &&
           !col.classList.contains("deck") &&
           !e.target.closest(
-            "[data-go],.plant,.tog,.time,.plan,[data-pick],.states,[data-f],.cap,.echip,.note,.scan",
-          )
+            /* .cap is not part of captionKind.owns on purpose: a press on a caption's padding still drags the frame */
+            "[data-go],.plant,.tog,.time,.plan,[data-pick],.states,.cap",
+          ) &&
+          !annotations.owns(e.target)
         )
           select(col.dataset.id, true);
       });
@@ -8428,6 +8589,20 @@
         tt = setTimeout(() => t.classList.remove("show"), 2800);
       }
 
+      /* Delete and the arrow keys on an annotation: one handler for every kind, ahead of the others */
+      addEventListener(
+        "keydown",
+        (e) => {
+          if (!e.target.closest) return; /* the document itself */
+          /* Cmd/Ctrl/Alt + arrow belongs to the browser (back, forward), not to a note */
+          if ((e.metaKey || e.ctrlKey || e.altKey) && e.key.startsWith("Arrow")) return;
+          if (annotations.keyDown(e.target, e.key, { shift: e.shiftKey })) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        },
+        true,
+      );
       addEventListener("keydown", (e) => {
         const typing = e.target.closest?.("input,select,[contenteditable]");
         const mod = e.metaKey || e.ctrlKey;
@@ -8440,15 +8615,6 @@
           e.preventDefault();
           if (e.shiftKey) removeSel();
           else groupSel();
-          return;
-        }
-        if (
-          !typing &&
-          selConn &&
-          (e.key === "Delete" || e.key === "Backspace")
-        ) {
-          e.preventDefault();
-          deleteConn(selConn);
           return;
         }
         if (!typing && mod && e.key.toLowerCase() === "z" && !e.shiftKey) {

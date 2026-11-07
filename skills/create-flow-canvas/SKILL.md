@@ -11,7 +11,7 @@ Turns a codebase into one self-contained HTML canvas: screens laid out as frames
 
 `assets/flow-canvas.html` is the reference build, made around a fictional plant-care app ("Loam"). The scanner and generator are not written yet. In the reference build the engine and the Loam data share one file; `docs/architecture-review.html` lists what to separate first (layout state owner, one commit seam, annotation kinds, engine vs scanned data).
 
-Done so far: the layout (groups, positions per device, connectors, scanner cards, notes, id counters, undo history) has one owner, the `FlowLayout` module, in its own `<script id="layout-module">` block at the top of the canvas. It has no DOM and no demo knowledge, and `tests/layout.test.mjs` runs it on its own: `node --test skills/create-flow-canvas/tests/layout.test.mjs`. Every edit ends in one place too: the `FlowCommit` module (`<script id="commit-module">`) owns the undo point, the save and the redraw, in a fixed order. Open or closed groups are view state, so undo does not flip them. Tests: `node --test skills/create-flow-canvas/tests/layout.test.mjs skills/create-flow-canvas/tests/commit.test.mjs`. Vocabulary is in `GLOSSARY.md`.
+Done so far: the layout (groups, positions per device, connectors, scanner cards, notes, id counters, undo history) has one owner, the `FlowLayout` module, in its own `<script id="layout-module">` block at the top of the canvas. It has no DOM and no demo knowledge, and `tests/layout.test.mjs` runs it on its own: `node --test skills/create-flow-canvas/tests/layout.test.mjs`. Every edit ends in one place too: the `FlowCommit` module (`<script id="commit-module">`) owns the undo point, the save and the redraw, in a fixed order. Open or closed groups are view state, so undo does not flip them. What notes, scanner cards and connectors share lives in a third module, `FlowAnnotations` (`<script id="annotations-module">`): one drag with one threshold and a real cancel, arrow-key moves, one Delete path, and one "is this an annotation" check. A kind brings an adapter; a new kind is one more adapter. Tests: `node --test skills/create-flow-canvas/tests/*.test.mjs`. Vocabulary is in `GLOSSARY.md`.
 
 ## What the canvas does
 
@@ -21,7 +21,7 @@ Done so far: the layout (groups, positions per device, connectors, scanner cards
 - **Inspect panel:** route, source file, components (hover to spotlight on the frame, click to find every screen that uses it), states, notes.
 - **Devices:** the same scan rendered at mobile, tablet or desktop size.
 - **Tidy up:** puts groups and loose frames back in order without touching flows, groups or connectors.
-- **Persistence:** layout and annotations live in `localStorage`; undo covers layout changes.
+- **Persistence:** the layout (groups, positions, connectors, notes, scanner-finding changes) and the captions live in `localStorage`, under two keys; undo covers layout changes, not captions.
 
 ## Intended workflow
 
