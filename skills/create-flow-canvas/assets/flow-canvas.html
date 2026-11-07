@@ -4577,12 +4577,15 @@
            layout.lanes layout.pos layout.conns layout.scans layout.notes
                       Live state. Read through layout every time, never keep your own reference:
                       restore, undo and reset swap the arrays and objects for new ones.
-           layout.save()           write to storage (callers do this after an edit)
+           layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
+                             save by themselves.
            layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string
-           layout.restore(s)       put a snapshot back and save. Counters are not restored.
+           layout.restore(s)       put a snapshot back and save. Counters are not restored, and groups
+                             that still exist keep their current open state (view state, not an edit).
            layout.reset()          back to the defaults, counters included, and save
            layout.nextId("c"|"g")  the next connector / group id, "c7" / "g4"
-           layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep
+           layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
+                             is its caller)
            layout.undo()           restore the latest mark; false when there is none
       
          A new persisted kind is added here, in persisted() and load(), and nowhere else.
@@ -4688,6 +4691,9 @@
           layout.snapshot = () => JSON.stringify(persisted());
           layout.restore = (s) => {
             const st = JSON.parse(s);
+            /* open or closed is view state: a group still here keeps how it is shown now */
+            const shown = new Map(layout.lanes.map((l) => [l.id, l.open]));
+            st.lanes.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
             adopt({
               lanes: st.lanes,
               pos: st.pos,
@@ -4723,6 +4729,95 @@
           return layout;
         }
 
+        return { create };
+      })();
+    </script>
+
+    <script id="commit-module">
+      /* ======================================================================
+         COMMIT MODULE
+         The one place that decides what happens after an edit to the layout: the undo point, the save,
+         and which parts of the page are redrawn, in a fixed order. Callers say what changed, not how
+         to finish. It knows nothing about the DOM: the page hands it the redraw functions.
+
+         Interface
+           const commit = FlowCommit.create({ layout, redraw })
+             layout  a FlowLayout
+             redraw  { world, layout, scans, notes, conns }, one function each, all required
+           commit(change, { redraw, undo })
+             Runs change(), returns its result. If the layout is now different: marks the state before
+             as one undo step, saves, then redraws what was asked for. If nothing changed, nothing
+             happens. A commit inside a change joins the outer one.
+               redraw  "all" (layout, scans, notes, conns) or a list of kinds; default none.
+                       Always drawn in this order: world, layout, scans, notes, conns.
+               undo    false for edits that are saved and redrawn but are not undo steps (folding a group)
+             Only the outermost commit decides: a commit inside another one can add redraws, but its own
+             undo option and since() are ignored.
+           commit.since(before, { redraw, undo })
+             For a drag: the change already happened live, `before` is layout.snapshot() from the start.
+             Marks and saves only if something changed, but always redraws.
+           commit.undo(afterRestore)
+             Undoes one step, runs afterRestore() (the page's own clean-up), redraws everything.
+             Returns false when there is nothing to undo.
+         ====================================================================== */
+      var FlowCommit = (function () {
+        "use strict";
+        const ORDER = ["world", "layout", "scans", "notes", "conns"];
+        const ALL = ORDER.filter((k) => k !== "world");
+
+        function create({ layout, redraw }) {
+          ORDER.forEach((k) => {
+            if (typeof redraw[k] !== "function") throw new Error('FlowCommit: missing redraw function for "' + k + '"');
+          });
+          /* the kinds a caller asked for, checked, so a typo fails before anything is changed */
+          const kindsOf = (kinds) => {
+            const list = kinds === "all" ? ALL : kinds || [];
+            list.forEach((k) => {
+              if (!ORDER.includes(k)) throw new Error('FlowCommit: unknown redraw kind "' + k + '"');
+            });
+            return list;
+          };
+          const redrawInOrder = (kinds) => ORDER.filter((k) => kinds.includes(k)).forEach((k) => redraw[k]());
+          let running = null; /* the outer commit's pending redraws while its change runs */
+
+          /* the tail every edit shares: undo point, save, redraw. Nothing changed, nothing to record;
+             a live gesture (alwaysRedraw) still redraws, because it moved things on screen. */
+          function finish(before, opts, kinds, alwaysRedraw) {
+            if (layout.snapshot() === before) {
+              if (alwaysRedraw) redrawInOrder(kinds);
+              return;
+            }
+            if (opts.undo !== false) layout.mark(before);
+            layout.save();
+            redrawInOrder(kinds);
+          }
+          function commit(change, opts = {}) {
+            const kinds = kindsOf(opts.redraw);
+            if (running) {
+              kinds.forEach((k) => running.add(k));
+              return change();
+            }
+            const before = layout.snapshot();
+            running = new Set(kinds);
+            let result, wanted;
+            try {
+              result = change();
+            } finally {
+              wanted = [...running];
+              running = null;
+            }
+            finish(before, opts, wanted, false);
+            return result;
+          }
+          commit.since = (before, opts = {}) => finish(before, opts, kindsOf(opts.redraw), true);
+          commit.undo = (afterRestore) => {
+            if (!layout.undo()) return false;
+            if (afterRestore) afterRestore();
+            redrawInOrder(ALL);
+            return true;
+          };
+          return commit;
+        }
         return { create };
       })();
     </script>
@@ -5517,8 +5612,10 @@
         document.querySelectorAll(".note").forEach((n) => n.remove());
         layout.notes.forEach(buildNote);
       }
+      /* A note's DOM is handled by hand around its commit, not by the "notes" redraw (which rebuilds every
+         note): a new note takes focus, and a dragged one is already where it was dropped. Same for the
+         scanner cards below. */
       function createNote({ text = "New note", frame = null, local = null, world = null }) {
-        layout.mark();
         const n = {
           id: "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
           frame,
@@ -5531,9 +5628,8 @@
           n.x = world[0];
           n.y = world[1];
         }
-        layout.notes.push(n);
+        commit(() => layout.notes.push(n));
         const d = buildNote(n);
-        layout.save();
         if (d) {
           const t = d.querySelector(".txt");
           t.focus();
@@ -5542,9 +5638,9 @@
         return d;
       }
       function removeNote(d) {
-        layout.mark();
-        layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
-        layout.save();
+        commit(() => {
+          layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
+        });
         d.remove();
         toast("Note deleted. ⌘Z brings it back.");
       }
@@ -5555,25 +5651,26 @@
           wx = (r.left - m.e) / m.a,
           wy = (r.top - m.f) / m.a,
           f = homeFor(wx + r.width / m.a / 2, wy + r.height / m.a / 2);
-        if (f) {
-          n.pos = f === n.frame ? { ...(n.pos || {}) } : {};
-          n.pos[DEV.id] = localFrom(f, wx, wy);
-          n.frame = f;
-          delete n.x;
-          delete n.y;
-        } else {
-          n.frame = null;
-          delete n.pos;
-          n.x = Math.round(wx);
-          n.y = Math.round(wy);
-        }
+        commit(() => {
+          if (f) {
+            n.pos = f === n.frame ? { ...(n.pos || {}) } : {};
+            n.pos[DEV.id] = localFrom(f, wx, wy);
+            n.frame = f;
+            delete n.x;
+            delete n.y;
+          } else {
+            n.frame = null;
+            delete n.pos;
+            n.x = Math.round(wx);
+            n.y = Math.round(wy);
+          }
+        });
         const parent = f ? colOf(f) : notesEl,
           [x, y] = notePlace(n);
         if (d.parentNode !== parent) parent.appendChild(d);
         d.style.left = x + "px";
         d.style.top = y + "px";
         d.style.zIndex = "";
-        layout.save();
       }
 
       /* ======================================================================
@@ -5596,6 +5693,13 @@
           notes: seedNotes(),
           scans: {} /* scanner findings: { "frame:kind": { gone, pos: { device: [left, top] } } } */,
         }),
+      });
+      /* open or closed is view state: saved and redrawn, never an undo step */
+      const VIEW_STATE = { undo: false, redraw: ["layout"] };
+      /* every edit ends here: undo point, save, redraw, in one fixed order */
+      const commit = FlowCommit.create({
+        layout,
+        redraw: { world: buildWorld, layout: relayout, scans: refreshScans, notes: refreshNotes, conns: drawConns },
       });
       const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
       const isFree = (id) => !laneOf(id);
@@ -5915,11 +6019,15 @@
           en.setAttribute("cx", g.end[0]);
           en.setAttribute("cy", g.end[1]);
         };
-        const remember = () => {
-          const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
-          r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(left), Math.round(top)] });
-          layout.save();
-        };
+        /* undo: false for the repeat steps of one keyboard nudge, which are a single undo step */
+        const remember = (undo = true) =>
+          commit(
+            () => {
+              const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
+              r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(left), Math.round(top)] });
+            },
+            { undo },
+          );
         place(left, top, moved);
         const acts = {
           states: () => {
@@ -5949,9 +6057,9 @@
         d.addEventListener("focusin", () => tie(true));
         d.addEventListener("focusout", () => tie(false));
         const dismiss = () => {
-          layout.mark();
-          (layout.scans[sc.key] || (layout.scans[sc.key] = {})).gone = true;
-          layout.save();
+          commit(() => {
+            (layout.scans[sc.key] || (layout.scans[sc.key] = {})).gone = true;
+          });
           tie(false);
           st.remove();
           d.remove();
@@ -5969,7 +6077,6 @@
             if (!o.moved) {
               if (Math.hypot(ddx, ddy) * cam.k < 4) return;
               o.moved = true;
-              layout.mark();
               d.classList.add("dragging");
               document.body.classList.add("selecting");
             }
@@ -6004,13 +6111,13 @@
           if (dir && e.target === d) {
             e.preventDefault();
             e.stopPropagation();
-            if (!d._nudged) {
-              layout.mark();
+            const first = !d._nudged;
+            if (first) {
               d._nudged = true;
               setTimeout(() => (d._nudged = false), 600);
             }
             place(left + dir[0], top + dir[1], true);
-            remember();
+            remember(first);
           }
         });
         d.addEventListener("click", (e) => {
@@ -6092,9 +6199,12 @@
       function setLane(id, open, opts = {}) {
         const L = layout.lanes.find((l) => l.id === id);
         if (!L || L.open === open) return;
-        L.open = open;
-        relayout();
-        layout.save();
+        commit(
+          () => {
+            L.open = open;
+          },
+          VIEW_STATE,
+        );
         if (open) {
           if (opts.fly !== false) fly(fitRect(laneRect(L), 40));
         } else {
@@ -6169,9 +6279,12 @@
         const L = layout.lanes.find((l) => l.id === n);
         if (!L) return;
         if (!L.open) {
-          L.open = true;
-          relayout();
-          layout.save();
+          commit(
+            () => {
+              L.open = true;
+            },
+            VIEW_STATE,
+          );
         }
         fly(fitRect(laneRect(L), 40));
       }
@@ -7100,27 +7213,32 @@
           );
           return null;
         }
-        if (!opts.silentUndo) layout.mark();
-        const c = {
-          id: layout.nextId("c"),
-          from,
-          to,
-          label: opts.label || "Next",
-        };
-        layout.conns.push(c);
-        layout.save();
-        drawConns();
+        const c = commit(
+          () => {
+            const link = {
+              id: layout.nextId("c"),
+              from,
+              to,
+              label: opts.label || "Next",
+            };
+            layout.conns.push(link);
+            return link;
+          },
+          { redraw: ["conns"] },
+        );
         if (!opts.noEdit) setTimeout(() => editChip(c.id), 40);
         return c;
       }
       function deleteConn(id) {
         const c = layout.conns.find((x) => x.id === id);
         if (!c) return;
-        layout.mark();
-        layout.conns = layout.conns.filter((x) => x.id !== id);
-        if (selConn === id) selConn = null;
-        layout.save();
-        drawConns();
+        commit(
+          () => {
+            layout.conns = layout.conns.filter((x) => x.id !== id);
+            if (selConn === id) selConn = null;
+          },
+          { redraw: ["conns"] },
+        );
         toast("Connector deleted. ⌘Z to undo.");
       }
       function selectConn(id) {
@@ -7150,15 +7268,16 @@
           toast("Select two or more frames to connect them in order.");
           return;
         }
-        layout.mark();
-        let n = 0;
-        for (let i = 0; i < ids.length - 1; i++) {
-          if (
-            !connBetween(ids[i], ids[i + 1]) &&
-            addConn(ids[i], ids[i + 1], { silentUndo: true, noEdit: true })
-          )
-            n++;
-        }
+        const n = commit(
+          () => {
+            let n = 0;
+            for (let i = 0; i < ids.length - 1; i++) {
+              if (!connBetween(ids[i], ids[i + 1]) && addConn(ids[i], ids[i + 1], { noEdit: true })) n++;
+            }
+            return n;
+          },
+          { redraw: ["conns"] },
+        );
         toast(
           n
             ? `Connected ${ids.length} frames in order. ⌘Z to undo.`
@@ -7280,9 +7399,9 @@
         const v = lb.textContent.trim() || "Next";
         lb.textContent = v;
         if (c.label !== v) {
-          layout.mark();
-          c.label = v;
-          layout.save();
+          commit(() => {
+            c.label = v;
+          });
         }
       });
       world.addEventListener("keydown", (e) => {
@@ -7311,21 +7430,15 @@
    EDIT THE ARRANGEMENT: group, name, remove, drag, undo
    ====================================================================== */
       function undo() {
-        if (!layout.undo()) {
-          toast("Nothing to undo");
-          return;
-        }
-        selConn = null;
-        document.querySelectorAll(".lane").forEach((e) => delete e.dataset.sig);
-        setSel(
-          [...selSet].filter((id) => SCREENS[id]),
-          selected,
-        );
-        relayout();
-        refreshScans();
-        refreshNotes();
-        drawConns();
-        toast("Undone");
+        const done = commit.undo(() => {
+          selConn = null;
+          document.querySelectorAll(".lane").forEach((e) => delete e.dataset.sig);
+          setSel(
+            [...selSet].filter((id) => SCREENS[id]),
+            selected,
+          );
+        });
+        toast(done ? "Undone" : "Nothing to undo");
       }
       function pruneLanes() {
         layout.lanes = layout.lanes.filter((L) => L.screens.length);
@@ -7350,25 +7463,31 @@
       function groupFrames(ids, opts = {}) {
         ids = [...new Set(ids)].filter((id) => SCREENS[id]);
         if (!ids.length) return null;
-        if (!opts.silentUndo) layout.mark();
         const allFree = ids.every(isFree);
         if (!opts.keepOrder) ids = readingOrder(ids);
         const minX = Math.min(...ids.map((i) => FR[i].x)),
           minY = Math.min(...ids.map((i) => FR[i].y));
-        layout.lanes.forEach((L) => {
-          L.screens = L.screens.filter((x) => !ids.includes(x));
-        });
-        pruneLanes();
-        const id = layout.nextId("g");
-        const L = { id, screens: ids, open: true };
-        layout.lanes.push(L);
-        dropPos(ids);
-        if (allFree)
-          posOf()[id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
-        ensureAnn(id);
-        saveAnn();
-        relayout();
-        layout.save();
+        const make = () => {
+          layout.lanes.forEach((L) => {
+            L.screens = L.screens.filter((x) => !ids.includes(x));
+          });
+          pruneLanes();
+          const L = { id: layout.nextId("g"), screens: ids, open: true };
+          layout.lanes.push(L);
+          dropPos(ids);
+          if (allFree)
+            posOf()[L.id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
+          ensureAnn(L.id);
+          saveAnn();
+          return L;
+        };
+        /* a drag-end merge commits itself, from the snapshot taken when the drag began */
+        let L;
+        if (opts.uncommitted) {
+          L = make();
+          relayout();
+        } else L = commit(make, { redraw: ["layout"] });
+        const id = L.id;
         setSel(ids, ids[ids.length - 1]);
         if (!allFree) fly(fitRect(laneRect(L), 40));
         setTimeout(() => focusTitle(id), 650);
@@ -7382,33 +7501,35 @@
       function removeFromGroup(ids) {
         ids = ids.filter((i) => laneOf(i));
         if (!ids.length) return;
-        layout.mark();
-        const P = posOf();
-        const byLane = new Map();
-        ids.forEach((i) => {
-          const L = laneOf(i);
-          if (!byLane.has(L)) byLane.set(L, []);
-          byLane.get(L).push(i);
-        });
-        byLane.forEach((list, L) => {
-          const end =
-            L.x +
-            (L.open
-              ? L.screens.length * (COL_W + GAP) + 40
-              : DECK_W + PEEK_X * 3 + 120);
-          let k = 0;
-          list.forEach((i) => {
-            P[i] = {
-              x: Math.round(end + k * (COL_W + 70)),
-              y: Math.round(L.open ? FR[i].y : L.top + HEAD),
-            };
-            k++;
-            L.screens = L.screens.filter((x) => x !== i);
-          });
-        });
-        pruneLanes();
-        relayout();
-        layout.save();
+        commit(
+          () => {
+            const P = posOf();
+            const byLane = new Map();
+            ids.forEach((i) => {
+              const L = laneOf(i);
+              if (!byLane.has(L)) byLane.set(L, []);
+              byLane.get(L).push(i);
+            });
+            byLane.forEach((list, L) => {
+              const end =
+                L.x +
+                (L.open
+                  ? L.screens.length * (COL_W + GAP) + 40
+                  : DECK_W + PEEK_X * 3 + 120);
+              let k = 0;
+              list.forEach((i) => {
+                P[i] = {
+                  x: Math.round(end + k * (COL_W + 70)),
+                  y: Math.round(L.open ? FR[i].y : L.top + HEAD),
+                };
+                k++;
+                L.screens = L.screens.filter((x) => x !== i);
+              });
+            });
+            pruneLanes();
+          },
+          { redraw: ["layout"] },
+        );
         toast(
           ids.length === 1
             ? "Removed from group. ⌘Z to undo."
@@ -7416,19 +7537,21 @@
         );
       }
       function dissolveGroup(L) {
-        layout.mark();
-        const P = posOf();
-        L.screens.forEach((i, k) => {
-          P[i] = {
-            x: Math.round(L.x + k * (COL_W + GAP)),
-            y: Math.round(L.top + HEAD),
-          };
-        });
         const name = laneName(L);
-        L.screens = [];
-        pruneLanes();
-        relayout();
-        layout.save();
+        commit(
+          () => {
+            const P = posOf();
+            L.screens.forEach((i, k) => {
+              P[i] = {
+                x: Math.round(L.x + k * (COL_W + GAP)),
+                y: Math.round(L.top + HEAD),
+              };
+            });
+            L.screens = [];
+            pruneLanes();
+          },
+          { redraw: ["layout"] },
+        );
         toast(`Ungrouped “${name}”. Frames stay on the canvas. ⌘Z to undo.`);
       }
       function groupSel() {
@@ -7440,48 +7563,48 @@
       /* put the view back in order without touching what the flows are: group membership and order,
          connectors, names, annotations and every note's text stay; only positions are reset on this device */
       function tidy() {
-        const norm = (o) => Object.keys(o || {}).sort().map((k) => [k, o[k]]),
-          key = () => JSON.stringify([layout.lanes.map((l) => l.id), norm(layout.pos[DEV.id]), norm(layout.scans), layout.notes]),
-          before = layout.snapshot(),
-          was = key();
-        /* keep the stacking order you arranged: top to bottom, then left to right */
-        const rank = (L) => (L.screens.length ? 0 : 1);
-        layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || a.top - b.top || a.x - b.x);
-        const loose = readingOrder(ORDER.filter(isFree));
-        const P = layout.pos[DEV.id];
-        layout.lanes.forEach((L) => delete P[L.id]);
-        loose.forEach((id) => delete P[id]);
-        placeLanes();
-        let bottom = TOP0;
-        layout.lanes.forEach((L) => {
-          if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
-        });
-        loose.forEach((id, k) => (P[id] = freeSlot(k, bottom)));
-        /* scanner cards back beside their frames; scanned notes back where the scan put them */
-        Object.values(layout.scans).forEach((r) => r && r.pos && delete r.pos[DEV.id]);
-        layout.notes.forEach((n) => {
-          const seed = NOTES.find((x) => x.frame + ":" + x.who === n.id);
-          if (seed && n.frame === seed.frame && n.pos) n.pos[DEV.id] = [...seed.pos[DEV.id]];
-        });
-        if (key() === was) {
+        const changed = commit(
+          () => {
+            const was = layout.snapshot();
+            /* keep the stacking order you arranged: top to bottom, then left to right */
+            const rank = (L) => (L.screens.length ? 0 : 1);
+            layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || a.top - b.top || a.x - b.x);
+            const loose = readingOrder(ORDER.filter(isFree));
+            const P = layout.pos[DEV.id];
+            layout.lanes.forEach((L) => delete P[L.id]);
+            loose.forEach((id) => delete P[id]);
+            placeLanes();
+            let bottom = TOP0;
+            layout.lanes.forEach((L) => {
+              if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
+            });
+            loose.forEach((id, k) => (P[id] = freeSlot(k, bottom)));
+            /* scanner cards back beside their frames; scanned notes back where the scan put them */
+            Object.values(layout.scans).forEach((r) => r && r.pos && delete r.pos[DEV.id]);
+            layout.notes.forEach((n) => {
+              const seed = NOTES.find((x) => x.frame + ":" + x.who === n.id);
+              if (seed && n.frame === seed.frame && n.pos) n.pos[DEV.id] = [...seed.pos[DEV.id]];
+            });
+            return layout.snapshot() !== was; /* the same test commit uses */
+          },
+          { redraw: "all" },
+        );
+        if (!changed) {
           toast("Already tidy.");
           return;
         }
-        layout.mark(before);
-        relayout();
-        refreshScans();
-        refreshNotes();
-        drawConns();
-        layout.save();
         fly(fitRect(allRect(), 40, 1.1));
         toast("Tidied. Groups, flows and connectors are as they were. ⌘Z to undo.");
       }
       function resetLayout() {
-        layout.mark();
-        layout.reset();
-        selConn = null;
-        setSel([]);
-        buildWorld();
+        commit(
+          () => {
+            layout.reset();
+            selConn = null;
+            setSel([]);
+          },
+          { redraw: ["world"] },
+        );
         fly(fitRect(allRect(), 40, 1.1));
         toast("Layout reset to the scanned arrangement");
       }
@@ -7751,8 +7874,7 @@
         selbox.classList.remove("live");
         if (d.kind === "group") {
           document.body.classList.remove("gdrag");
-          if (layout.snapshot() !== d.snapshot) layout.mark(d.snapshot);
-          layout.save();
+          commit.since(d.snapshot);
           return;
         }
         const t = d.target || { kind: "free" };
@@ -7766,8 +7888,8 @@
             ids = d.ids;
           d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
           dragSet = new Set();
-          groupFrames([target, ...ids], { keepOrder: true, silentUndo: true });
-          layout.mark(d.snapshot);
+          groupFrames([target, ...ids], { keepOrder: true, uncommitted: true });
+          commit.since(d.snapshot, { redraw: ["layout"] });
           return;
         }
         if (t.kind === "free") {
@@ -7789,9 +7911,7 @@
         pruneLanes();
         d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
         dragSet = new Set();
-        relayout();
-        layout.save();
-        if (layout.snapshot() !== d.snapshot) layout.mark(d.snapshot);
+        commit.since(d.snapshot, { redraw: ["layout"] });
         if (moved0)
           msg =
             t.kind === "lane" ? `Moved into “${nm}”` : "Taken out of its group";
@@ -7944,7 +8064,6 @@
             dy = (e.clientY - noteDrag.sy) / cam.k;
           if (!noteDrag.moved && Math.hypot(dx, dy) * cam.k > 3) {
             noteDrag.moved = true;
-            layout.mark();
             noteDrag.el.classList.add("dragging");
             noteDrag.el.style.zIndex = 30;
           }
@@ -8464,11 +8583,14 @@
         if (!L.length) return;
         const open = !L.every((l) => l.open);
         if (!open && [...selSet].some((i) => laneOf(i))) select(null);
-        L.forEach((l) => {
-          l.open = open;
-        });
-        relayout();
-        layout.save();
+        commit(
+          () => {
+            L.forEach((l) => {
+              l.open = open;
+            });
+          },
+          VIEW_STATE,
+        );
         fly(fitRect(allRect(), 40, 1.1));
       }
 

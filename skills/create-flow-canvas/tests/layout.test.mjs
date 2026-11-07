@@ -4,17 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FlowLayout } from "./modules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const html = fs.readFileSync(path.join(here, "../assets/flow-canvas.html"), "utf8");
-const block = html.match(/<script id="layout-module">([\s\S]*?)<\/script>/);
-assert.ok(block, 'no <script id="layout-module"> block in flow-canvas.html');
-const sandbox = {};
-vm.runInNewContext(block[1], sandbox);
-const { FlowLayout } = sandbox;
 
 const KEY = "flow-canvas.layout.v1";
 const SCREENS = new Set(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
@@ -189,17 +183,16 @@ test("restore leaves the counters alone, so undone ids are not reused", () => {
 test("history: marks come back last-in first-out, and an empty history says so", () => {
   const layout = make();
   layout.mark();
-  layout.lanes[0].open = false;
+  layout.pos.mobile.s1 = { x: 1, y: 1 };
   layout.mark();
-  layout.lanes[0].open = true;
-  layout.lanes[1].open = true;
+  layout.pos.mobile.s1 = { x: 2, y: 2 };
+  layout.pos.mobile.s2 = { x: 3, y: 3 };
   assert.equal(layout.undo(), true);
-  assert.equal(layout.lanes[0].open, false);
-  assert.equal(layout.lanes[1].open, false);
+  eq(layout.pos.mobile, { s1: { x: 1, y: 1 } });
   assert.equal(layout.undo(), true);
-  assert.equal(layout.lanes[0].open, true);
+  eq(layout.pos.mobile, {});
   assert.equal(layout.undo(), false);
-  assert.equal(layout.lanes[0].open, true);
+  eq(layout.pos.mobile, {});
 });
 
 test("history: mark(s) takes a snapshot from earlier, and keeps 40", () => {
@@ -274,4 +267,25 @@ test("a storage that throws neither breaks loading nor saving", () => {
   assert.doesNotThrow(() => layout.reset());
   layout.mark();
   assert.equal(layout.undo(), true);
+});
+
+test("restore keeps each group's current open state: open or closed is view state, not an edit", () => {
+  const layout = make();
+  layout.mark(); // g1 open, g2 closed
+  layout.lanes[0].screens.pop(); // an edit
+  layout.lanes[0].open = false; // collapsed since
+  layout.lanes[1].open = true; // expanded since
+  assert.equal(layout.undo(), true);
+  eq(layout.lanes[0].screens, ["s1", "s2", "s3", "s4"]); // the edit is undone
+  assert.equal(layout.lanes[0].open, false); // the collapse stays
+  assert.equal(layout.lanes[1].open, true); // the expand stays
+});
+
+test("a group that comes back through restore returns with the open state it had", () => {
+  const layout = make();
+  layout.lanes[1].open = true;
+  layout.mark();
+  layout.lanes.splice(1, 1); // the group is dissolved
+  assert.equal(layout.undo(), true);
+  eq(layout.lanes.map((l) => [l.id, l.open]), [["g1", true], ["g2", true], ["g3", false]]);
 });
