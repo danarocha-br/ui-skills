@@ -5106,13 +5106,13 @@
                metrics   colW phH cap body collH deckS deckW peekX peekY closedW edge   (what FlowGeometry arranges with)
                cssVars   { "--cw": "270px", … }                                          (what the stylesheet reads) }
            FlowDevice.idForKey(key)         -> the id a keyboard key reaches, or null
-           FlowDevice.slot(id, top, drop)   -> [x, y] where a note goes when it has no place anywhere:
+           FlowDevice.restingSpot(id, top, drop) -> [x, y] where a note goes when it has no place anywhere:
                                                near the frame's right edge, `drop` (120) below the screen's top
            FlowDevice.carry(at, from, to, { top }) -> [x, y]  a spot in a frame's own coordinates, moved to
                                                the same relative place on another device's screen
-           FlowDevice.placeOn(saved, id, { top, drop }) -> [x, y]  where an annotation sits on this device:
-                                               its saved place here, else carried from the first device that has one,
-                                               else the slot. Never written back.
+           FlowDevice.placeOn(saved, id, { top }) -> [x, y]  where an annotation sits on this device:
+                                               its saved place here, else carried from the device it was first placed on,
+                                               else the resting spot. Never written back.
            `top` is where the screen starts inside the frame's column (the canvas's phTop).
          ====================================================================== */
       var FlowDevice = (function () {
@@ -5163,19 +5163,19 @@
           return d;
         }
         const idForKey = (key) => (TABLE.find((d) => d.key === key) || { id: null }).id;
-        const slot = (id, top, drop = 120) => [describe(id).metrics.colW - 70, top + drop];
+        const restingSpot = (id, top, drop = 120) => [describe(id).metrics.colW - 70, top + drop];
         function carry(at, from, to, { top }) {
           const a = describe(from).metrics,
             b = describe(to).metrics;
           return [Math.round((at[0] * b.colW) / a.colW), Math.round(top + ((at[1] - top) * b.phH) / a.phH)];
         }
-        function placeOn(saved, id, { top, drop }) {
-          const own = saved && saved[id];
-          if (own) return own;
-          const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && saved[k]);
-          return from ? carry(saved[from], from, id, { top }) : slot(id, top, drop);
+        function placeOn(saved, id, { top }) {
+          const isPlace = (a) => Array.isArray(a) && a.length === 2 && a.every(Number.isFinite);
+          if (saved && isPlace(saved[id])) return saved[id];
+          const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && isPlace(saved[k]));
+          return from ? carry(saved[from], from, id, { top }) : restingSpot(id, top);
         }
-        return { ids, describe, idForKey, slot, carry, placeOn };
+        return { ids, describe, idForKey, restingSpot, carry, placeOn };
       })();
     </script>
     <script id="scan-module">
@@ -5184,7 +5184,8 @@
          The seam between what a scanner found in a product's code and the engine that draws it. The scan is
          the scanner's (the generator writes it into <script id="flow-scan">); the engine only reads it, and the
          user's changes are kept as edits laid over it, so a new scan still reaches someone who has edits.
-         No DOM, no product knowledge.
+         No DOM, no product knowledge. Reads FlowDevice.ids() when it loads (one rendering of each screen per
+         device), so the device module comes first.
 
          A scan
            { product: { name, scanned? }, start?,           scanned: when, in words; start: the screen selected
@@ -6812,7 +6813,7 @@
         drawConns();
       });
       /* the device on show: its one description (FlowDevice), from which the numbers, the style variables and the classes come */
-      let DEV = FlowDevice.describe("mobile");
+      let DEV = FlowDevice.describe(FlowDevice.ids()[0]);
       function applyDevice(id) {
         DEV = FlowDevice.describe(id);
         geo.setMetrics(DEV.metrics);
@@ -7134,7 +7135,7 @@
         /* the scan's groups, links (drawn as connectors), findings and notes; the layout keeps the user's edits */
         defaults: () => ({
           lanes: SCAN.groups,
-          pos: { mobile: {}, tablet: {}, desktop: {} },
+          pos: Object.fromEntries(FlowDevice.ids().map((id) => [id, {}])),
           conns: SCAN.links,
           notes: NOTES,
           scans: FINDINGS,
@@ -7844,7 +7845,7 @@
         if (a === "focus") focusScreen(id);
         if (a === "inspect") inspect(id);
         if (a === "comment")
-          createNote({ text: "Add a comment…", frame: id, local: FlowDevice.slot(DEV.id, PH_TOP, 60) });
+          createNote({ text: "Add a comment…", frame: id, local: FlowDevice.restingSpot(DEV.id, PH_TOP, 60) });
         if (a === "play") {
           if (L) play(L.screens.slice(L.screens.indexOf(id)));
           else toast("Group this frame to play it as a flow");
@@ -9518,7 +9519,8 @@
         if (e.key === "v") setHand(false);
         if (e.key === "a") toggleAll();
         if (e.key === "l") tidy();
-        if (FlowDevice.idForKey(e.key)) setDevice(FlowDevice.idForKey(e.key));
+        const device = FlowDevice.idForKey(e.key);
+        if (device) setDevice(device);
         if (e.key === "1") view("all");
         if (e.key === "2" && layout.lanes[0]) view(layout.lanes[0].id);
         if (e.key === "3" && layout.lanes[1]) view(layout.lanes[1].id);
@@ -9683,7 +9685,7 @@
         $("#productFacts").textContent =
           ORDER.length + " screens" + (SCAN.product.scanned ? " · scanned " + SCAN.product.scanned : "");
         document.body.classList.add("boot");
-        applyDevice("mobile");
+        applyDevice(FlowDevice.ids()[0]);
         buildWorld();
         cam = fitRect(geo.bounds(), 30);
         apply();

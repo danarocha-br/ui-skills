@@ -39,10 +39,10 @@ _Avoid_: Slot (that is one place in a row), coordinates
 
 **Device**:
 A size the canvas can show every screen at (mobile, tablet, desktop). Each is described once; the sizes of the screen and its caption, the style variables, the class on a frame, the switcher button and the key that reaches it all come from that description. Groups are shared by every device; places are per device. In code, `FlowDevice.describe(id)`.
-_Avoid_: Viewport, breakpoint, platform
+_Avoid_: Breakpoint, platform
 
 **Carry**:
-What a note does on a device it has no place on: it keeps the same relative spot on the frame's screen as on the device it was placed on. A carried place is worked out each time and is not saved, so it never overrides one the user chose. With no place on any device, a note takes the **slot** near the frame's right edge.
+What a note does on a device it has no place on: it keeps the same relative spot on the frame's screen as on the device it was placed on. A carried place is worked out each time and is not saved, so it never overrides one the user chose. With no place on any device, a note takes the **resting spot** near the frame's right edge.
 _Avoid_: Fallback, default position
 
 **Slide**:

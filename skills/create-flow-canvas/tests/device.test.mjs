@@ -7,7 +7,7 @@ import { FlowDevice } from "./modules.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 /* arrays made inside the module's own context are not this context's arrays; compare them as data */
-const slot = (...a) => plain(FlowDevice.slot(...a));
+const restingSpot = (...a) => plain(FlowDevice.restingSpot(...a));
 const carry = (...a) => plain(FlowDevice.carry(...a));
 const placeOn = (...a) => plain(FlowDevice.placeOn(...a));
 const TOP = 28; /* where a frame's screen starts inside its column (the canvas's phTop) */
@@ -73,10 +73,10 @@ test("the keyboard reaches a device by its key and ignores any other", () => {
 
 /* ---------- where a note goes on a device that has no place for it ---------- */
 
-test("the slot a note takes when it has no place anywhere is near the frame's right edge, below the top", () => {
-  assert.deepEqual(slot("mobile", TOP), [200, TOP + 120]);
-  assert.deepEqual(slot("desktop", TOP), [530, TOP + 120]);
-  assert.deepEqual(slot("tablet", TOP, 60), [330, TOP + 60], "a note added from the toolbar sits higher");
+test("the resting spot a note takes when it has no place anywhere is near the frame's right edge, below the top", () => {
+  assert.deepEqual(restingSpot("mobile", TOP), [200, TOP + 120]);
+  assert.deepEqual(restingSpot("desktop", TOP), [530, TOP + 120]);
+  assert.deepEqual(restingSpot("tablet", TOP, 60), [330, TOP + 60], "a note added from the toolbar sits higher");
 });
 
 test("carrying a spot to another device keeps it at the same place on the screen", () => {
@@ -98,7 +98,7 @@ test("carrying a spot there and back lands within a pixel of where it began", ()
     }
 });
 
-test("a note's place on a device: the one saved for it, else carried from the first device that has one, else the slot", () => {
+test("a note's place on a device: the one saved for it, else carried from the device it was first placed on (the first one saved), else the resting spot", () => {
   const saved = { tablet: [111, 222], desktop: [300, 200] };
   assert.deepEqual(placeOn(saved, "tablet", { top: TOP }), [111, 222], "its own place wins");
   assert.deepEqual(
@@ -106,18 +106,27 @@ test("a note's place on a device: the one saved for it, else carried from the fi
     carry([111, 222], "tablet", "mobile", { top: TOP }),
     "the first one saved is the one carried",
   );
-  assert.deepEqual(placeOn(undefined, "mobile", { top: TOP }), slot("mobile", TOP));
-  assert.deepEqual(placeOn({}, "mobile", { top: TOP }), slot("mobile", TOP));
-  assert.deepEqual(placeOn({ watch: [1, 2] }, "mobile", { top: TOP }), slot("mobile", TOP), "a place on a device that is not there is no place");
+  assert.deepEqual(placeOn(undefined, "mobile", { top: TOP }), restingSpot("mobile", TOP));
+  assert.deepEqual(placeOn({}, "mobile", { top: TOP }), restingSpot("mobile", TOP));
+  assert.deepEqual(placeOn({ watch: [1, 2] }, "mobile", { top: TOP }), restingSpot("mobile", TOP), "a place on a device that is not there is no place");
 });
 
-test("a note made on one device does not jump to one shared slot on the others", () => {
+test("a note made on one device does not jump to one shared resting spot on the others", () => {
   /* the bug: only the creation device had a place, so two notes made at different spots stacked on the same slot elsewhere */
   const top = { mobile: [30, TOP + 40] }, bottom = { mobile: [30, TOP + 500] };
   for (const other of ["tablet", "desktop"]) {
     const a = placeOn(top, other, { top: TOP }), b = placeOn(bottom, other, { top: TOP });
     assert.notDeepEqual(a, b, `on ${other} the two notes keep their order`);
     assert.ok(a[1] < b[1], `on ${other} the upper note is still the upper one`);
-    assert.notDeepEqual(a, slot(other, TOP), `on ${other} the note is not on the shared slot`);
+    assert.notDeepEqual(a, restingSpot(other, TOP), `on ${other} the note is not on the shared resting spot`);
+  }
+});
+
+test("a saved place that is not a pair of numbers is no place: it never reaches the screen or the other devices", () => {
+  const bad = [[], [5], ["a", "b"], { x: 1, y: 2 }, [NaN, 1], [1, Infinity], null];
+  for (const b of bad) {
+    assert.deepEqual(placeOn({ mobile: b }, "mobile", { top: TOP }), restingSpot("mobile", TOP), `on its own device: ${JSON.stringify(b)}`);
+    assert.deepEqual(placeOn({ mobile: b }, "desktop", { top: TOP }), restingSpot("desktop", TOP), `carried: ${JSON.stringify(b)}`);
+    assert.deepEqual(placeOn({ mobile: b, tablet: [111, 222] }, "desktop", { top: TOP }), carry([111, 222], "tablet", "desktop", { top: TOP }), `skipped for a good one: ${JSON.stringify(b)}`);
   }
 });
