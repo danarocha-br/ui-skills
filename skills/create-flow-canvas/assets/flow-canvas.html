@@ -5266,7 +5266,8 @@
            FlowScan.diffGroups(scanned, groups)   the reverse: { edits, mine, place, order, seq } holding only what the
                                   user changed (order and seq only where they differ from what the scan gives).
            FlowScan.dataKinds(get)   the data halves of the four kinds a scan provides (captions, findings, notes,
-                                  connectors), in the order they are redrawn. get() gives the scan as read() returns it.
+                                  connectors), in the order the page lists them (the page's KINDS list is what sets the redraw order). get() gives
+                                  the scan as read() returns it.
                                   Each is { name, scanned(), clean?(items, { hasScreen, scanned }), resetBy?, counter? }:
                                   name is the field in the layout and on disk; scanned() the items the scan gives;
                                   clean what loading drops or repairs; resetBy "annotations" for a kind that "Reset
@@ -5542,8 +5543,8 @@
         }
 
         /* The data halves of the four kinds a scan provides: what FlowLayout needs to save, load and reset them.
-           The list order is also the order they are redrawn in (captions first; connectors, which are drawn from
-           where the frames are, last). get() gives the scan as read(): it is called each time, so a new scan is seen. */
+           get() gives the scan as read(): it is called each time, so a new scan is seen. The page decides the order
+           it lists the kinds in, and so the order they are redrawn in. */
         function dataKinds(get) {
           const scan = () => get() || {};
           const list = (k) => (Array.isArray(scan()[k]) ? scan()[k] : []);
@@ -5636,8 +5637,8 @@
            layout.restore(s)       put a snapshot back and save. Two things are not restored: the counters
                              (they never fall below an id the snapshot brings back) and the open state
                              of groups that still exist (view state, not an edit).
-           layout.reset()          groups, positions, connectors, findings and notes back to the scan, counters
-                             included, and save. Captions are left as they are (resetText puts them back).
+           layout.reset()          groups, positions and every kind back to the scan, counters included, and
+                             save. A kind with resetBy "annotations" (captions) is left as it is (resetText puts it back).
            layout.nextId(prefix)   the next id of a counter: "g" (groups) or a kind's own ("c": connectors); "c7" / "g4"
            layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
                              is its caller)
@@ -5947,6 +5948,7 @@
           });
           if (!Array.isArray(kinds)) throw new Error("FlowCommit.create: kinds is required");
           kinds.forEach((k) => {
+            if (!k.name) throw new Error("FlowCommit: every kind needs a name");
             if (typeof k.refresh !== "function") throw new Error('FlowCommit: "' + k.name + '" has no refresh');
           });
           const fns = { world: redraw.world, layout: redraw.layout };
@@ -5957,8 +5959,8 @@
           const ORDER = Object.keys(fns);
           const ALL = ORDER.filter((k) => k !== "world");
           /* the kinds a caller asked for, checked, so a typo fails before anything is changed */
-          const kindsOf = (kinds) => {
-            const list = kinds === "all" ? ALL : kinds || [];
+          const namesOf = (names) => {
+            const list = names === "all" ? ALL : names || [];
             list.forEach((k) => {
               if (!ORDER.includes(k)) throw new Error('FlowCommit: unknown redraw kind "' + k + '"');
             });
@@ -5969,23 +5971,23 @@
 
           /* the tail every edit shares: undo point, save, redraw. Nothing changed, nothing to record;
              a live gesture (alwaysRedraw) still redraws, because it moved things on screen. */
-          function finish(before, opts, kinds, alwaysRedraw) {
+          function finish(before, opts, names, alwaysRedraw) {
             if (layout.snapshot() === before) {
-              if (alwaysRedraw) redrawInOrder(kinds);
+              if (alwaysRedraw) redrawInOrder(names);
               return;
             }
             if (opts.undo !== false) layout.mark(before);
             layout.save();
-            redrawInOrder(kinds);
+            redrawInOrder(names);
           }
           function commit(change, opts = {}) {
-            const kinds = kindsOf(opts.redraw);
+            const names = namesOf(opts.redraw);
             if (running) {
-              kinds.forEach((k) => running.add(k));
+              names.forEach((k) => running.add(k));
               return change();
             }
             const before = layout.snapshot();
-            running = new Set(kinds);
+            running = new Set(names);
             let result, wanted;
             try {
               result = change();
@@ -5996,7 +5998,7 @@
             finish(before, opts, wanted, !!opts.force);
             return result;
           }
-          commit.since = (before, opts = {}) => finish(before, opts, kindsOf(opts.redraw), true);
+          commit.since = (before, opts = {}) => finish(before, opts, namesOf(opts.redraw), true);
           commit.undo = (afterRestore) => {
             if (!layout.undo()) return false;
             if (afterRestore) afterRestore();
@@ -6017,7 +6019,7 @@
          "is this an annotation" check. It is the one drag for annotation kinds; dragging frames or a group
          (FlowGesture), panning and drawing a connector or a marquee are different gestures with their own rules.
          A kind is one object that FlowLayout, FlowCommit and this module all read (the page declares one list
-         and hands it to each): this module reads the input half, described below. Items are ids: every method
+         and hands it to each): this module reads the view half's input fields, described below. Items are ids: every method
          takes the id of the item, and a kind keeps whatever it needs to find the item's DOM to itself. The
          module never touches the DOM and saves only through FlowCommit, so every move and delete is one
          undoable commit.
@@ -6039,7 +6041,7 @@
            annotations.keyDown(target, key, {shift})   true when handled: Delete/Backspace, arrow keys
            annotations.remove(kindName, id)     the same removal, for a × button
 
-         The input half of a kind. Only name is required; the rest depends on what the kind does, and create()
+         The input fields of a kind's view half. Only name is required; the rest depends on what the kind does, and create()
          refuses a movable kind that is missing origin, place or save.
            name                       also the kind's field in the layout and its redraw name in FlowCommit
            owns(target)               is target part of this kind (a kind without it is not part of owns())
@@ -6067,8 +6069,11 @@
           BURST_MS = 600;
 
         function create({ commit, kinds, threshold = 4, clock = Date.now, typing }) {
+          const seen = new Set();
           kinds.forEach((k) => {
             if (!k.name) throw new Error("FlowAnnotations: every kind needs a name");
+            if (seen.has(k.name)) throw new Error('FlowAnnotations: two kinds are named "' + k.name + '"');
+            seen.add(k.name);
             if (k.movable)
               for (const need of ["origin", "place", "save"])
                 if (typeof k[need] !== "function") throw new Error('FlowAnnotations: "' + k.name + '" is movable but has no ' + need);
@@ -6079,6 +6084,7 @@
           const keyOf = (f) => f.kind.name + "\u0000" + f.item;
           const find = (target, how) => {
             for (const kind of kinds) {
+              if (how === "delete" && typeof kind.erase !== "function") continue; /* a kind that cannot erase is never offered a delete */
               const item = kind.match && kind.match(target, how);
               if (item) return { kind, item };
             }
@@ -7622,7 +7628,11 @@
    kind in tests/kinds.test.mjs shows the whole cost.
    ====================================================================== */
       const DATA = FlowScan.dataKinds(() => SCAN);
-      const kind = (name, view) => ({ ...DATA.find((k) => k.name === name), ...view, name });
+      const kind = (name, view) => {
+        const data = DATA.find((k) => k.name === name);
+        if (!data) throw new Error('kind("' + name + '"): FlowScan.dataKinds has no such kind');
+        return { ...data, ...view, name };
+      };
 
       /* notes: a card on a frame or on the canvas */
       const noteOf = (id) => layout.notes.find((x) => x.id === id);
@@ -9202,7 +9212,8 @@
         removeFromGroup([...selSet]);
       }
       /* put the view back in order without touching what the flows are: group membership and order,
-         connectors, names, annotations and every note's text stay; only positions are reset on this device */
+         connectors, names, annotations and every note's text stay; only positions are reset on this device (a finding's
+         moved places on every device: they are carried across devices, see below) */
       function tidy() {
         const changed = commit(
           () => {
@@ -9219,7 +9230,7 @@
             const M = DEV.metrics;
             const { bottom } = FlowGeometry.arrange(geoInput(), M);
             loose.forEach((id, k) => (P[id] = FlowGeometry.loosePlace(k, bottom, M)));
-            /* findings back beside their frames; scanned notes back where the scan put them */
+            /* scanned notes back where the scan put them; findings are handled below */
             /* forgetting the user's position for this device puts a scanned card back where the scan put it */
             const forget = (item, scanned) => {
               if (!item.pos) return;

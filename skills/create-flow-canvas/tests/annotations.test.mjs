@@ -1,6 +1,6 @@
 /* Annotations module tests. FlowAnnotations owns what notes, scanner cards and connectors share: the
    drag (threshold, scale, cancel), the keyboard move, delete, and the "is this an annotation" check.
-   Each kind brings an adapter for what is its own. These tests use a stand-in kind ("dot") whose
+   Each kind brings its input fields for what is its own. These tests use a stand-in kind ("dot") whose
    positions live in layout.pos, plus the real layout and commit modules; there is no page.
    Run:  node --test skills/create-flow-canvas/tests/annotations.test.mjs   (from the repo root) */
 import { test } from "node:test";
@@ -73,7 +73,7 @@ test("past the threshold the item is lifted once and follows the pointer at worl
   assert.deepEqual(log, ["lift:a", "place:a:110,100", "place:a:120,110"]);
   log.length = 0;
   eq(annotations.up(), { moved: true });
-  assert.deepEqual(log, ["redraw:conns", "settle:a:moved"]); // the adapter's own redraw kinds, then the DOM clean-up
+  assert.deepEqual(log, ["redraw:conns", "settle:a:moved"]); // the kind's own redraw names, then the DOM clean-up
   eq(layout.pos.mobile.a, { x: 120, y: 110 });
   assert.equal(layout.undo(), true);
   eq(layout.pos.mobile.a, { x: 100, y: 100 });

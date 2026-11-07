@@ -129,6 +129,9 @@ test("a kind that is missing what a module reads is refused when the module is m
   const layout = FlowLayout.create({ ...base, kinds: [{ name: "x", scanned: () => [] }] });
   assert.throws(() => FlowCommit.create({ layout, kinds: [{ name: "x" }], redraw: { world() {}, layout() {} } }), /"x" has no refresh/);
   assert.throws(() => FlowCommit.create({ layout, kinds: [], redraw: { layout() {} } }), /missing redraw function for "world"/);
+  assert.throws(() => FlowCommit.create({ layout, kinds: [{ refresh() {} }], redraw: { world() {}, layout() {} } }), /every kind needs a name/);
+  assert.throws(() => FlowCommit.create({ layout, kinds: [{ name: "x", refresh() {} }, { name: "x", refresh() {} }], redraw: { world() {}, layout() {} } }), /"x" is taken/);
+  assert.throws(() => FlowAnnotations.create({ commit: () => {}, kinds: [{ name: "x" }, { name: "x" }] }), /two kinds are named "x"/);
   const movable = { name: "m", movable: true, refresh() {} };
   assert.throws(() => FlowAnnotations.create({ commit: () => {}, kinds: [movable] }), /"m" is movable but has no origin/);
 });
@@ -140,12 +143,12 @@ const code = (id) =>
     .replace(/^\s*\/\/.*$/gm, "");
 for (const id of ["layout-module", "commit-module", "annotations-module"]) {
   test(`${id}: no kind of the page is named in its code`, () => {
-    const names = [...code(id).matchAll(/["'.]\b(notes|scans|conns|caps)\b/g)].map((m) => m[1]);
+    const names = [...code(id).matchAll(/\b(notes|scans|conns|caps)\b/g)].map((m) => m[1]);
     assert.deepEqual(names, [], `${id} names ${names.join(", ")}`);
   });
 }
 
-/* One adapter style: a kind finds its DOM by id through its own registry. A handle hung on the element itself is the
+/* One style: a kind is found by id, and finds its own DOM from it. A handle hung on the element itself is the
    second style this seam replaced. */
 test("the page hangs no private handle on a card, and has one list of kinds", () => {
   assert.ok(!/\._scan\b/.test(html), "a finding card must not carry a _scan expando");
@@ -175,4 +178,11 @@ test("FlowScan.dataKinds: captions, findings, notes and connectors, in redraw or
   eq(by.caps.clean([{ id: "a", title: "mine" }, { id: "gone" }], { hasScreen: has, scanned: by.caps.scanned() }).map((c) => c.id), ["a", "b"]);
   scan.links = [];
   eq(by.conns.scanned(), [], "the scan is asked each time, so a new one is seen");
+});
+
+test("a kind that matches a delete but cannot erase is never offered one", () => {
+  const { annotations } = setup();
+  const quiet = FlowAnnotations.create({ commit: () => {}, kinds: [{ name: "q", match: () => "x" }] });
+  assert.equal(quiet.keyDown({}, "Delete", {}), false);
+  assert.equal(annotations.keyDown({ other: 1 }, "Delete", {}), false);
 });
