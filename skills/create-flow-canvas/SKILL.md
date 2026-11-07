@@ -21,7 +21,7 @@ Done so far: the layout (groups, positions per device, connectors, scanner cards
 - **Inspect panel:** route, source file, components (hover to spotlight on the frame, click to find every screen that uses it), states, notes.
 - **Devices:** the same scan rendered at mobile, tablet or desktop size.
 - **Tidy up:** puts groups and loose frames back in order without touching flows, groups or connectors.
-- **Persistence:** the layout (groups, positions, connectors, notes, scanner-finding changes) and the captions live in `localStorage`, under two keys; undo covers layout changes, not captions.
+- **Persistence:** the layout (groups with their titles and descriptions, positions, connectors, notes, scanner-finding changes) and the frame captions live in `localStorage`, under two keys; undo covers the layout, including group titles and descriptions, but not frame captions. Layouts and captions saved before group text moved into the layout are migrated on load.
 
 ## Intended workflow
 

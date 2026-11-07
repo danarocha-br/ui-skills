@@ -4568,15 +4568,29 @@
          scanner-card state and notes, plus the id counters and the undo history. It knows nothing about
          the page: no DOM, no screens, no demo data. Everything it needs is handed to create().
       
+         A group is { id, screens, open, title, sub, subOn }: its frames, whether it is fanned out, its
+         title (the text before a colon is its name), its description, and whether the description is
+         shown. The text belongs to the group, so it is saved, snapshotted, undone and reset with it, and
+         is gone when the group is. Frame captions are not part of the layout.
+
          Interface
-           const layout = FlowLayout.create({ key, storage, hasScreen, defaults })
+           const layout = FlowLayout.create({ key, storage, hasScreen, defaults, legacyGroupText? })
              key        localStorage key the layout is saved under
              storage    anything with getItem(key) / setItem(key, value)
              hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
-             defaults   () => { lanes, pos, conns, scans?, notes }, called for a fresh copy each time
+             defaults   () => { lanes, pos, conns, scans?, notes }, called for a fresh copy each time;
+                        a default group may carry title, sub and subOn (blank when it does not)
+             legacyGroupText  () => { [groupId]: { title, sub, on } }, the group text an older build kept
+                        elsewhere. Read once at load, only for groups that were saved without text, then
+                        saved into the layout. Optional; a throwing reader is ignored.
+           FlowLayout.groupName(group)   the short name: the title before its first colon, or
+                                         "Untitled group". Pure; never changes the group.
            layout.lanes layout.pos layout.conns layout.scans layout.notes
                       Live state. Read through layout every time, never keep your own reference:
                       restore, undo and reset swap the arrays and objects for new ones.
+           layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.lanes
+           layout.resetGroupText()   every group's title, description and visibility back to the scanned
+                                     text (blank for a group that was not scanned); the caller commits it
            layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
                              save by themselves.
            layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string
@@ -4597,6 +4611,18 @@
         /* id prefix -> the field the counter is saved in */
         const COUNTER_FIELD = { c: "cc", g: "gc" };
         const clone = (o) => JSON.parse(JSON.stringify(o));
+        const BLANK_TEXT = { title: "Untitled group", sub: "", subOn: false };
+        /* the short name of a group: its title up to the first colon */
+        const groupName = (g) => String((g && g.title) || "").split(":")[0].trim() || BLANK_TEXT.title;
+        /* what is persisted of a group; text a group does not have yet is blank */
+        const groupRecord = (g) => ({
+          id: g.id,
+          screens: g.screens,
+          open: g.open,
+          title: typeof g.title === "string" ? g.title : BLANK_TEXT.title,
+          sub: typeof g.sub === "string" ? g.sub : BLANK_TEXT.sub,
+          subOn: g.subOn === true,
+        });
         /* the highest number among ids like "c12": ids are never handed out twice */
         function highestId(list, prefix) {
           let top = 0;
@@ -4607,7 +4633,7 @@
           return top;
         }
 
-        function create({ key, storage, hasScreen, defaults }) {
+        function create({ key, storage, hasScreen, defaults, legacyGroupText }) {
           const layout = {};
           let history = [];
           let counters = { c: 0, g: 0 };
@@ -4615,12 +4641,36 @@
           function freshDefaults() {
             const d = clone(defaults());
             return {
-              lanes: d.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
+              lanes: d.lanes.map(groupRecord),
               pos: d.pos,
               conns: d.conns,
               scans: d.scans || {},
               notes: d.notes,
             };
+          }
+          /* the scanned text of a group, or blank when it is not a scanned group */
+          const scannedText = (id) => {
+            const l = defaults().lanes.find((x) => x.id === id);
+            const { title, sub, subOn } = l ? groupRecord(l) : BLANK_TEXT;
+            return { title, sub, subOn };
+          };
+          /* text an older build kept outside the layout: the fields that are usable, or null. Any field it
+             lacks keeps the scanned text, as the old loader merged it onto the defaults. */
+          function legacyText() {
+            try {
+              const all = (legacyGroupText && legacyGroupText()) || {};
+              return (id) => {
+                const e = all[id];
+                if (!e || typeof e !== "object") return null;
+                const out = {};
+                if (typeof e.title === "string") out.title = e.title;
+                if (typeof e.sub === "string") out.sub = e.sub;
+                if (typeof e.on === "boolean") out.subOn = e.on;
+                return Object.keys(out).length ? out : null;
+              };
+            } catch (e) {
+              return () => null;
+            }
           }
           const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.lanes, "g") });
           function adopt(state) {
@@ -4633,7 +4683,7 @@
           /* what is saved and snapshotted: lanes keep id, screens and open; the page keeps its own
              geometry on the same objects (x, top, pinned, el) and none of it is persisted */
           const persisted = () => ({
-            lanes: layout.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
+            lanes: layout.lanes.map(groupRecord),
             pos: layout.pos,
             conns: layout.conns,
             scans: layout.scans,
@@ -4643,9 +4693,20 @@
           function load() {
             const d = freshDefaults();
             const start = startCounters(d);
+            const legacy = legacyText();
+            let migrated = false;
             const fallBack = () => {
+              /* no layout yet: the user's old group text, if there is any, goes onto the default groups */
+              d.lanes.forEach((l) => {
+                const old = legacy(l.id);
+                if (old) {
+                  Object.assign(l, old);
+                  migrated = true;
+                }
+              });
               adopt(d);
               counters = start;
+              if (migrated) layout.save();
             };
             let st = null;
             try {
@@ -4658,7 +4719,15 @@
               st.lanes.forEach((l) => {
                 const sc = ((l && l.screens) || []).filter((id) => hasScreen(id) && !seen.has(id));
                 sc.forEach((id) => seen.add(id));
-                if (sc.length) lanes.push({ id: l.id, screens: sc, open: !!l.open });
+                if (!sc.length) return;
+                const g = { id: l.id, screens: sc, open: !!l.open };
+                if (typeof l.title === "string") Object.assign(g, groupRecord({ ...l, screens: sc, open: g.open }));
+                else {
+                  /* saved before groups carried their text: the old annotations, else the scanned text */
+                  Object.assign(g, scannedText(l.id), legacy(l.id));
+                  migrated = true;
+                }
+                lanes.push(g);
               });
               const out = {
                 lanes,
@@ -4676,6 +4745,7 @@
                 c: Math.max(Number(st.cc) || start.c, highestId(out.conns, "c")),
                 g: Math.max(Number(st.gc) || start.g, highestId(out.lanes, "g")),
               };
+              if (migrated) layout.save();
             } catch (e) {
               fallBack();
             }
@@ -4696,7 +4766,7 @@
             const shown = new Map(layout.lanes.map((l) => [l.id, l.open]));
             st.lanes.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
             adopt({
-              lanes: st.lanes,
+              lanes: st.lanes.map(groupRecord),
               pos: st.pos,
               conns: st.conns || layout.conns,
               scans: st.scans || {},
@@ -4715,6 +4785,8 @@
             counters = startCounters(d);
             layout.save();
           };
+          layout.newGroup = (screens) => ({ id: layout.nextId("g"), screens, open: true, ...BLANK_TEXT });
+          layout.resetGroupText = () => layout.lanes.forEach((l) => Object.assign(l, scannedText(l.id)));
           layout.nextId = (kind) => {
             if (!COUNTER_FIELD[kind]) throw new Error("FlowLayout.nextId: unknown kind " + kind);
             counters[kind] += 1;
@@ -4735,7 +4807,7 @@
           return layout;
         }
 
-        return { create };
+        return { create, groupName };
       })();
     </script>
 
@@ -5085,18 +5157,27 @@
           screens: ["s1", "s2", "s3", "s4"],
           meta: "app/(onboarding)/* · 11 shared components",
           open: true,
+          title: "Onboarding: how fast to a first plant?",
+          sub: "Four screens, one promise: by the end, Loam knows what you own and when to nudge you. Rendered from the real routes with sample data.",
+          subOn: true,
         },
         {
           id: "g2",
           screens: ["s5", "s6", "s7"],
           meta: "app/(app)/plants/* · 2 shared dialogs",
           open: false,
+          title: "First use: add a plant without leaving Home",
+          sub: "A dialog over Home instead of a new page. Search, pick, read the care plan, done. AddPlantDialog is shared with Settings, so changes here ripple there.",
+          subOn: true,
         },
         {
           id: "g3",
           screens: ["s8", "s9"],
           meta: "app/(app)/upgrade/* · entry from Settings",
           open: false,
+          title: "Upgrade: ask once, when it matters",
+          sub: "Reached from Settings. Yearly is pre-selected and the free trial is the first thing priced. Payment is stubbed on the canvas.",
+          subOn: true,
         },
       ];
       const ORDER = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"];
@@ -5500,25 +5581,10 @@
       const svgNS = "http://www.w3.org/2000/svg";
 
       /* ======================================================================
-   ANNOTATIONS: the author's voice. Headline + standfirst per flow, a caption per screen.
-   Edited in place, removable, remembered in this browser.
+   ANNOTATIONS: the author's voice. A caption per screen is kept here (ANN_KEY). A group's title and description
+   are part of the layout (FlowLayout, saved under the layout key and undone with it). Both are edited in place.
    ====================================================================== */
       const ANN_DEFAULT = {
-        g1: {
-          title: "Onboarding: how fast to a first plant?",
-          sub: "Four screens, one promise: by the end, Loam knows what you own and when to nudge you. Rendered from the real routes with sample data.",
-          on: true,
-        },
-        g2: {
-          title: "First use: add a plant without leaving Home",
-          sub: "A dialog over Home instead of a new page. Search, pick, read the care plan, done. AddPlantDialog is shared with Settings, so changes here ripple there.",
-          on: true,
-        },
-        g3: {
-          title: "Upgrade: ask once, when it matters",
-          sub: "Reached from Settings. Yearly is pre-selected and the free trial is the first thing priced. Payment is stubbed on the canvas.",
-          on: true,
-        },
         s1: {
           title: "One promise, one field",
           body: "No account wall. The email is collected here and the password comes later, once a plant is on the shelf.",
@@ -5571,12 +5637,19 @@
         const d = clone(ANN_DEFAULT);
         try {
           const st = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
-          for (const k in st) {
-            if (d[k]) Object.assign(d[k], st[k]);
-            else if (/^g\d+$/.test(k)) d[k] = st[k];
-          }
+          for (const k in st) if (d[k]) Object.assign(d[k], st[k]);
         } catch (e) {}
         return d;
+      }
+      /* Group titles and descriptions used to be kept here, under the group's id. They live on the group
+         now; this is read once, so a layout saved before the move keeps its names. */
+      function legacyGroupText() {
+        const out = {};
+        try {
+          const st = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
+          for (const k in st) if (/^g\d+$/.test(k)) out[k] = st[k];
+        } catch (e) {}
+        return out;
       }
       let ANN = loadAnn(),
         annT;
@@ -5609,10 +5682,9 @@
     <button class="cx" title="Remove annotation" aria-label="Remove annotation">${X_ICON}</button>
     <button class="cadd">${ADD_ICON}Add description</button></div>`;
       }
-      function gsubHTML(id) {
-        const a = ANN[id];
-        return `<div class="gsubw ann${a.on ? "" : " off"}" data-k="${id}">
-    <p class="gsub" contenteditable="${CE}" spellcheck="false" data-f="sub" data-ph="Say what this flow is for" role="textbox" aria-label="Flow description">${esc(a.sub)}</p>
+      function gsubHTML(L) {
+        return `<div class="gsubw ann${L.subOn ? "" : " off"}" data-k="${L.id}">
+    <p class="gsub" contenteditable="${CE}" spellcheck="false" data-f="sub" data-ph="Say what this flow is for" role="textbox" aria-label="Flow description">${esc(L.sub)}</p>
     <button class="cx" title="Remove description" aria-label="Remove description">${X_ICON}</button>
     <button class="cadd">${ADD_ICON}Add description</button></div>`;
       }
@@ -5625,15 +5697,14 @@
             f.textContent = a[f.dataset.f];
           });
         });
-        document.querySelectorAll(".gtitle[data-k]").forEach((f) => {
-          f.textContent = ANN[f.dataset.k].title;
-        });
       }
       function resetAnn() {
         ANN = clone(ANN_DEFAULT);
         try {
           localStorage.removeItem(ANN_KEY);
         } catch (e) {}
+        /* the groups' text is part of the layout: put back by a commit, so ⌘Z brings it back */
+        commit(() => layout.resetGroupText(), { redraw: ["layout"] });
         fillAnn();
         toast("Annotations reset to the scanned copy");
       }
@@ -5651,9 +5722,27 @@
         const f = e.target.closest("[data-f]");
         if (!f) return;
         const w = f.closest("[data-k]");
-        if (!w || !ANN[w.dataset.k]) return;
-        ANN[w.dataset.k][f.dataset.f] = f.textContent;
-        saveAnn();
+        if (!w) return;
+        const L = groupById(w.dataset.k);
+        if (L) {
+          /* live while typing; the undo step is recorded when the field is left (below) */
+          L[f.dataset.f] = f.textContent;
+          saveNotesSoon();
+        } else if (ANN[w.dataset.k]) {
+          ANN[w.dataset.k][f.dataset.f] = f.textContent;
+          saveAnn();
+        }
+      });
+      /* one undo step per visit to a group's title or description, not one per keystroke */
+      let groupEdit = null;
+      world.addEventListener("focusin", (e) => {
+        if (e.target.closest(".gtitle,.gsub")) groupEdit = { before: layout.snapshot() };
+      });
+      world.addEventListener("focusout", (e) => {
+        if (!groupEdit || !e.target.closest(".gtitle,.gsub")) return;
+        const { before } = groupEdit;
+        groupEdit = null;
+        commit.since(before);
       });
       world.addEventListener("keydown", (e) => {
         const f = e.target.closest && e.target.closest("[data-f]");
@@ -5692,9 +5781,13 @@
           const w = b.closest("[data-k]"),
             k = w.dataset.k,
             on = b.classList.contains("cadd");
-          ANN[k].on = on;
+          const L = groupById(k);
+          if (L) commit(() => (L.subOn = on));
+          else {
+            ANN[k].on = on;
+            saveAnn();
+          }
           w.classList.toggle("off", !on);
-          saveAnn();
           if (on)
             caretEnd(
               w.querySelector("[data-f]:not(.ctt)") ||
@@ -5829,6 +5922,7 @@
           getItem: (k) => localStorage.getItem(k),
           setItem: (k, v) => localStorage.setItem(k, v),
         },
+        legacyGroupText,
         hasScreen: (id) => !!SCREENS[id],
         defaults: () => ({
           lanes: DEFAULT_LANES,
@@ -5838,6 +5932,15 @@
           scans: {} /* scanner findings: { "frame:kind": { gone, pos: { device: [left, top] } } } */,
         }),
       });
+      /* the layout has taken in the old copies of the groups' text (and saved them), so they can go */
+      (function dropLegacyGroupText() {
+        try {
+          const st = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
+          const old = Object.keys(st).filter((k) => /^g\d+$/.test(k));
+          old.forEach((k) => delete st[k]);
+          if (old.length) localStorage.setItem(ANN_KEY, JSON.stringify(st));
+        } catch (e) {}
+      })();
       /* open or closed is view state: saved and redrawn, never an undo step */
       const VIEW_STATE = { undo: false, redraw: ["layout"] };
       /* every edit ends here: undo point, save, redraw, in one fixed order */
@@ -5981,15 +6084,8 @@
           d.screens.every((s) => L.screens.includes(s))
         );
       }
-      function laneName(L) {
-        ensureAnn(L.id);
-        return (ANN[L.id].title || "").split(":")[0].trim() || "Untitled group";
-      }
-      /* a group made now gets a blank caption, even if an old group once had this id (after Reset layout) */
-      const freshAnn = (id) => (ANN[id] = { title: "Untitled group", sub: "", on: false });
-      function ensureAnn(id) {
-        if (!ANN[id]) freshAnn(id);
-      }
+      const laneName = FlowLayout.groupName;
+      const groupById = (id) => layout.lanes.find((l) => l.id === id);
 
       function placeLanes() {
         let top = TOP0;
@@ -6098,13 +6194,12 @@
 
       /* a group's own objects: headline, standfirst, edges between consecutive frames */
       function makeLane(L) {
-        ensureAnn(L.id);
         const el = document.createElement("section");
         el.className = "lane";
         el.id = L.id;
         el.innerHTML = `<div class="ghead">
-      <div class="gt"><button class="grip" title="Drag to move this group" aria-label="Drag to move group"><svg><use href="#i-grip"/></svg></button><button class="chev" title="Open or close this group" aria-label="Open or close group"><svg><use href="#i-chevup"/></svg></button><h2 class="gtitle" contenteditable="${CE}" spellcheck="false" data-k="${L.id}" data-f="title" data-ph="Name this group" role="textbox" aria-label="Group name">${esc(ANN[L.id].title)}</h2></div>
-      ${gsubHTML(L.id)}
+      <div class="gt"><button class="grip" title="Drag to move this group" aria-label="Drag to move group"><svg><use href="#i-grip"/></svg></button><button class="chev" title="Open or close this group" aria-label="Open or close group"><svg><use href="#i-chevup"/></svg></button><h2 class="gtitle" contenteditable="${CE}" spellcheck="false" data-k="${L.id}" data-f="title" data-ph="Name this group" role="textbox" aria-label="Group name">${esc(L.title)}</h2></div>
+      ${gsubHTML(L)}
       <div class="gs"><span class="gcount"></span><span class="gmeta"></span><button class="fplay" title="Play flow"><svg><use href="#i-play"/></svg><span>Play flow</span></button><button class="fmore" title="Group options" aria-label="Group options"><svg><use href="#i-more"/></svg></button></div>
     </div>
     <div class="content"><div class="dz"></div></div>`;
@@ -6147,6 +6242,17 @@
           });
         }
       }
+      /* the group's title and description as the layout has them (after an undo, a reset, a load); the field
+         being typed in is left alone */
+      function showGroupText(L) {
+        const put = (sel, text) => {
+          const f = L.el.querySelector(sel);
+          if (f !== document.activeElement && f.textContent !== text) f.textContent = text;
+        };
+        put(".gtitle", L.title);
+        put(".gsub", L.sub);
+        L.el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
+      }
       function syncLanes() {
         const ids = new Set(layout.lanes.map((l) => l.id));
         document.querySelectorAll(".lane").forEach((e) => {
@@ -6156,6 +6262,7 @@
           let el = document.getElementById(L.id);
           if (!el) el = makeLane(L);
           L.el = el;
+          showGroupText(L);
           const n = L.screens.length;
           el.style.left = L.x + "px";
           el.style.top = L.top + "px";
@@ -7673,13 +7780,11 @@
             L.screens = L.screens.filter((x) => !ids.includes(x));
           });
           pruneLanes();
-          const L = { id: layout.nextId("g"), screens: ids, open: true };
+          const L = layout.newGroup(ids);
           layout.lanes.push(L);
           dropPos(ids);
           if (allFree)
             posOf()[L.id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
-          freshAnn(L.id);
-          saveAnn();
           return L;
         };
         /* a drag-end merge commits itself, from the snapshot taken when the drag began */

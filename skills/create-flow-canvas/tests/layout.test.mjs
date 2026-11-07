@@ -31,6 +31,9 @@ const DEFAULTS = {
   scans: {},
 };
 
+/* the text a default group has when nothing else says otherwise: none in these defaults, so blank */
+const DEFAULTS_TEXT = { g2: { title: "Untitled group", sub: "", subOn: false }, g3: { title: "Untitled group", sub: "", subOn: false } };
+
 const memory = (seed = {}) => {
   const data = { ...seed };
   return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => void (data[k] = String(v)) };
@@ -51,7 +54,7 @@ const plain = (layout) => JSON.parse(layout.snapshot());
 test("empty storage gives the defaults, without page-only fields", () => {
   const layout = make();
   eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g3"]);
-  eq(Object.keys(layout.lanes[0]), ["id", "screens", "open"]);
+  eq(Object.keys(layout.lanes[0]), ["id", "screens", "open", "title", "sub", "subOn"]);
   assert.equal(layout.conns.length, 6);
   eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
   eq(layout.scans, {});
@@ -83,16 +86,25 @@ test("save then load round-trips every kind and the counters", () => {
   assert.equal(b.nextId("g"), "g5");
 });
 
-test("a saved v1 layout from the real canvas loads unchanged and saves back byte for byte", () => {
+test("a layout saved by the real canvas before groups carried their text loads with everything else unchanged", () => {
+  /* the fixture predates the title/sub/subOn fields on a group; they are filled in on load and saved */
   const raw = fs.readFileSync(path.join(here, "fixtures/saved-layout-v1.json"), "utf8").trim();
   const storage = memory({ [KEY]: raw });
   const layout = make(storage);
   const saved = JSON.parse(raw);
-  eq(plain(layout), { lanes: saved.lanes, pos: saved.pos, conns: saved.conns, scans: saved.scans, notes: saved.notes });
-  layout.save();
-  assert.equal(storage.data[KEY], raw);
+  eq(plain(layout), {
+    lanes: saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })),
+    pos: saved.pos,
+    conns: saved.conns,
+    scans: saved.scans,
+    notes: saved.notes,
+  });
+  const onDisk = JSON.parse(storage.data[KEY]);
+  eq({ ...onDisk, lanes: null }, { ...saved, lanes: null }, "everything but the groups is saved back as it was");
   assert.equal(layout.nextId("c"), "c8");
   assert.equal(layout.nextId("g"), "g5");
+  /* from here on the file is in the new shape and loads as it is */
+  assert.equal(make(storage).snapshot(), layout.snapshot());
 });
 
 test("load drops what no longer exists", () => {
@@ -116,9 +128,10 @@ test("load drops what no longer exists", () => {
     gc: 1,
   };
   const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
+  const blank = { title: "Untitled group", sub: "", subOn: false };
   eq(layout.lanes, [
-    { id: "g1", screens: ["s1", "s2"], open: true },
-    { id: "g2", screens: ["s3"], open: false },
+    { id: "g1", screens: ["s1", "s2"], open: true, ...blank },
+    { id: "g2", screens: ["s3"], open: false, ...blank },
   ]);
   eq(layout.conns.map((c) => c.id), ["c1"]);
   eq(layout.scans, {});
@@ -154,7 +167,7 @@ test("snapshot leaves out page-only group fields and the counters", () => {
   Object.assign(layout.lanes[0], { x: 5, top: 6, pinned: true, el: { not: "serialisable" } });
   const s = plain(layout);
   eq(Object.keys(s), ["lanes", "pos", "conns", "scans", "notes"]);
-  eq(Object.keys(s.lanes[0]), ["id", "screens", "open"]);
+  eq(Object.keys(s.lanes[0]), ["id", "screens", "open", "title", "sub", "subOn"]);
 });
 
 test("restore puts a snapshot back, replaces the live objects, and saves", () => {
