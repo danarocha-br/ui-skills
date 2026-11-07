@@ -7216,7 +7216,9 @@
       /* ======================================================================
          POINTER MODULE
          Decides what a press, a move and a release mean on the canvas: pan, drag a frame or a group, draw a marquee,
-         draw a connector from an edge dot, drag a note or a finding card, or nothing. The page used to hold this as
+         draw a connector from an edge dot, drag a note or a finding card, or nothing. Its own mode is idle, press, pan,
+         marquee or connect; whether a frame drag (FlowGesture) or an annotation drag (FlowAnnotations) is live is asked of
+         the host each time, because those two own that fact. The page used to hold this as
          seven flags (pan, moved, press, mq, connDrag, handMode, spaceDown) read by four handlers; here it is one mode
          and the rules for moving between modes, in one place. Everything it makes happen is done by the page, through
          the host. It knows no DOM: the page says what was pressed (a "hit") and where, in screen pixels.

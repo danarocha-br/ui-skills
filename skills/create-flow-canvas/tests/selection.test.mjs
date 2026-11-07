@@ -3,7 +3,7 @@
    Run:  node --test skills/create-flow-canvas/tests/selection.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FlowPanel, FlowSelection } from "./modules.mjs";
+import { FlowPanel, FlowSelection, html } from "./modules.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const make = (...a) => FlowSelection.create(...a);
@@ -246,4 +246,28 @@ test("follows can be turned off", () => {
   off();
   sel.set(["s2"]);
   assert.equal(shown(panel), "s1");
+});
+
+/* ---------- the page goes through it ---------- */
+
+/* the page's script, comments left out */
+const page = (() => {
+  const m = html.match(/^\s*<script>\n([\s\S]*?)<\/script>/m);
+  assert.ok(m, "the page's script block is not found");
+  return m[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+})();
+
+test("the page keeps no selection of its own, and tells the panel nothing by hand", () => {
+  assert.deepEqual(page.match(/\b(selSet|selConn)\b|\blet selected\b/g) || [], [], "the old variables are gone");
+  assert.deepEqual(page.match(/\bpanel\.follow\(/g) || [], [], "FlowSelection.follows is the one place the panel is told");
+  assert.equal((page.match(/FlowSelection\.follows\(selection, panel\)/g) || []).length, 1);
+});
+
+test("every way the page changes the selection goes through the module", () => {
+  assert.deepEqual(page.match(/\bselection\.(set|toggle|selectConn|clearConn|prune)\b/g)?.length > 0, true);
+  /* the click, marquee, select-all, drag start, group, undo and reset paths all call setSel or select, which are selection.set */
+  const body = (name) => page.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n      \\}`))?.[0] || "";
+  for (const fn of ["beginDrag", "updateMarquee", "afterGrouped", "select"]) assert.match(body(fn), /\bsetSel\(/, fn);
+  assert.match(page, /ORDER\.filter\(\(id\) => geo\.place\(id\) && !geo\.place\(id\)\.deck\);\s*setSel\(ids/, "select all");
+  assert.match(page, /selection\.toggle\(id\)/, "shift-click");
 });
