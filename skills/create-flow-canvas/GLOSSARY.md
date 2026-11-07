@@ -80,3 +80,15 @@ _Avoid_: Override, patch
 **Caption**:
 A title and a body typed in place under a frame. It is an annotation, but not part of the layout. (A group's own title and description are part of the group, not captions.)
 _Avoid_: Heading
+
+**Panel**:
+The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none). The panel's **inset** is what it takes from the window; the camera leaves it free, so frames are centred in what is left, and a resize centres them again. In code, `FlowPanel`; the page only paints what it says.
+_Avoid_: Sidebar, drawer, inspector (that is Inspect's label to a screen reader)
+
+**Sweep**:
+Finding every screen that uses a component: those screens keep their colour, the rest recede, and a list of them is shown in Inspect. It belongs to the panel: it exists only while Inspect is open, survives a change of screen or of device, and ends with Escape, a second click on the component, opening Search or closing the panel.
+_Avoid_: Find usages, highlight, filter
+
+**Instances and uses**:
+Two counts that answer two questions. The **instances** of a component are how many of it are on a screen in the state shown now (counted from the frame itself, so "—" when a state does not show it). Its **uses** are the screens the scan says use it ("used on 3 of 9 screens"). A screen can use a component it does not show in the current state, so the two need not agree.
+_Avoid_: Count (alone)

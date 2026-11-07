@@ -6721,6 +6721,139 @@
       })();
     </script>
 
+    <script id="panel-module">
+      /* ======================================================================
+         PANEL MODULE
+         The side panel (a sheet along the bottom on a narrow window) shows Inspect or Search. This module is the
+         one place that knows whether it is open, which mode, which screen Inspect is about, which component is
+         being swept ("find every screen that uses it"), and how much of the window it takes. The page does not
+         keep a second copy of any of that: it listens, and paints what the module says. No DOM, no product
+         knowledge: the page hands it the one question it cannot answer itself.
+
+         Interface
+           const panel = FlowPanel.create({ usesOf, narrowAt? })
+             usesOf    (component) => [screen ids that use it], from the scan
+             narrowAt  a window this wide or narrower gets a sheet instead of a side panel (default 720, the stylesheet's breakpoint)
+           Every call below that changes something returns true, and one that changes nothing returns false.
+           panel.open(mode, subject?)     "inspect" | "search"; anything else throws. Inspect takes the screen it is
+                                          about (or none); Search takes no subject. Opening Search clears a sweep.
+           panel.close()                  puts everything away, the sweep too; the last mode is remembered
+           panel.toggle(mode, subject?)   closes when that mode is already showing, opens it otherwise
+           panel.follow(subject)          the selection moved: Inspect now shows that screen (or none). Only while
+                                          Inspect is open.
+           panel.sweep(component)         sweep it; sweeping what is swept already changes nothing. Only in Inspect,
+                                          and only for a component some screen uses.
+           panel.toggleSweep(component)   a click on its chip: on, off, or over to another
+           panel.clearSweep()
+           panel.state() -> { open, mode, subject, label, sweep }
+                                          label: what the panel is called to a screen reader ("Inspector", "Search")
+                                          sweep: { component, uses: [ids] }, or null. A copy: change it and nothing happens.
+           panel.insets({ width, height }) -> { right, bottom }   the inset it takes from the window right now, which the
+                                          camera leaves free. Asked for each time, so a resize is answered for its new size.
+           panel.on(listener) -> off      listener(state, change) after every change, never for a call that changed
+                                          nothing. change: { opened, closed, mode, subject, sweep }, each true when
+                                          that part changed (closing a sweep that was on says sweep: true as well).
+         ====================================================================== */
+      var FlowPanel = (function () {
+        "use strict";
+        const MODES = { inspect: "Inspector", search: "Search" };
+        const SIDE = { share: 0.48, max: 560 };
+        const SHEET = { share: 0.46, max: 430 };
+
+        function create({ usesOf, narrowAt = 720 }) {
+          let open = false,
+            mode = "search",
+            subject = null,
+            sweepOf = null; /* the component being swept */
+          const listeners = new Set();
+          const uses = (c) => [...usesOf(c)];
+
+          const snapshot = () => ({ open, mode, subject, sweepOf });
+          function changed(before, after) {
+            return {
+              opened: !before.open && after.open,
+              closed: before.open && !after.open,
+              mode: before.mode !== after.mode,
+              subject: before.subject !== after.subject,
+              sweep: before.sweepOf !== after.sweepOf,
+            };
+          }
+          const state = () => ({
+            open,
+            mode,
+            subject,
+            label: MODES[mode],
+            sweep: sweepOf === null ? null : { component: sweepOf, uses: uses(sweepOf) },
+          });
+          /* run a change, then tell the listeners if it was one */
+          function run(fn) {
+            const before = snapshot();
+            fn();
+            const change = changed(before, snapshot());
+            if (!Object.values(change).some(Boolean)) return false;
+            listeners.forEach((l) => l(state(), change));
+            return true;
+          }
+          const inInspect = () => open && mode === "inspect";
+
+          const api = {
+            open(next, on) {
+              if (!MODES[next]) throw new Error(`FlowPanel: no mode "${next}" (there are ${Object.keys(MODES).join(", ")})`);
+              return run(() => {
+                open = true;
+                mode = next;
+                subject = next === "inspect" ? on || null : null;
+                if (next !== "inspect") sweepOf = null;
+              });
+            },
+            close() {
+              return run(() => {
+                open = false;
+                subject = null;
+                sweepOf = null;
+              });
+            },
+            toggle(next, on) {
+              return open && mode === next ? api.close() : api.open(next, on);
+            },
+            follow(on) {
+              if (!inInspect()) return false;
+              return run(() => {
+                subject = on || null;
+              });
+            },
+            sweep(c) {
+              if (!inInspect() || !uses(c).length) return false;
+              return run(() => {
+                sweepOf = c;
+              });
+            },
+            toggleSweep(c) {
+              return sweepOf === c ? api.clearSweep() : api.sweep(c);
+            },
+            clearSweep() {
+              if (sweepOf === null) return false;
+              return run(() => {
+                sweepOf = null;
+              });
+            },
+            state,
+            insets({ width, height }) {
+              if (!open) return { right: 0, bottom: 0 };
+              if (width <= narrowAt) return { right: 0, bottom: Math.round(Math.min(height * SHEET.share, SHEET.max)) };
+              return { right: Math.min(SIDE.max, width * SIDE.share), bottom: 0 };
+            },
+            on(listener) {
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+          };
+          return api;
+        }
+        return { create };
+      })();
+    </script>
+
     <script>
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
@@ -6788,13 +6921,13 @@
             return `<small>Scanner · reused</small><code>${esc(f.component)}</code> is used by <button class="hop" data-act="go">${all.length} routes</button>. Edits here will ripple to ${andList(others.map(hopTo))}.`;
           },
           tie(f, col, on) {
-            if (on && !col.classList.contains("deck")) spotlight(f.frame, f.component);
-            else clearSpot();
+            if (on && !col.classList.contains("deck")) FrameDom.spotlight(f.frame, f.component);
+            else FrameDom.clearSpot();
           },
           act(f) {
             select(f.frame, true);
-            inspect(f.frame);
-            if (usageComp !== f.component) sweep(f.component);
+            panel.open("inspect", f.frame);
+            panel.sweep(f.component);
           },
         },
       };
@@ -7667,13 +7800,17 @@
         }
       }
 
+      /* the screens that use a component, from the scan; and the panel that sweeps them (see FlowPanel) */
+      const usesOf = (c) => ORDER.filter((x) => SCREENS[x].components.includes(c));
+      const panel = FlowPanel.create({ usesOf });
+
       /* ======================================================================
    CAMERA
    ====================================================================== */
       let cam = { x: 0, y: 0, k: 0.6 },
-        flyTimer,
-        insetR = 0,
-        insetB = 0;
+        flyTimer;
+      /* the inset the panel takes from the window, which the camera leaves free; asked for each time */
+      const panelInset = () => panel.insets({ width: innerWidth, height: innerHeight });
       const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
       const toWorld = (cx, cy) => ({
         x: (cx - cam.x) / cam.k,
@@ -7692,8 +7829,9 @@
         flyTimer = setTimeout(() => stage.classList.remove("fly"), dur + 60);
       }
       function fitRect(r, pad = 60, maxK = 2) {
-        const vw = Math.max(240, innerWidth - insetR),
-          vh = Math.max(240, innerHeight - insetB),
+        const inset = panelInset(),
+          vw = Math.max(240, innerWidth - inset.right),
+          vh = Math.max(240, innerHeight - inset.bottom),
           k = clamp(
             Math.min((vw - pad * 2) / r.w, (vh - pad * 2 - 56) / r.h),
             0.1,
@@ -7814,8 +7952,7 @@
         selected =
           primary !== undefined ? primary : ids[ids.length - 1] || null;
         reflectSel();
-        if (!selected && typeof panelOpen !== "undefined" && panelOpen && panelMode === "inspect")
-          inspectEmpty();
+        if (!selected) panel.follow(null);
       }
       function select(id, focus) {
         if (id) {
@@ -7824,7 +7961,7 @@
         }
         setSel(id ? [id] : [], id || null);
         if (focus && id) focusScreen(id);
-        if (id && panelOpen && panelMode === "inspect") inspect(id, true, true);
+        if (id) panel.follow(id);
       }
       function go(from, to) {
         const hop = layout.conns.find((c) => c.from === from && c.to === to);
@@ -7832,10 +7969,11 @@
         select(to, false);
         const r = geo.screenRect(to);
         if (cam.k >= 0.8) {
+          const inset = panelInset();
           fly({
             k: cam.k,
-            x: (innerWidth - insetR) / 2 - (r.x + r.w / 2) * cam.k,
-            y: (innerHeight - insetB) / 2 - (r.y + r.h / 2) * cam.k,
+            x: (innerWidth - inset.right) / 2 - (r.x + r.w / 2) * cam.k,
+            y: (innerHeight - inset.bottom) / 2 - (r.y + r.h / 2) * cam.k,
           });
         } else focusScreen(to);
       }
@@ -7846,7 +7984,7 @@
         const id = selected || [...selSet][0],
           L = laneOf(id);
         if (a === "focus") focusScreen(id);
-        if (a === "inspect") inspect(id);
+        if (a === "inspect") panel.open("inspect", id);
         if (a === "comment")
           createNote({ text: "Add a comment…", frame: id, local: FlowDevice.restingSpot(DEV.id, 60) });
         if (a === "play") {
@@ -7860,130 +7998,29 @@
         if (a === "ungroup") removeSel();
       });
 
-      /* panel: search + inspect share the right-hand half, like Spatial's search */
-      const panel = $("#panel"),
+      /* panel: search + inspect share the right-hand half, like Spatial's search. FlowPanel (above) owns whether it is
+         open, its mode, its screen and the sweep; paintPanel is the one place that turns that into the page. */
+      const panelEl = $("#panel"),
         pbody = $("#pbody"),
         ptitle = $("#ptitle");
-      let panelOpen = false,
-        panelMode = "search";
-      const panelW = () =>
-        innerWidth < 720 ? 0 : Math.min(560, innerWidth * 0.48);
-      const panelH = () =>
-        innerWidth < 720 ? Math.round(Math.min(innerHeight * 0.46, 430)) : 0;
       let panelReturn = null;
-      function showPanel(mode) {
-        const was = panelOpen;
-        panelMode = mode;
-        panelOpen = true;
-        panel.inert = false;
-        panel.setAttribute("aria-label", mode === "search" ? "Search" : "Inspector");
-        if (!was) panelReturn = document.activeElement;
-        panel.classList.add("open");
-        insetR = panelW();
-        insetB = panelH();
-        if (selected) focusScreen(selected);
-        /* a keyboard user who opens the inspector lands in it; closing hands focus back */
-        if (mode === "inspect" && !was)
-          setTimeout(() => {
-            if (panelOpen) ptitle.focus({ preventScroll: true });
-          }, 60);
-      }
-      function closePanel() {
-        if (!panelOpen) return;
-        clearSpot();
-        if (usageComp !== null) {
-          usageComp = null;
-          ORDER.forEach((id) => {
-            const c = colOf(id);
-            if (c) c.classList.remove("u-hit", "u-dim");
-          });
-        }
-        panelOpen = false;
-        panel.classList.remove("open");
-        insetR = 0;
-        insetB = 0;
-        const back = panelReturn;
-        panelReturn = null;
-        if (panel.contains(document.activeElement)) {
-          if (back && back !== document.body && document.contains(back) && !panel.contains(back) && back.focus) back.focus({ preventScroll: true });
-          else document.activeElement.blur();
-        }
-        panel.inert = true;
-        if (selected) focusScreen(selected);
-      }
-      $("#pclose").onclick = closePanel;
-      /* ---------- inspect: trace a component to the pixels, and to every screen that reuses it ---------- */
-      /* where each component shows up in a screen: from the scan (COMP_SEL, above) */
-      let usageComp = null;
-      const compEls = (id, c) => {
-        const ph = document.getElementById("p-" + id);
-        if (!ph || !COMP_SEL[c]) return [];
-        return [...ph.querySelectorAll(COMP_SEL[c])].filter(
-          (el) => el.offsetWidth > 0 && !el.closest(".spot"),
-        );
+      const setTitle = (text, sub) => {
+        ptitle.innerHTML = esc(text) + (sub ? `<span class="psub">${esc(sub)}</span>` : "");
       };
-      const usesOf = (c) => ORDER.filter((x) => SCREENS[x].components.includes(c));
-      function clearSpot() {
-        document.querySelectorAll(".spot,.spotlbl").forEach((n) => n.remove());
-      }
-      function spotlight(id, c) {
-        clearSpot();
-        const ph = document.getElementById("p-" + id);
-        const els = compEls(id, c);
-        if (!ph || !els.length) return;
-        const pr = ph.getBoundingClientRect(),
-          sc = pr.width / ph.offsetWidth,
-          W = ph.offsetWidth,
-          H = ph.offsetHeight;
-        const rects = els.map((el) => {
-          const r = el.getBoundingClientRect();
-          const x = Math.max(0, (r.left - pr.left) / sc - 3),
-            y = Math.max(0, (r.top - pr.top) / sc - 3);
-          return {
-            x,
-            y,
-            w: Math.min(W - x, r.width / sc + 6),
-            h: Math.min(H - y, r.height / sc + 6),
-          };
-        });
-        const rad = (r) => Math.min(14, r.h / 2);
-        const svg = `<svg class="spot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><mask id="spm"><rect width="${W}" height="${H}" fill="#fff"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="#000"/>`).join("")}</mask></defs><rect width="${W}" height="${H}" fill="rgba(16,19,19,.46)" mask="url(#spm)"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="none" stroke="#A343F5" stroke-width="2"/>`).join("")}</svg>`;
-        ph.insertAdjacentHTML("beforeend", svg);
-        const first = rects.slice().sort((a, b) => a.y - b.y || a.x - b.x)[0];
-        const lbl = document.createElement("span");
-        lbl.className = "spotlbl";
-        lbl.textContent = c + (rects.length > 1 ? " ×" + rects.length : "");
-        lbl.style.left = Math.max(6, Math.min(first.x, W - 130)) + "px";
-        lbl.style.top =
-          (first.y > 30 ? first.y - 26 : first.y + first.h + 6) + "px";
-        ph.appendChild(lbl);
-        requestAnimationFrame(() => {
-          const sp = ph.querySelector(".spot");
-          if (sp) sp.classList.add("on");
-          lbl.classList.add("on");
-        });
-        // the colour map matches this panel's own element, so a moved frame still reads true
-      }
-      function clearSweep() {
-        if (usageComp === null) return;
-        usageComp = null;
+      /* a sweep on the page: every screen that uses the component keeps its colour, the rest recede */
+      function paintSweep(sw) {
         ORDER.forEach((id) => {
-          const c = colOf(id);
-          if (c) {
-            c.classList.remove("u-hit", "u-dim");
-          }
+          const col = colOf(id);
+          if (!col) return;
+          const hit = !!sw && sw.uses.includes(id);
+          col.classList.toggle("u-hit", hit);
+          col.classList.toggle("u-dim", !!sw && !hit);
         });
-        refreshSweepUI();
       }
-      function sweep(c) {
-        if (usageComp === c) {
-          clearSweep();
-          return;
-        }
-        usageComp = c;
-        const hits = usesOf(c);
+      /* a sweep that has just begun: show the screens it found (closed groups open for it without being saved) and go there */
+      function revealSweep(sw) {
         let opened = false;
-        hits.forEach((id) => {
+        sw.uses.forEach((id) => {
           const L = laneOf(id);
           if (L && !L.open) {
             L.open = true;
@@ -7991,43 +8028,126 @@
           }
         });
         if (opened) relayout(); /* looking something up must not rewrite the saved layout */
-        ORDER.forEach((id) => {
-          const col = colOf(id),
-            hit = hits.includes(id);
-          col.classList.toggle("u-hit", hit);
-          col.classList.toggle("u-dim", !hit);
-        });
+        paintSweep(sw);
         let x0 = 1e9,
           y0 = 1e9,
           x1 = -1e9,
           y1 = -1e9;
-        hits.forEach((id) => {
+        sw.uses.forEach((id) => {
           const b = geo.frameBox(id);
           x0 = Math.min(x0, b.x);
           y0 = Math.min(y0, b.y);
           x1 = Math.max(x1, b.x + b.w);
           y1 = Math.max(y1, b.y + b.h);
         });
-        fly(
-          fitRect(
-            { x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 },
-            40,
-            1,
-          ),
-        );
-        refreshSweepUI();
+        fly(fitRect({ x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 }, 40, 1));
       }
-      function sweepQuiet(c) {
-        usageComp = c;
-        const hits = usesOf(c);
-        ORDER.forEach((id) => {
-          const col = colOf(id);
-          if (col) {
-            col.classList.toggle("u-hit", hits.includes(id));
-            col.classList.toggle("u-dim", !hits.includes(id));
+      /* the panel changed (or the page needs it drawn again, `rebuild`): paint exactly what FlowPanel now says */
+      function paintPanel(st, ch) {
+        panelEl.setAttribute("aria-label", st.label);
+        if (!st.open) {
+          if (!ch.closed) return;
+          FrameDom.clearSpot();
+          paintSweep(null);
+          panelEl.classList.remove("open");
+          const back = panelReturn;
+          panelReturn = null;
+          if (panelEl.contains(document.activeElement)) {
+            if (back && back !== document.body && document.contains(back) && !panelEl.contains(back) && back.focus) back.focus({ preventScroll: true });
+            else document.activeElement.blur();
           }
-        });
+          panelEl.inert = true;
+          if (selected) focusScreen(selected);
+          return;
+        }
+        if (ch.opened) panelReturn = document.activeElement;
+        panelEl.inert = false;
+        panelEl.classList.add("open");
+        if (ch.opened || ch.mode || ch.subject || ch.rebuild) renderBody(st, !(ch.opened || ch.mode));
+        if (ch.sweep) {
+          if (st.sweep) revealSweep(st.sweep);
+          else paintSweep(null);
+          refreshSweepUI();
+        }
+        if (ch.opened) {
+          if (selected) focusScreen(selected);
+          /* a keyboard user who opens the inspector lands in it; closing hands focus back */
+          if (st.mode === "inspect")
+            setTimeout(() => {
+              if (panel.state().open) ptitle.focus({ preventScroll: true });
+            }, 60);
+        }
       }
+      panel.on(paintPanel);
+      /* the page changed under the panel (another device, a frame in another state): draw it again as it is */
+      const repaintPanel = () => {
+        const st = panel.state();
+        paintSweep(st.sweep);
+        if (!st.open) return;
+        if (st.mode === "search") {
+          if ($("#q")) renderSearch(); /* new tiles; what was typed stays */
+        } else paintPanel(st, { rebuild: true });
+      };
+      $("#pclose").onclick = () => panel.close();
+      /* ---------- FrameDom: what the panel knows of a frame's own DOM. Nothing else reaches into a phone. ---------- */
+      const FrameDom = (() => {
+        const phoneOf = (id) => document.getElementById("p-" + id);
+        /* where each component shows up in a screen: from the scan (COMP_SEL, above) */
+        const components = (id, c) => {
+          const ph = phoneOf(id);
+          if (!ph || !COMP_SEL[c]) return [];
+          return [...ph.querySelectorAll(COMP_SEL[c])].filter((el) => el.offsetWidth > 0 && !el.closest(".spot"));
+        };
+        function clearSpot() {
+          document.querySelectorAll(".spot,.spotlbl").forEach((n) => n.remove());
+        }
+        function spotlight(id, c) {
+          clearSpot();
+          const ph = phoneOf(id);
+          const els = components(id, c);
+          if (!ph || !els.length) return;
+          const pr = ph.getBoundingClientRect(),
+            sc = pr.width / ph.offsetWidth,
+            W = ph.offsetWidth,
+            H = ph.offsetHeight;
+          const rects = els.map((el) => {
+            const r = el.getBoundingClientRect();
+            const x = Math.max(0, (r.left - pr.left) / sc - 3),
+              y = Math.max(0, (r.top - pr.top) / sc - 3);
+            return {
+              x,
+              y,
+              w: Math.min(W - x, r.width / sc + 6),
+              h: Math.min(H - y, r.height / sc + 6),
+            };
+          });
+          const rad = (r) => Math.min(14, r.h / 2);
+          const svg = `<svg class="spot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><mask id="spm"><rect width="${W}" height="${H}" fill="#fff"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="#000"/>`).join("")}</mask></defs><rect width="${W}" height="${H}" fill="rgba(16,19,19,.46)" mask="url(#spm)"/>${rects.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="${rad(r)}" fill="none" stroke="#A343F5" stroke-width="2"/>`).join("")}</svg>`;
+          ph.insertAdjacentHTML("beforeend", svg);
+          const first = rects.slice().sort((a, b) => a.y - b.y || a.x - b.x)[0];
+          const lbl = document.createElement("span");
+          lbl.className = "spotlbl";
+          lbl.textContent = c + (rects.length > 1 ? " ×" + rects.length : "");
+          lbl.style.left = Math.max(6, Math.min(first.x, W - 130)) + "px";
+          lbl.style.top = (first.y > 30 ? first.y - 26 : first.y + first.h + 6) + "px";
+          ph.appendChild(lbl);
+          requestAnimationFrame(() => {
+            const sp = ph.querySelector(".spot");
+            if (sp) sp.classList.add("on");
+            lbl.classList.add("on");
+          });
+          // the colour map matches this panel's own element, so a moved frame still reads true
+        }
+        /* a copy of a frame to draw somewhere else (a search tile), without what the canvas lays over a live one */
+        function snapshot(id) {
+          const clone = phoneOf(id).cloneNode(true);
+          clone.removeAttribute("id");
+          clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+          clone.querySelectorAll(".ripple,.spot,.spotlbl").forEach((n) => n.remove());
+          return clone;
+        }
+        return { components, spotlight, clearSpot, snapshot };
+      })();
       async function copyText(t) {
         try {
           await navigator.clipboard.writeText(t);
@@ -8049,15 +8169,15 @@
       }
       /* ---------- the inspector ---------- */
       const coarse = () => matchMedia("(hover: none)").matches;
-      const sweepMsgFor = () =>
-        usageComp
-          ? `Showing ${usesOf(usageComp).length === 1 ? "the 1 screen" : "the " + usesOf(usageComp).length + " of " + ORDER.length + " screens"} that ${usesOf(usageComp).length === 1 ? "uses" : "use"} <b>${usageComp}</b>. ${coarse() ? "Tap it again" : "Click it again"} or press Esc to clear.`
+      const sweepMsgFor = (sw) =>
+        sw
+          ? `Showing ${sw.uses.length === 1 ? "the 1 screen" : "the " + sw.uses.length + " of " + ORDER.length + " screens"} that ${sw.uses.length === 1 ? "uses" : "use"} <b>${esc(sw.component)}</b>. ${coarse() ? "Tap it again" : "Click it again"} or press Esc to clear.`
           : coarse()
             ? "Tap one to light it up on the screen. Tap it again to find every screen that uses it."
             : "Hover one to light it up on the screen. Click to find every screen that uses it.";
-      function usesHTML() {
-        if (!usageComp) return "";
-        return `<ul class="uses" aria-label="Screens that use ${usageComp}">${usesOf(usageComp)
+      function usesHTML(sw) {
+        if (!sw) return "";
+        return `<ul class="uses" aria-label="Screens that use ${esc(sw.component)}">${sw.uses
           .map((x) => {
             const S = SCREENS[x];
             return `<li><button data-uid="${x}"${x === selected ? ' aria-current="true"' : ""}><span class="un">${esc(S.name)}</span><span class="ur">${S.route}</span></button></li>`;
@@ -8066,53 +8186,58 @@
       }
       /* sweep on/off changes a few nodes in place, so focus and the cursor stay where they are */
       function refreshSweepUI() {
-        const hint = $("#ipHint");
-        if (!hint || !panelOpen || panelMode !== "inspect") return;
-        hint.classList.toggle("hot", !!usageComp);
-        hint.innerHTML = sweepMsgFor();
+        const hint = $("#ipHint"),
+          st = panel.state();
+        if (!hint || !st.open || st.mode !== "inspect") return;
+        const sw = st.sweep;
+        hint.classList.toggle("hot", !!sw);
+        hint.innerHTML = sweepMsgFor(sw);
         pbody.querySelectorAll(".cc").forEach((b) => {
-          const on = b.dataset.comp === usageComp;
+          const on = !!sw && b.dataset.comp === sw.component;
           b.classList.toggle("on", on);
           b.setAttribute("aria-pressed", on);
         });
         const u = $("#ipUses");
-        u.innerHTML = usesHTML();
+        u.innerHTML = usesHTML(sw);
         u.querySelectorAll("[data-uid]").forEach((b) =>
           b.addEventListener("click", () => select(b.dataset.uid, true)),
         );
       }
-      function inspectEmpty(open) {
-        clearSpot();
-        panelMode = "inspect";
-        ptitle.textContent = "Inspect";
-        pbody.innerHTML = `<div class="ip still"><p class="iempty">Select a screen to see what the code knows about it: its route, components, states and source.</p><p class="iempty sub">Click a frame, or press <kbd>I</kbd> with one selected.</p></div>`;
-        if (open) showPanel("inspect");
+      /* write the panel's body for what FlowPanel says it shows. Rebuilding replaces the nodes, so the focused one is found again afterwards. */
+      function renderBody(st, still) {
+        FrameDom.clearSpot();
+        const focusKey = (() => {
+          const el = document.activeElement;
+          if (!el || !pbody.contains(el)) return null;
+          const d = el.dataset;
+          return d.comp ? `[data-comp="${d.comp}"]` : d.uid ? `[data-uid="${d.uid}"]` : d.st ? `[data-st="${d.st}"]` : null;
+        })();
+        if (st.mode === "search") renderSearchBody();
+        else if (st.subject) renderInspect(st.subject, st.sweep, still);
+        else renderInspectEmpty();
+        if (focusKey) {
+          const el = pbody.querySelector(focusKey);
+          if (el) el.focus({ preventScroll: true });
+        }
       }
-      function inspect(id, silent, still) {
+      function renderInspectEmpty() {
+        setTitle("Inspect");
+        pbody.innerHTML = `<div class="ip still"><p class="iempty">Select a screen to see what the code knows about it: its route, components, states and source.</p><p class="iempty sub">Click a frame, or press <kbd>I</kbd> with one selected.</p></div>`;
+      }
+      function renderInspect(id, sw, still) {
         const s = SCREENS[id],
           L = laneOf(id),
           file = s.file.split("/"),
           nOnly = s.states.filter((x) => !x.reachable).length,
           many = switchable(id);
         const code = `<svg aria-hidden="true"><use href="#i-code"/></svg>`;
-        const focusKey = (() => {
-          const el = document.activeElement;
-          if (!el || !pbody.contains(el)) return null;
-          const d = el.dataset;
-          return d.comp
-            ? `[data-comp="${d.comp}"]`
-            : d.uid
-              ? `[data-uid="${d.uid}"]`
-              : d.st
-                ? `[data-st="${d.st}"]`
-                : null;
-        })();
-        ptitle.textContent = s.name;
+        setTitle(s.name);
+        const swept = (c) => !!sw && sw.component === c;
         const chips = s.components
           .map((c) => {
-            const n = compEls(id, c).length;
+            const n = FrameDom.components(id, c).length;
             const lbl = `${c}, ${n ? n + " on this screen" : "not on screen in this state"}`;
-            return `<button class="cc${usageComp === c ? " on" : ""}${n ? "" : " off"}" data-comp="${esc(c)}" aria-pressed="${usageComp === c}" aria-label="${esc(lbl)}" title="${n ? "" : "Not on screen in this state"}">${esc(c)}<small aria-hidden="true">${n ? "×" + n : "—"}</small></button>`;
+            return `<button class="cc${swept(c) ? " on" : ""}${n ? "" : " off"}" data-comp="${esc(c)}" aria-pressed="${swept(c)}" aria-label="${esc(lbl)}" title="${n ? "" : "Not on screen in this state"}">${esc(c)}<small aria-hidden="true">${n ? "×" + n : "—"}</small></button>`;
           })
           .join("");
         const only = (st) => !st.reachable;
@@ -8141,16 +8266,17 @@
         let armed = null;
         pbody.querySelectorAll(".cc").forEach((b) => {
           const c = b.dataset.comp,
-            n = compEls(id, c).length;
+            n = FrameDom.components(id, c).length;
           const on = () => {
-            spotlight(id, c);
+            FrameDom.spotlight(id, c);
             hint.classList.add("hot");
             hint.innerHTML = `<b>${c}</b>: ${n ? n + " on this screen" : "not on screen in this state"}, used on ${usesOf(c).length} of ${ORDER.length} screens.`;
           };
           const off = () => {
-            clearSpot();
-            hint.classList.toggle("hot", !!usageComp);
-            hint.innerHTML = sweepMsgFor();
+            FrameDom.clearSpot();
+            const now = panel.state().sweep;
+            hint.classList.toggle("hot", !!now);
+            hint.innerHTML = sweepMsgFor(now);
           };
           b.addEventListener("mouseenter", on);
           b.addEventListener("focus", on);
@@ -8158,21 +8284,21 @@
           b.addEventListener("blur", off);
           b.addEventListener("click", () => {
             /* touch has no hover: the first tap lights it up, the second finds every screen */
-            if (coarse() && usageComp !== c && armed !== c) {
+            if (coarse() && !swept(c) && armed !== c) {
               armed = c;
               on();
               return;
             }
             armed = null;
-            clearSpot();
-            sweep(c);
+            FrameDom.clearSpot();
+            panel.toggleSweep(c);
           });
         });
         pbody.querySelectorAll(".st[data-st]").forEach((b) =>
           b.addEventListener("click", () => {
             if (selected !== id) select(id);
             setState(id, +b.dataset.st);
-            inspect(id, true, true);
+            repaintPanel();
           }),
         );
         pbody.querySelector(".open").onclick = () =>
@@ -8188,21 +8314,13 @@
             cp.setAttribute("aria-label", "Copy path");
           }, 1700);
         };
-        if (!panelOpen || panelMode !== "inspect") {
-          if (!silent) showPanel("inspect");
-          else panelMode = "inspect";
-        }
-        panel.setAttribute("aria-label", "Inspector");
         refreshSweepUI();
-        if (focusKey) {
-          const el = pbody.querySelector(focusKey);
-          if (el) el.focus({ preventScroll: true });
-        }
       }
       function openSearch() {
-        clearSpot();
-        if (usageComp !== null) clearSweep();
-        panelMode = "search";
+        panel.open("search");
+        setTimeout(() => $("#q") && $("#q").focus(), 350);
+      }
+      function renderSearchBody() {
         pbody.innerHTML = `<div class="qrow"><input id="q" placeholder="Describe what you’re looking for" autocomplete="off"><label>Filter by</label>
     <select id="fType"><option value="any">Any type</option><option value="screens">Screens</option><option value="routes">Routes</option><option value="components">Components</option></select>
     <select id="fWhere"><option value="any">Anywhere</option>${layout.lanes.filter(
@@ -8222,8 +8340,6 @@
           }
         });
         renderSearch();
-        showPanel("search");
-        setTimeout(() => $("#q").focus(), 350);
       }
       function renderSearch() {
         const q = $("#q").value.trim().toLowerCase(),
@@ -8234,11 +8350,8 @@
             ? "anywhere"
             : where === "free"
               ? "on the canvas"
-              : "in " +
-                esc(
-                  laneName(layout.lanes.find((l) => l.id === where) || { id: where }),
-                );
-        ptitle.innerHTML = `Search<span class="psub">${type === "any" ? "Any type" : { screens: "Screens", routes: "Routes", components: "Components" }[type]} of content ${whereName}</span>`;
+              : "in " + laneName(layout.lanes.find((l) => l.id === where) || { id: where });
+        setTitle("Search", `${type === "any" ? "Any type" : { screens: "Screens", routes: "Routes", components: "Components" }[type]} of content ${whereName}`);
         const hit = ORDER.filter((id) => {
           const s = SCREENS[id],
             g = laneOf(id);
@@ -8272,14 +8385,7 @@
           const s = SCREENS[id],
             t = document.createElement("div");
           t.className = "tile";
-          const clone = $("#p-" + id).cloneNode(true);
-          clone.removeAttribute("id");
-          clone
-            .querySelectorAll("[id]")
-            .forEach((n) => n.removeAttribute("id"));
-          clone
-            .querySelectorAll(".ripple,.spot,.spotlbl")
-            .forEach((n) => n.remove());
+          const clone = FrameDom.snapshot(id);
           t.innerHTML = `<div class="th"></div><b>${esc(s.name)}</b><small>${esc(s.route)}</small>`;
           t.querySelector(".th").appendChild(clone);
           t.onclick = () => select(id, true);
@@ -9423,7 +9529,8 @@
       $("#prev").onclick = () => step(-1);
       $("#zoom").onclick = () => view("all");
       $("#btnSearch").onclick = () => {
-        if (panelOpen && panelMode === "search") closePanel();
+        const st = panel.state();
+        if (st.open && st.mode === "search") panel.close();
         else openSearch();
       };
       let tt;
@@ -9504,14 +9611,11 @@
             cancelDrag();
             return;
           }
-          if (usageComp !== null) {
-            clearSweep();
-            return;
-          }
+          if (panel.clearSweep()) return;
           if (typing) e.target.blur();
           closeMenus();
           stopPlay();
-          if (panelOpen) closePanel();
+          if (panel.state().open) panel.close();
           else if (selSet.size) select(null);
           return;
         }
@@ -9540,8 +9644,7 @@
         }
         if (e.key === "f" && selected) focusScreen(selected);
         if (e.key === "i") {
-          if (selected) inspect(selected);
-          else inspectEmpty(true);
+          panel.open("inspect", selected);
         }
         if (e.key === "n") {
           e.preventDefault();
@@ -9565,12 +9668,14 @@
         spaceDown = false;
         stage.classList.toggle("hand", handMode);
       });
+      let resizeT;
       addEventListener("resize", () => {
         updateBars();
-        if (panelOpen) {
-          insetR = panelW();
-          insetB = panelH();
-        }
+        /* the panel may have turned into a sheet or back: keep what is selected in the room that is left */
+        clearTimeout(resizeT);
+        resizeT = setTimeout(() => {
+          if (panel.state().open && selected) focusScreen(selected);
+        }, 120);
       });
 
       /* ======================================================================
@@ -9625,14 +9730,8 @@
         applyDevice(id);
         buildWorld();
         setSel(sel, prim);
-        clearSpot();
-        if (usageComp !== null) {
-          const u = usageComp;
-          usageComp = null;
-          sweepQuiet(u);
-        }
-        if (panelOpen && panelMode === "inspect" && prim)
-          inspect(prim, true, true);
+        FrameDom.clearSpot();
+        repaintPanel(); /* the new world is drawn from the panel's own word: the sweep, and the screen it shows */
         if (prim) {
           const q = geo.screenRect(prim);
           cam = fitRect(
@@ -9681,7 +9780,7 @@
         $("#toast").setAttribute("role", "status");
         $("#toast").setAttribute("aria-live", "polite");
         $("#panel").setAttribute("role", "complementary");
-        $("#panel").setAttribute("aria-label", "Inspector");
+        paintPanel(panel.state(), {}); /* the landmark's label is the panel's to say */
       }
       function boot() {
         labelUi();
