@@ -228,58 +228,7 @@ test("resetting the layout leaves captions alone; resetting the text puts captio
   assert.equal(layout.lanes[0].title, "Tally: count fast");
 });
 
-test("captions the older build kept in its own store are folded in once, as edits", () => {
-  const storage = memory();
-  const legacyCaptions = () => ({ home: { title: "Old title" }, nope: { title: "x" } });
-  const a = layoutFor(v1(), storage, { legacyCaptions });
-  assert.equal(cap(a, "home").title, "Old title");
-  assert.deepEqual(plain(Object.keys(JSON.parse(storage.data[KEY]).caps.edits)), ["home"], "saved at once, so the old store can go");
-  /* the next load has the layout, which wins; the old store is not read again */
-  const b = layoutFor(v1(), storage, { legacyCaptions: () => ({ home: { title: "Stale" } }) });
-  assert.equal(cap(b, "home").title, "Old title");
-});
-
 /* ---------- layouts saved before groups were edits ---------- */
-
-test("a layout saved with whole groups (v2) still loads: it is read against the current scan, and saved as edits", () => {
-  const storage = memory({
-    [KEY]: JSON.stringify({
-      v: 2,
-      lanes: [
-        { id: "g1", screens: ["home", "detail"], open: false, title: "Tally: count fast", sub: "Two screens.", subOn: true },
-        { id: "g2", screens: ["settings"], open: true, title: "Settings, mine", sub: "", subOn: false },
-      ],
-      pos: { mobile: {}, tablet: {}, desktop: {} },
-      conns: { edits: {}, mine: [] },
-      scans: { edits: {}, mine: [] },
-      notes: { edits: {}, mine: [] },
-      cc: 0,
-      gc: 2,
-    }),
-  });
-  const layout = layoutFor(v1(), storage);
-  eq(members(layout), { g1: ["home", "detail"], g2: ["settings"] }, "about and help were loose in the old layout and stay loose");
-  assert.equal(layout.lanes[0].open, false);
-  assert.equal(layout.lanes[1].title, "Settings, mine");
-  const saved = JSON.parse(storage.data[KEY]);
-  assert.equal(saved.v, 3);
-  eq(saved.lanes.edits.g1, { open: false });
-  eq(saved.lanes.edits.g2.title, "Settings, mine");
-  eq(saved.lanes.place, { about: null, help: null });
-});
-
-test("in a layout saved with whole groups, a scanned group it could not have had (an id above its counter) is new, one below it that is missing was dissolved", () => {
-  const old = JSON.stringify({
-    v: 2,
-    lanes: [{ id: "g2", screens: ["settings", "about"], open: true, title: "Settings", sub: "", subOn: false }],
-    pos: {},
-    cc: 0,
-    gc: 2,
-  });
-  const layout = layoutFor(v2(), memory({ [KEY]: old }));
-  assert.ok(!layout.lanes.some((l) => l.id === "g1"), "g1 is below the counter and missing: the user dissolved it");
-  assert.ok(layout.lanes.some((l) => l.id === "g8"), "g8 is above it: the scan added it");
-});
 
 test("a saved layout cannot take a caption away: every screen the scan has keeps one", () => {
   const storage = memory();

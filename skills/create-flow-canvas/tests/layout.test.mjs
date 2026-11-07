@@ -85,64 +85,109 @@ test("save then load round-trips every kind and the counters", () => {
   assert.equal(b.nextId("g"), "g5");
 });
 
-test("a layout saved by the real canvas before groups carried their text loads with everything else unchanged", () => {
-  /* the fixture predates the title/sub/subOn fields on a group; they are filled in on load and saved */
-  const raw = fs.readFileSync(path.join(here, "fixtures/saved-layout-v1.json"), "utf8").trim();
-  const storage = memory({ [KEY]: raw });
-  const layout = make(storage);
-  const saved = JSON.parse(raw);
-  eq(layout.lanes, saved.lanes.map((l) => ({ ...l, ...(l.id === "g4" ? { title: "Untitled group", sub: "", subOn: false } : DEFAULTS_TEXT[l.id]) })));
-  /* everything else shows as it did (edits.test.mjs checks how it is saved now) */
-  eq(layout.pos, saved.pos);
-  eq(layout.conns, saved.conns);
-  eq(layout.notes.slice(1), saved.notes.slice(1), "the notes these defaults do not scan are the user's own");
-  eq(layout.scans, [], "the finding dismissed back then stays dismissed");
-  assert.equal(layout.nextId("c"), "c8");
-  assert.equal(layout.nextId("g"), "g5");
-  /* from here on the file is in the new shape and loads as it is */
-  assert.equal(make(storage).snapshot(), layout.snapshot());
+/* Layouts older than v3 are not read: nothing but the author's own browser ever held one, and the module starts
+   from the scan instead of guessing. It must never throw, and the scan's counters start the numbering. */
+const OLD_SHAPES = {
+  "the real canvas's first layout (whole groups, full lists)": () => fs.readFileSync(path.join(here, "fixtures/saved-layout-v1.json"), "utf8").trim(),
+  "whole groups, with their text": () =>
+    JSON.stringify({ v: 2, lanes: [{ id: "g1", screens: ["s1"], open: false, title: "Mine", sub: "", subOn: false }], pos: { mobile: { s1: { x: 5, y: 5 } } }, conns: { edits: {}, mine: [] }, cc: 6, gc: 3 }),
+  "a list of groups and nothing else": () => JSON.stringify({ lanes: [{ id: "g1", screens: ["s1", "s2"], open: true }] }),
+  "a list of groups with text of the wrong type": () =>
+    JSON.stringify({ lanes: [{ id: "g1", screens: ["s1"], open: true, title: 7, sub: null, subOn: "yes" }], conns: [], notes: [], gc: 3 }),
+};
+for (const [name, raw] of Object.entries(OLD_SHAPES)) {
+  test(`an older saved layout (${name}) starts from the scan, saves nothing until the next edit, and never throws`, () => {
+    const storage = memory({ [KEY]: raw() });
+    let layout;
+    assert.doesNotThrow(() => (layout = make(storage)));
+    eq(layout.lanes.map((l) => [l.id, l.screens]), [["g1", ["s1", "s2", "s3", "s4"]], ["g2", ["s5", "s6", "s7"]], ["g3", ["s8", "s9"]]]);
+    eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
+    eq(layout.conns.map((c) => c.id), ["c1", "c2", "c3", "c4", "c5", "c6"]);
+    eq(layout.scans.map((f) => f.id), ["s3:states"]);
+    eq(layout.notes.map((n) => n.id), ["s1:Dana"]);
+    assert.equal(layout.nextId("c"), "c7");
+    assert.equal(layout.nextId("g"), "g4");
+    assert.equal(storage.data[KEY], raw(), "the old file is left as it was until the user edits something");
+    layout.save();
+    assert.equal(JSON.parse(storage.data[KEY]).v, 3, "the next save writes the current shape");
+    assert.equal(make(storage).snapshot(), layout.snapshot());
+  });
+}
+
+test("a current layout with one kind in an unreadable shape keeps what is readable and takes that kind from the scan", () => {
+  for (const [kind, junk] of [["conns", "nope"], ["conns", [{ id: "c1" }]], ["notes", 7], ["scans", null], ["pos", "abc"], ["pos", [1, 2]]]) {
+    const storage = memory();
+    const first = make(storage);
+    first.lanes[0].title = "Mine: renamed";
+    first.conns.find((c) => c.id === "c1").label = "My label";
+    first.pos.mobile.s1 = { x: 3, y: 4 };
+    first.save();
+    const onDisk = JSON.parse(storage.data[KEY]);
+    onDisk[kind] = junk;
+    storage.data[KEY] = JSON.stringify(onDisk);
+    let layout;
+    assert.doesNotThrow(() => (layout = make(storage)), `${kind}: ${JSON.stringify(junk)}`);
+    assert.equal(layout.lanes[0].title, "Mine: renamed", `${kind}: groups still come from the file`);
+    if (kind === "conns") assert.equal(layout.conns.find((c) => c.id === "c1").label, "Continue", "connectors fall back to the scan");
+    else assert.equal(layout.conns.find((c) => c.id === "c1").label, "My label");
+    if (kind === "pos") eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
+    else eq(layout.pos.mobile, { s1: { x: 3, y: 4 } });
+  }
 });
 
 test("load drops what no longer exists", () => {
   const saved = {
-    lanes: [
-      { id: "g1", screens: ["s1", "ghost", "s2"], open: true },
-      { id: "g2", screens: ["s2", "s3"], open: false }, // s2 already seen
-      { id: "g9", screens: ["ghost"], open: true }, // emptied: dropped
-      null,
-    ],
-    pos: { mobile: { s1: { x: 1, y: 2 } } },
-    conns: [
-      { id: "c1", from: "s1", to: "s2" },
-      { id: "c2", from: "s1", to: "ghost" },
-      { id: "c3", from: "s3", to: "s3" },
-      null,
-    ],
+    v: 3,
+    lanes: {
+      edits: {},
+      /* g1 has a frame that is gone and one g2 also holds; g9 holds only a frame that is gone */
+      mine: [
+        { id: "g7", screens: [], open: true },
+        { id: "g9", screens: [], open: true },
+        null,
+      ],
+      place: { ghost: "g9", s2: "g2", s3: "g2" },
+      order: {},
+      seq: [],
+    },
+    pos: { mobile: { s1: { x: 1, y: 2 }, ghost: { x: 9, y: 9 } }, odd: 5 },
+    conns: {
+      edits: {},
+      mine: [
+        { id: "c9", from: "s1", to: "s2" },
+        { id: "c10", from: "s1", to: "ghost" },
+        { id: "c11", from: "s3", to: "s3" },
+        null,
+      ],
+    },
     scans: "nope",
-    notes: [{ id: "n1", text: "ok" }, { id: "n2" }, { text: "no id" }, null],
-    cc: 6, // the scan has six links and three groups: any layout this build saved has counters at least that high
-    gc: 3,
+    notes: { edits: {}, mine: [{ id: "n1", text: "ok" }, { id: "n2" }, { text: "no id" }, null] },
+    cc: 11,
+    gc: 9,
   };
   const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
-  const blank = { title: "Untitled group", sub: "", subOn: false };
-  eq(layout.lanes, [
-    { id: "g1", screens: ["s1", "s2"], open: true, ...blank },
-    { id: "g2", screens: ["s3"], open: false, ...blank },
-  ]);
-  eq(layout.conns.map((c) => c.id), ["c1"]);
+  eq(layout.lanes.map((g) => [g.id, g.screens]), [["g1", ["s1", "s4"]], ["g2", ["s5", "s6", "s7", "s2", "s3"]], ["g3", ["s8", "s9"]]], "a group left with no frames goes; a frame is in one group");
+  eq(layout.conns.map((c) => c.id), ["c1", "c2", "c3", "c4", "c5", "c6", "c9"], "a connector to a frame that is gone, or to itself, is dropped");
   eq(layout.scans.map((f) => f.id), ["s3:states"], "unreadable findings: the scan's");
-  eq(layout.notes.map((n) => n.id), ["n1"]);
+  eq(layout.notes.map((n) => n.id), ["s1:Dana", "n1"]);
   eq(layout.pos.mobile, { s1: { x: 1, y: 2 } });
-  eq(Object.keys(layout.pos), ["mobile", "tablet", "desktop"]);
+  eq(Object.keys(layout.pos), ["mobile", "tablet", "desktop"], "a place that is not a device's map is not kept");
 });
 
-test("a saved layout with no groups at all stays empty", () => {
-  const layout = make(memory({ [KEY]: JSON.stringify({ lanes: [], conns: [], notes: [], cc: 6, gc: 3 }) }));
+test("a layout whose every group the user dissolved stays empty", () => {
+  const edits = { g1: { gone: true }, g2: { gone: true }, g3: { gone: true } };
+  const layout = make(memory({ [KEY]: JSON.stringify({ v: 3, lanes: { edits, mine: [], place: {}, order: {}, seq: [] }, cc: 6, gc: 3 }) }));
   eq(layout.lanes, []);
 });
 
 test("counters never start below an id that is already in use", () => {
-  const saved = { lanes: [{ id: "g7", screens: ["s1"], open: true }], conns: [{ id: "c9", from: "s1", to: "s2" }], cc: 2, gc: 0 };
+  const saved = {
+    v: 3,
+    lanes: { edits: {}, mine: [{ id: "g7", screens: [], open: true }], place: { s1: "g7" }, order: {}, seq: [] },
+    conns: { edits: {}, mine: [{ id: "c9", from: "s1", to: "s2" }] },
+    cc: 2,
+    gc: 0,
+  };
   const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
   assert.equal(layout.nextId("c"), "c10");
   assert.equal(layout.nextId("g"), "g8");
