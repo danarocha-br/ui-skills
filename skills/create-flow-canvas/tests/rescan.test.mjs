@@ -280,3 +280,15 @@ test("in a layout saved with whole groups, a scanned group it could not have had
   assert.ok(!layout.lanes.some((l) => l.id === "g1"), "g1 is below the counter and missing: the user dissolved it");
   assert.ok(layout.lanes.some((l) => l.id === "g8"), "g8 is above it: the scan added it");
 });
+
+test("a saved layout cannot take a caption away: every screen the scan has keeps one", () => {
+  const storage = memory();
+  const a = layoutFor(v1(), storage);
+  a.save();
+  const saved = JSON.parse(storage.data[KEY]);
+  saved.caps.edits = { home: { gone: true } };
+  storage.data[KEY] = JSON.stringify(saved);
+  const b = layoutFor(v1(), storage);
+  assert.equal(cap(b, "home").title, tiny.screens[0].caption.title);
+  assert.equal(b.caps.length, 5);
+});

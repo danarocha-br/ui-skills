@@ -14,7 +14,8 @@ _Avoid_: Lane (the name the code and the saved data still use), cluster
 
 **Membership**:
 Which group a frame is in (or none, so it is loose) and its order there. What the user changed is saved one frame at a time, as "this frame is in group X" or "this frame is loose", and an order only for a group the user rearranged. A frame the user never moved follows the scan, so a rescan that regroups it moves it; one the user moved stays where they put it. A group the user dissolved stays dissolved, and one the user made is kept.
-_Avoid_: Placement (**Place** already means where a frame is drawn)
+In code and in the saved layout the per-frame edit is `place` (with `order` and `seq`); do not confuse it with **Place**, where a frame is drawn, or `pos`.
+_Avoid_: Placement
 
 **Title**:
 The line a group is headed with, typed in place. Its **name** is the part before the first colon ("Onboarding: how fast to a first plant?" is named "Onboarding"), or "Untitled group" when that is empty. The name is what menus and toasts show. The **description** is the optional line under the title; hiding it keeps its text.

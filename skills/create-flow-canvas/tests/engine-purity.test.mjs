@@ -62,3 +62,30 @@ test("the page around the engine does not name the product either, nor report co
   assert.deepEqual(page.match(new RegExp(scan.product.name, "gi")) || [], []);
   assert.ok(!/Scanned \d+ routes/.test(engine), "the rescan toast reports a count that only the sample had");
 });
+
+/* Scanned text enters markup only through FlowMarkup. This reads the page script's templates: a scanned field
+   (a route, a name, a file, ...) or an id put into an attribute must go through esc(), not be written as it is. */
+const pageScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).sort((a, b) => b.length - a.length)[0];
+const SCANNED_FIELD = /(^|\.)(route|meta|name|file|component|source|note|title|body|who|text|label|sub)$/;
+const placeholders = [...pageScript.matchAll(/\$\{\s*([^{}]*?)\s*\}/g)].map((m) => {
+  const line = pageScript.slice(pageScript.lastIndexOf("\n", m.index) + 1, pageScript.indexOf("\n", m.index));
+  return { expr: m[1], line, inAttr: pageScript.slice(m.index - 2, m.index) === '="' && pageScript[m.index + m[0].length] === '"' };
+});
+/* text sinks that are not markup (toast and textContent), and the device's own label, which no scan writes */
+const isText = ({ line, expr }) => /toast\(|textContent/.test(line) || expr === "DEV.label";
+
+test("the page never puts a scanned field into markup as it is", () => {
+  const raw = placeholders.filter((p) => /^[\w.]+$/.test(p.expr) && SCANNED_FIELD.test(p.expr) && !isText(p));
+  assert.deepEqual(raw.map((p) => p.expr), []);
+});
+
+test("the page never puts an id into an attribute as it is", () => {
+  const plain = /^(CE|W|H|i|n|at|DEV\.cls|d\.icon|r\.\w+)$/; /* numbers and the page's own names */
+  const raw = placeholders.filter((p) => p.inAttr && /^[\w.]+$/.test(p.expr) && !plain.test(p.expr) && !p.line.includes("html`"));
+  assert.deepEqual(raw.map((p) => p.expr), []);
+});
+
+test("the page names the component being hovered through esc()", () => {
+  assert.ok(pageScript.includes("<b>${esc(c)}</b>"));
+  assert.ok(!pageScript.includes("<b>${c}</b>"));
+});

@@ -37,3 +37,7 @@ test("sel makes a scanned value safe inside a quoted attribute selector", () => 
   assert.equal(sel('a"b\\c'), 'a\\"b\\\\c');
   assert.equal(`[data-k="${sel("/users/[id]")}"]`, '[data-k="/users/[id]"]');
 });
+
+test("sel also keeps a control character from ending the selector", () => {
+  assert.equal(sel("a\nb"), "a\\a b");
+});

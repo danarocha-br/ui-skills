@@ -5123,7 +5123,11 @@
         const raw = (markup) => new Raw(String(markup));
         const part = (v) => (v instanceof Raw ? v.markup : Array.isArray(v) ? v.map(part).join("") : esc(v));
         const html = (strings, ...values) => raw(strings.reduce((out, s, i) => out + s + (i < values.length ? part(values[i]) : ""), ""));
-        const sel = (v) => String(v).replace(/[\\"]/g, "\\$&");
+        /* a backslash or a quote is escaped with a backslash, a control character with its code point */
+        const sel = (v) =>
+          String(v)
+            .replace(/[\\"]/g, "\\$&")
+            .replace(/[\0-\x1f\x7f]/g, (c) => "\\" + c.charCodeAt(0).toString(16) + " ");
         return { esc, raw, html, sel };
       })();
     </script>
@@ -5249,6 +5253,15 @@
            FlowScan.diff(scanned, items)    the reverse: { edits, mine } holding only what differs from the scan,
                                   down to one key of a nested object (one device's position). A field the user
                                   took away is saved as null. Edits to items the scan no longer has are dropped.
+           FlowScan.mergeGroups(scanned, saved, { fresh? })   the same for groups, whose frames are not a field but a
+                                  relation: saved is { edits, mine, place, order, seq }, where place says, one frame at a
+                                  time, which group the user put it in (or null: loose), order the frames of a group the
+                                  user rearranged, seq the groups' own order. A frame with no place follows the scan; a
+                                  place that points at a group that is gone falls back to the scan; a group left with no
+                                  frames is dropped. A group of the user's whose id the scan now uses is given fresh(id).
+                                  Gives { groups, renamed: { oldId: newId } }.
+           FlowScan.diffGroups(scanned, groups)   the reverse: { edits, mine, place, order, seq } holding only what the
+                                  user changed (order and seq only where they differ from what the scan gives).
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
@@ -5589,8 +5602,9 @@
                              is its caller)
            layout.undo()           restore the latest mark; false when there is none
 
-         A new kind the scan provides and the user edits is added to KINDS, to freshDefaults() and to adopt(),
-         and nowhere else: load, save, snapshot and restore go through the one table.
+         A new kind the scan provides and the user edits is added to KINDS and to freshDefaults(); load, save,
+         snapshot and restore loop over those. A kind that needs cleaning on load (overlays()) or that reset()
+         leaves alone says so there. Needs FlowScan.
 
          On disk: { v: 3, lanes, pos, conns, scans, notes, caps, cc, gc }. Each of the first kinds (not pos) is
          { edits, mine }, and lanes also has place (a frame the user put in a group or freed), order (a group
@@ -5604,6 +5618,8 @@
         const VERSION = 3;
         /* the kinds the scan provides and the user edits: saved as edits over the scan */
         const KINDS = ["lanes", "conns", "scans", "notes", "caps"];
+        /* all but groups, whose frames have a rule of their own (FlowScan.mergeGroups) */
+        const PLAIN = KINDS.filter((k) => k !== "lanes");
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const list = (x) => (Array.isArray(x) ? x : []);
         /* id prefix -> the field the counter is saved in */
@@ -5736,7 +5752,7 @@
             const out = {};
             out.lanes = FlowScan.diffGroups(d.lanes, layout.lanes.map(groupRecord));
             out.pos = layout.pos;
-            ["conns", "scans", "notes", "caps"].forEach((k) => (out[k] = FlowScan.diff(d[k], layout[k])));
+            PLAIN.forEach((k) => (out[k] = FlowScan.diff(d[k], layout[k])));
             return out;
           }
           /* a connector of the user's own whose id a new scan now uses gets a fresh one */
@@ -5752,14 +5768,15 @@
              fallbacks. Says whether any was in an older form. */
           function overlays(st, d) {
             const out = { old: false };
-            ["conns", "scans", "notes", "caps"].forEach((k) => {
+            PLAIN.forEach((k) => {
               const o = overlaid(k, d[k], st[k], st.cc == null ? NaN : Number(st.cc));
               out[k] = o ? o.items.filter((x) => x && typeof x === "object") : d[k];
               if (o && o.old) out.old = true;
             });
             out.conns = out.conns.filter((c) => hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to);
             out.notes = out.notes.filter((n) => n.id && typeof n.text === "string");
-            out.caps = out.caps.filter((c) => hasScreen(c.id));
+            /* one caption per screen the scan has: a corrupt saved layout cannot take one away */
+            out.caps = d.caps.filter((c) => hasScreen(c.id)).map((c) => out.caps.find((x) => x.id === c.id) || c);
             return out;
           }
           /* groups saved whole by an older build (a list), as groups: only frames that still exist, each in one
@@ -7206,7 +7223,7 @@
           : "true";
       })();
       /* scanned text enters markup only through here (see FlowMarkup) */
-      const { esc, html, raw, sel: cssStr } = FlowMarkup;
+      const { esc, html, sel: cssStr } = FlowMarkup;
       const X_ICON =
         '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 2l6 6M8 2L2 8"/></svg>';
       const ADD_ICON = '<svg viewBox="0 0 20 20"><use href="#i-plus"/></svg>';
@@ -7457,9 +7474,10 @@
           caps: SCAN.screens.map((x) => ({ id: x.id, ...x.caption })),
         }),
       });
-      /* the layout has taken in the old store's copies (and saved them), so it can go */
+      /* the layout has taken in the old store's copies and saved them, so it can go: only once what is saved is v3 */
       try {
-        localStorage.removeItem(ANN_KEY);
+        const saved = JSON.parse(localStorage.getItem("flow-canvas.layout.v1") || "null");
+        if (saved && saved.v >= 3) localStorage.removeItem(ANN_KEY);
       } catch (e) {}
       /* open or closed is view state: saved and redrawn, never an undo step */
       const VIEW_STATE = { undo: false, redraw: ["layout"] };
@@ -8448,7 +8466,7 @@
           const on = () => {
             FrameDom.spotlight(id, c);
             hint.classList.add("hot");
-            hint.innerHTML = `<b>${c}</b>: ${n ? n + " on this screen" : "not on screen in this state"}, used on ${usesOf(c).length} of ${ORDER.length} screens.`;
+            hint.innerHTML = `<b>${esc(c)}</b>: ${n ? n + " on this screen" : "not on screen in this state"}, used on ${usesOf(c).length} of ${ORDER.length} screens.`;
           };
           const off = () => {
             FrameDom.clearSpot();

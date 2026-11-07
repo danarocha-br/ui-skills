@@ -32,6 +32,5 @@ export const { FlowMarkup, FlowDevice, FlowScan, FlowLayout, FlowCommit, FlowAnn
 /* "" when the canvas has no sample yet, so the module tests still load and the sample's own test says why */
 export const sampleScan = html.match(/^\s*<script\b[^>]*\bid="flow-scan"/m) ? block("flow-scan") : "";
 
-/* the devices a scan is read for: the caller says, so the scan module never has to look at the device module */
-export const DEVICES = ["mobile", "tablet", "desktop"];
-export const readScan = (raw) => FlowScan.read(raw, { devices: DEVICES });
+/* the devices a scan is read for: the caller says, as the page does (the scan module itself never looks at the device module) */
+export const readScan = (raw) => FlowScan.read(raw, { devices: FlowDevice.ids() });
