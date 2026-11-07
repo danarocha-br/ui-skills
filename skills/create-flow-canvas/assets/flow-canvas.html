@@ -4392,17 +4392,7 @@
     </div>
 
     <!-- ============ CHROME ============ -->
-    <div class="ui pill" id="devsw">
-      <button data-dev="mobile" title="Mobile (M)">
-        <svg><use href="#i-phone" /></svg>
-      </button>
-      <button data-dev="tablet" title="Tablet (T)">
-        <svg><use href="#i-tablet" /></svg>
-      </button>
-      <button data-dev="desktop" title="Desktop (D)">
-        <svg><use href="#i-desktop" /></svg>
-      </button>
-    </div>
+    <div class="ui pill" id="devsw"></div>
     <button class="ui pill" id="btnAll" title="Open all groups (A)">
       <svg><use href="#i-expand" /></svg><span>Open all</span>
     </button>
@@ -5101,6 +5091,93 @@
         },
       };
     </script>
+    <script id="device-module">
+      /* ======================================================================
+         DEVICE MODULE
+         One description per device. Every other fact about a device (the numbers the arrangement needs, the
+         style variables, the class on a frame, the key that reaches it) is derived here from that one entry,
+         so it is written once. Adding a device is one more entry in TABLE, the product's screens for it, and
+         an icon symbol; nothing else names a device. No DOM, no product knowledge.
+
+         Interface
+           FlowDevice.ids()                 -> ["mobile", "tablet", "desktop"], in the order the switcher shows them
+           FlowDevice.describe(id)          -> a frozen description; an unknown id throws, naming the ones there are
+             { id, label, vp, key, icon, title, cls, findY,
+               metrics   colW phH cap body collH deckS deckW peekX peekY closedW edge   (what FlowGeometry arranges with)
+               cssVars   { "--cw": "270px", … }                                          (what the stylesheet reads) }
+           FlowDevice.idForKey(key)         -> the id a keyboard key reaches, or null
+           FlowDevice.slot(id, top, drop)   -> [x, y] where a note goes when it has no place anywhere:
+                                               near the frame's right edge, `drop` (120) below the screen's top
+           FlowDevice.carry(at, from, to, { top }) -> [x, y]  a spot in a frame's own coordinates, moved to
+                                               the same relative place on another device's screen
+           FlowDevice.placeOn(saved, id, { top, drop }) -> [x, y]  where an annotation sits on this device:
+                                               its saved place here, else carried from the first device that has one,
+                                               else the slot. Never written back.
+           `top` is where the screen starts inside the frame's column (the canvas's phTop).
+         ====================================================================== */
+      var FlowDevice = (function () {
+        /* the facts, once. cw/ch: the screen (px); cr: its corner radius; ds: the deck's scale; tw: the
+           thumbnail's width; cap*: the caption's insets; edge: where connectors leave a frame; body: the
+           frame's height below its head; findY: where a finding sits below its frame's caption */
+        const TABLE = [
+          { id: "mobile", label: "Mobile", vp: "390 × 844", key: "m", icon: "i-phone", cls: "dm",
+            cw: 270, ch: 585, cr: 38, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, edge: 509, body: 744,
+            cap: 170, capT: 19, capB: 12.5, capL: 4, collH: 290, closedW: 440, tw: 150, findY: 662 },
+          { id: "tablet", label: "Tablet", vp: "768 × 1024", key: "t", icon: "i-tablet", cls: "dw dt",
+            cw: 400, ch: 560, cr: 26, ds: 0.4, deckW: 160, peekX: 12, peekY: 9, edge: 480, body: 724,
+            cap: 150, capT: 22, capB: 13.5, capL: 3, collH: 300, closedW: 580, tw: 190, findY: 640 },
+          { id: "desktop", label: "Desktop", vp: "1200 × 772", key: "d", icon: "i-desktop", cls: "dw dd",
+            cw: 600, ch: 420, cr: 14, ds: 0.38, deckW: 228, peekX: 12, peekY: 9, edge: 205, body: 584,
+            cap: 140, capT: 26, capB: 15, capL: 2, collH: 240, closedW: 700, tw: 220, findY: 500 },
+        ];
+        const px = (n) => n + "px";
+        function derive(d) {
+          return Object.freeze({
+            id: d.id,
+            label: d.label,
+            vp: d.vp,
+            key: d.key,
+            icon: d.icon,
+            title: `${d.label} (${d.key.toUpperCase()})`,
+            cls: d.cls,
+            findY: d.findY,
+            metrics: Object.freeze({
+              colW: d.cw, phH: d.ch, cap: d.cap, body: d.body, collH: d.collH, deckS: d.ds,
+              deckW: d.deckW, peekX: d.peekX, peekY: d.peekY, closedW: d.closedW, edge: d.edge,
+            }),
+            cssVars: Object.freeze({
+              "--cw": px(d.cw), "--ch": px(d.ch), "--cr": px(d.cr), "--ds": String(d.ds),
+              "--tw": px(d.tw), "--ts": String(d.tw / d.cw),
+              "--cap": px(d.cap), "--capT": px(d.capT), "--capB": px(d.capB), "--capL": String(d.capL),
+              "--edge": px(d.edge),
+            }),
+          });
+        }
+        const BY_ID = new Map(TABLE.map((d) => [d.id, derive(d)]));
+        const IDS = Object.freeze(TABLE.map((d) => d.id));
+
+        const ids = () => IDS;
+        function describe(id) {
+          const d = BY_ID.get(id);
+          if (!d) throw new Error(`FlowDevice: no device "${id}" (there are ${IDS.join(", ")})`);
+          return d;
+        }
+        const idForKey = (key) => (TABLE.find((d) => d.key === key) || { id: null }).id;
+        const slot = (id, top, drop = 120) => [describe(id).metrics.colW - 70, top + drop];
+        function carry(at, from, to, { top }) {
+          const a = describe(from).metrics,
+            b = describe(to).metrics;
+          return [Math.round((at[0] * b.colW) / a.colW), Math.round(top + ((at[1] - top) * b.phH) / a.phH)];
+        }
+        function placeOn(saved, id, { top, drop }) {
+          const own = saved && saved[id];
+          if (own) return own;
+          const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && saved[k]);
+          return from ? carry(saved[from], from, id, { top }) : slot(id, top, drop);
+        }
+        return { ids, describe, idForKey, slot, carry, placeOn };
+      })();
+    </script>
     <script id="scan-module">
       /* ======================================================================
          SCAN MODULE
@@ -5137,7 +5214,7 @@
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
-        const RENDER_KEYS = ["mobile", "tablet", "desktop"];
+        const RENDER_KEYS = FlowDevice.ids(); /* one rendering of each screen per device */
         const clone = (o) => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const str = (v, d = "") => (typeof v === "string" ? v : d);
@@ -5934,8 +6011,9 @@
          "now" is a number the caller hands in.
 
          Interface
-           FlowGeometry.metrics(device)  -> m   the numbers one device gives the arrangement:
-                                                colW phH cap laneH collH deckS deckW peekX peekY closedW edge
+           m  the numbers one device gives the arrangement (FlowDevice.describe(id).metrics):
+              colW phH cap body collH deckS deckW peekX peekY closedW edge
+           FlowGeometry.laneH(m)         -> an open group's height on that device (the head, the body, the caption)
            FlowGeometry.WORLD            laneLeft top0 gap head phTop laneGap (world px)
            FlowGeometry.MOVES            { open, deck }: { dur ms, curve [x1,y1,x2,y2] } the slide the stylesheet
                                          eases its tilt and scale with, too
@@ -6004,21 +6082,7 @@
         });
         const EASE = { open: bezier(...MOVES.open.curve), deck: bezier(...MOVES.deck.curve) };
 
-        function metrics(d) {
-          return {
-            colW: d.cw,
-            phH: d.ch,
-            cap: d.cap,
-            laneH: WORLD.head + d.body + d.cap,
-            collH: d.collH,
-            deckS: d.ds,
-            deckW: d.deckW,
-            peekX: d.peekX,
-            peekY: d.peekY,
-            closedW: d.closedW,
-            edge: d.edge,
-          };
-        }
+        const laneH = (m) => WORLD.head + m.body + m.cap;
 
         /* loose frames with nowhere saved line up in rows of five below the groups */
         function loosePlace(k, bottom, m) {
@@ -6036,7 +6100,7 @@
             bottom = WORLD.top0;
           groups.forEach((g) => {
             const n = g.screens.length,
-              h = g.open ? m.laneH : m.collH,
+              h = g.open ? laneH(m) : m.collH,
               w = g.open ? Math.max(Math.max(1, n) * m.colW + (Math.max(1, n) - 1) * WORLD.gap + 60, 460) : m.closedW;
             const p = pos[g.id];
             let box;
@@ -6250,7 +6314,7 @@
           };
         }
 
-        return { WORLD, MOVES, metrics, arrange, loosePlace, bezier, create };
+        return { WORLD, MOVES, laneH, arrange, loosePlace, bezier, create };
       })();
     </script>
 
@@ -6747,102 +6811,14 @@
         applyFrames(); /* a slide in progress is put where it was going */
         drawConns();
       });
-      let CAP, COL_W, PH_H, COLL_H, DECK_W, PEEK_X;
-      const DEVICES = {
-        mobile: {
-          id: "mobile",
-          label: "Mobile",
-          vp: "390 × 844",
-          cw: 270,
-          ch: 585,
-          cr: 38,
-          ds: 0.4,
-          deckW: 108,
-          peekX: 10,
-          peekY: 8,
-          edge: 509,
-          body: 744,
-          cap: 170,
-          capT: 19,
-          capB: 12.5,
-          capL: 4,
-          collH: 290,
-          closedW: 440,
-          tw: 150,
-          cls: "dm",
-          findY: 662 /* where a finding sits below its frame's caption */,
-        },
-        tablet: {
-          id: "tablet",
-          label: "Tablet",
-          vp: "768 × 1024",
-          cw: 400,
-          ch: 560,
-          cr: 26,
-          ds: 0.4,
-          deckW: 160,
-          peekX: 12,
-          peekY: 9,
-          edge: 480,
-          body: 724,
-          cap: 150,
-          capT: 22,
-          capB: 13.5,
-          capL: 3,
-          collH: 300,
-          closedW: 580,
-          tw: 190,
-          cls: "dw dt",
-          findY: 640 /* where a finding sits below its frame's caption */,
-        },
-        desktop: {
-          id: "desktop",
-          label: "Desktop",
-          vp: "1200 × 772",
-          cw: 600,
-          ch: 420,
-          cr: 14,
-          ds: 0.38,
-          deckW: 228,
-          peekX: 12,
-          peekY: 9,
-          edge: 205,
-          body: 584,
-          cap: 140,
-          capT: 26,
-          capB: 15,
-          capL: 2,
-          collH: 240,
-          closedW: 700,
-          tw: 220,
-          cls: "dw dd",
-          findY: 500 /* where a finding sits below its frame's caption */,
-        },
-      };
-      let DEV = DEVICES.mobile;
+      /* the device on show: its one description (FlowDevice), from which the numbers, the style variables and the classes come */
+      let DEV = FlowDevice.describe("mobile");
       function applyDevice(id) {
-        DEV = DEVICES[id];
-        const M = FlowGeometry.metrics(DEV);
-        geo.setMetrics(M);
-        COL_W = M.colW;
-        PH_H = M.phH;
-        CAP = M.cap;
-        COLL_H = M.collH;
-        DECK_W = M.deckW;
-        PEEK_X = M.peekX;
+        DEV = FlowDevice.describe(id);
+        geo.setMetrics(DEV.metrics);
         const r = document.documentElement.style;
-        r.setProperty("--cw", DEV.cw + "px");
-        r.setProperty("--ch", DEV.ch + "px");
-        r.setProperty("--cr", DEV.cr + "px");
-        r.setProperty("--ds", DEV.ds);
-        r.setProperty("--tw", DEV.tw + "px");
-        r.setProperty("--ts", DEV.tw / DEV.cw);
+        Object.entries(DEV.cssVars).forEach(([name, value]) => r.setProperty(name, value));
         r.setProperty("--head", HEAD + "px");
-        r.setProperty("--cap", DEV.cap + "px");
-        r.setProperty("--capT", DEV.capT + "px");
-        r.setProperty("--capB", DEV.capB + "px");
-        r.setProperty("--capL", DEV.capL);
-        r.setProperty("--edge", DEV.edge + "px");
         document.querySelectorAll("#devsw button").forEach((b) => {
           b.classList.toggle("on", b.dataset.dev === id);
           b.setAttribute("aria-pressed", String(b.dataset.dev === id));
@@ -7051,7 +7027,7 @@
         noteSave = setTimeout(layout.save, 400);
       };
       const notePlace = (n) =>
-        n.frame ? (n.pos && n.pos[DEV.id]) || [COL_W - 70, PH_TOP + 120] : [n.x, n.y];
+        n.frame ? FlowDevice.placeOn(n.pos, DEV.id, { top: PH_TOP }) : [n.x, n.y];
       /* which frame is this point on, if any (world coordinates) */
       const homeFor = (wx, wy) => geo.frameAt({ x: wx, y: wy }, performance.now(), { margin: 20 });
       const localFrom = (id, wx, wy) => {
@@ -7313,7 +7289,7 @@
         layout,
         commit,
         device: () => DEV.id,
-        metrics: () => ({ colW: COL_W, gap: GAP, head: HEAD, phTop: PH_TOP, phH: PH_H, cap: CAP, collH: COLL_H, deckW: DECK_W, peekX: PEEK_X }),
+        metrics: () => ({ ...DEV.metrics, gap: GAP, head: HEAD, phTop: PH_TOP }),
         adapter: {
           frames: () => ORDER,
           box: (id) => geo.box(id),
@@ -7417,19 +7393,19 @@
       function sizeDz(L, n = L.screens.length) {
         const dz = L.el.querySelector(".dz");
         if (L.open) {
-          const w = Math.max(1, n) * (COL_W + GAP) - GAP;
+          const w = Math.max(1, n) * (DEV.metrics.colW + GAP) - GAP;
           Object.assign(dz.style, {
             left: "-28px",
             top: "-34px",
             width: w + 56 + "px",
-            height: PH_TOP + PH_H + CAP + 60 + "px",
+            height: PH_TOP + DEV.metrics.phH + DEV.metrics.cap + 60 + "px",
           });
         } else {
           Object.assign(dz.style, {
             left: "-34px",
             top: -HEAD - 14 + "px",
-            width: DECK_W + PEEK_X * Math.max(n - 1, 0) + 68 + "px",
-            height: COLL_H + 10 + "px",
+            width: DEV.metrics.deckW + DEV.metrics.peekX * Math.max(n - 1, 0) + 68 + "px",
+            height: DEV.metrics.collH + 10 + "px",
           });
         }
       }
@@ -7466,11 +7442,11 @@
           el.classList.toggle("empty", n === 0);
           el.style.setProperty(
             "--hx",
-            DECK_W + PEEK_X * (Math.max(n, 1) - 1) + 60 + "px",
+            DEV.metrics.deckW + DEV.metrics.peekX * (Math.max(n, 1) - 1) + 60 + "px",
           );
           el.style.setProperty(
             "--hy",
-            Math.max(0, Math.round(COLL_H / 2 - 100)) + "px",
+            Math.max(0, Math.round(DEV.metrics.collH / 2 - 100)) + "px",
           );
           el.querySelector(".gcount").textContent =
             n + (n === 1 ? " screen" : " screens");
@@ -7503,12 +7479,12 @@
       /* default: leave the frame's bottom edge, slip between frame and caption, run down the gutter and land on the card.
          once the card has been moved: a smooth curve from the same dock to the nearest side of the card */
       function leaderGeom(left, top, w, h, moved) {
-        const fr = PH_TOP + PH_H,
-          x0 = COL_W - 62,
+        const fr = PH_TOP + DEV.metrics.phH,
+          x0 = DEV.metrics.colW - 62,
           right = left + w;
         if (!moved) {
           const yRun = fr + 24,
-            runX = COL_W + 22,
+            runX = DEV.metrics.colW + 22,
             midY = top + 26,
             toTop = runX <= right - 14,
             lead = `M${x0} ${fr}V${fr + 10}Q${x0} ${yRun} ${x0 + 14} ${yRun}H${runX - 14}Q${runX} ${yRun} ${runX} ${yRun + 14}`;
@@ -7525,7 +7501,7 @@
         if (top >= fr + 28) {
           T = [clamp(x0, left + 18, right - 18), top];
           nB = { nx: 0, ny: -1 };
-        } else if (left >= COL_W - 4) {
+        } else if (left >= DEV.metrics.colW - 4) {
           T = [left, top + h / 2];
           nB = { nx: -1, ny: 0 };
         } else if (right <= 4) {
@@ -7547,7 +7523,7 @@
         const saved = f.pos && f.pos[DEV.id];
         const [dx, dy] = [0, DEV.findY + Math.max(0, nth) * 132];
         let left = saved ? saved[0] : dx,
-          top = saved ? saved[1] : dy + CAP,
+          top = saved ? saved[1] : dy + DEV.metrics.cap,
           moved = !!saved;
         const st = document.createElementNS(svgNS, "svg");
         st.setAttribute("class", "stem");
@@ -7868,7 +7844,7 @@
         if (a === "focus") focusScreen(id);
         if (a === "inspect") inspect(id);
         if (a === "comment")
-          createNote({ text: "Add a comment…", frame: id, local: [COL_W - 70, PH_TOP + 60] });
+          createNote({ text: "Add a comment…", frame: id, local: FlowDevice.slot(DEV.id, PH_TOP, 60) });
         if (a === "play") {
           if (L) play(L.screens.slice(L.screens.indexOf(id)));
           else toast("Group this frame to play it as a flow");
@@ -8436,7 +8412,7 @@
           const a = geo.screenRect(c.from, now),
             b = geo.screenRect(c.to, now);
           if (!a || !b) return;
-          const r = FlowRouting.route(a, b, DEV.edge),
+          const r = FlowRouting.route(a, b, DEV.metrics.edge),
             sh = FlowRouting.shape(r);
           o.ln.setAttribute("d", sh.d);
           o.hit.setAttribute("d", sh.d);
@@ -8591,9 +8567,9 @@
         }
         let r;
         if (tgt) {
-          r = FlowRouting.route(a, geo.screenRect(tgt, now), DEV.edge);
+          r = FlowRouting.route(a, geo.screenRect(tgt, now), DEV.metrics.edge);
         } else {
-          const p0 = FlowRouting.sidePt(a, connDrag.side, DEV.edge);
+          const p0 = FlowRouting.sidePt(a, connDrag.side, DEV.metrics.edge);
           r = { p0, pts: FlowRouting.ortho(p0, { x: w.x, y: w.y, nx: 0, ny: 0 }) };
         }
         const sh = FlowRouting.shape(r);
@@ -8745,12 +8721,12 @@
               const end =
                 box.x +
                 (L.open
-                  ? L.screens.length * (COL_W + GAP) + 40
-                  : DECK_W + PEEK_X * 3 + 120);
+                  ? L.screens.length * (DEV.metrics.colW + GAP) + 40
+                  : DEV.metrics.deckW + DEV.metrics.peekX * 3 + 120);
               let k = 0;
               list.forEach((i) => {
                 P[i] = {
-                  x: Math.round(end + k * (COL_W + 70)),
+                  x: Math.round(end + k * (DEV.metrics.colW + 70)),
                   y: Math.round(L.open ? geo.place(i).y : box.top + HEAD),
                 };
                 k++;
@@ -8774,7 +8750,7 @@
             const box = geo.box(L.id);
             L.screens.forEach((i, k) => {
               P[i] = {
-                x: Math.round(box.x + k * (COL_W + GAP)),
+                x: Math.round(box.x + k * (DEV.metrics.colW + GAP)),
                 y: Math.round(box.top + HEAD),
               };
             });
@@ -8805,7 +8781,7 @@
             layout.lanes.forEach((L) => delete P[L.id]);
             loose.forEach((id) => delete P[id]);
             /* pinning the loose frames is the user's tidy, so it is written here, in reading order, and nowhere else */
-            const M = FlowGeometry.metrics(DEV);
+            const M = DEV.metrics;
             const { bottom } = FlowGeometry.arrange(geoInput(), M);
             loose.forEach((id, k) => (P[id] = FlowGeometry.loosePlace(k, bottom, M)));
             /* findings back beside their frames; scanned notes back where the scan put them */
@@ -8921,8 +8897,8 @@
           const f = geo.place(id);
           x0 = Math.min(x0, f.x);
           y0 = Math.min(y0, f.y + PH_TOP);
-          x1 = Math.max(x1, f.x + COL_W);
-          y1 = Math.max(y1, f.y + PH_TOP + PH_H);
+          x1 = Math.max(x1, f.x + DEV.metrics.colW);
+          y1 = Math.max(y1, f.y + PH_TOP + DEV.metrics.phH);
         });
         const pad = 14;
         Object.assign(selbox.style, {
@@ -9542,9 +9518,7 @@
         if (e.key === "v") setHand(false);
         if (e.key === "a") toggleAll();
         if (e.key === "l") tidy();
-        if (e.key === "m") setDevice("mobile");
-        if (e.key === "t") setDevice("tablet");
-        if (e.key === "d") setDevice("desktop");
+        if (FlowDevice.idForKey(e.key)) setDevice(FlowDevice.idForKey(e.key));
         if (e.key === "1") view("all");
         if (e.key === "2" && layout.lanes[0]) view(layout.lanes[0].id);
         if (e.key === "3" && layout.lanes[1]) view(layout.lanes[1].id);
@@ -9670,9 +9644,16 @@
         switching = false;
         toast(DEV.label + " · " + DEV.vp);
       }
-      document
-        .querySelectorAll("#devsw button")
-        .forEach((b) => (b.onclick = () => setDevice(b.dataset.dev)));
+      /* one button per device, from its description */
+      FlowDevice.ids().forEach((id) => {
+        const d = FlowDevice.describe(id),
+          b = document.createElement("button");
+        b.dataset.dev = id;
+        b.title = d.title;
+        b.innerHTML = `<svg><use href="#${d.icon}" /></svg>`;
+        b.onclick = () => setDevice(id);
+        $("#devsw").appendChild(b);
+      });
       $("#btnAll").onclick = toggleAll;
 
       /* ======================================================================

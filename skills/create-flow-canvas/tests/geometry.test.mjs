@@ -3,13 +3,13 @@
    Run:  node --test skills/create-flow-canvas/tests/geometry.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FlowGeometry, FlowRouting, html } from "./modules.mjs";
+import { FlowDevice, FlowGeometry, FlowRouting, html } from "./modules.mjs";
 
-const { arrange, loosePlace, metrics, WORLD, create } = FlowGeometry;
+const { arrange, loosePlace, laneH, WORLD, create } = FlowGeometry;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const xy = (r) => ({ x: r.x, y: r.y });
-const MOBILE = { cw: 270, ch: 585, cap: 170, body: 744, collH: 290, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, closedW: 440, edge: 509 };
-const M = metrics(MOBILE);
+const M = FlowDevice.describe("mobile").metrics;
+const LANE_H = laneH(M);
 const ids = (n, p = "s") => Array.from({ length: n }, (_, i) => `${p}${i}`);
 const group = (id, screens, open = true) => ({ id, screens, open });
 /* a canvas of the given groups, plus loose frames, in one list of screens */
@@ -48,7 +48,7 @@ test("a closed group stacks into a deck: peeking, tilted, staggered from the bac
 test("groups with no saved position stack down the canvas; an empty group takes no room", () => {
   const a = plain(arrange(world([group("a", ids(2, "a")), group("e", []), group("b", ids(2, "b"), false)]), M));
   assert.equal(a.boxes.a.top, WORLD.top0);
-  assert.equal(a.boxes.e.top, WORLD.top0 + M.laneH + WORLD.laneGap, "the empty group is placed where the next would go");
+  assert.equal(a.boxes.e.top, WORLD.top0 + LANE_H + WORLD.laneGap, "the empty group is placed where the next would go");
   assert.equal(a.boxes.b.top, a.boxes.e.top, "and the next group takes the same place");
   assert.equal(a.boxes.a.x, WORLD.laneLeft);
 });
@@ -62,7 +62,7 @@ test("a group with a saved position goes there and does not push the others down
 test("a group's box is as wide as its row, or as its deck", () => {
   const a = plain(arrange(world([group("o", ids(3)), group("c", ids(3, "c"), false), group("one", ["x"])]), M));
   assert.equal(a.boxes.o.w, 3 * M.colW + 2 * WORLD.gap + 60);
-  assert.equal(a.boxes.o.h, M.laneH);
+  assert.equal(a.boxes.o.h, LANE_H);
   assert.equal(a.boxes.c.w, M.closedW);
   assert.equal(a.boxes.c.h, M.collH);
   assert.equal(a.boxes.one.w, 460, "a short row still has room to drop a frame into");
@@ -76,7 +76,7 @@ test("a loose frame with a saved position goes there", () => {
 test("loose frames with no saved position line up in rows of five below the groups, and nothing is written back", () => {
   const input = deepFreeze(world([group("g", ids(2))], ids(7, "f"), {}));
   const a = plain(arrange(input, M));
-  const bottom = WORLD.top0 + M.laneH;
+  const bottom = WORLD.top0 + LANE_H;
   assert.equal(a.bottom, bottom);
   assert.deepEqual(plain(a.places.f0), { ...plain(a.places.f0), x: loosePlace(0, bottom, M).x, y: loosePlace(0, bottom, M).y });
   assert.deepEqual([a.places.f5.x, a.places.f5.y], [loosePlace(5, bottom, M).x, loosePlace(5, bottom, M).y]);
@@ -87,7 +87,7 @@ test("loose frames with no saved position line up in rows of five below the grou
 test("a loose frame's default place follows the groups when one grows", () => {
   const closed = plain(arrange(world([group("g", ids(2), false)], ["f"]), M));
   const open = plain(arrange(world([group("g", ids(2), true)], ["f"]), M));
-  assert.equal(open.places.f.y - closed.places.f.y, M.laneH - M.collH);
+  assert.equal(open.places.f.y - closed.places.f.y, LANE_H - M.collH);
 });
 
 test("default places are handed out only to the frames that have none", () => {

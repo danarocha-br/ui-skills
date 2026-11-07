@@ -37,6 +37,14 @@ _Avoid_: Card, tile, artboard
 Where a frame is meant to be. A frame in a group takes its slot in the row or the deck; a loose frame is where the user put it on this device, or, when they have not, in the next free spot below the groups. A place is worked out from the layout each time and is not saved, apart from the positions the user chose.
 _Avoid_: Slot (that is one place in a row), coordinates
 
+**Device**:
+A size the canvas can show every screen at (mobile, tablet, desktop). Each is described once; the sizes of the screen and its caption, the style variables, the class on a frame, the switcher button and the key that reaches it all come from that description. Groups are shared by every device; places are per device. In code, `FlowDevice.describe(id)`.
+_Avoid_: Viewport, breakpoint, platform
+
+**Carry**:
+What a note does on a device it has no place on: it keeps the same relative spot on the frame's screen as on the device it was placed on. A carried place is worked out each time and is not saved, so it never overrides one the user chose. With no place on any device, a note takes the **slot** near the frame's right edge.
+_Avoid_: Fallback, default position
+
 **Slide**:
 A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Someone who asks for reduced motion gets no slide: frames are simply at their places.
 _Avoid_: Transition, animation (those name the browser mechanism, not the thing the user sees)
