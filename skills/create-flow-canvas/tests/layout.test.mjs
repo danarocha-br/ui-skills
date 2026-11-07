@@ -1,0 +1,277 @@
+/* Layout module tests. They run the module on its own, without a page: the script block with
+   id="layout-module" is read out of assets/flow-canvas.html and evaluated in a bare context.
+   Run:  node --test skills/create-flow-canvas/tests/layout.test.mjs   (from the repo root) */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const html = fs.readFileSync(path.join(here, "../assets/flow-canvas.html"), "utf8");
+const block = html.match(/<script id="layout-module">([\s\S]*?)<\/script>/);
+assert.ok(block, 'no <script id="layout-module"> block in flow-canvas.html');
+const sandbox = {};
+vm.runInNewContext(block[1], sandbox);
+const { FlowLayout } = sandbox;
+
+const KEY = "flow-canvas.layout.v1";
+const SCREENS = new Set(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
+const DEFAULTS = {
+  lanes: [
+    { id: "g1", screens: ["s1", "s2", "s3", "s4"], meta: "not persisted", open: true },
+    { id: "g2", screens: ["s5", "s6", "s7"], open: false },
+    { id: "g3", screens: ["s8", "s9"], open: false },
+  ],
+  pos: { mobile: {}, tablet: {}, desktop: {} },
+  conns: [
+    { id: "c1", from: "s1", to: "s2", label: "Continue" },
+    { id: "c2", from: "s2", to: "s3", label: "Continue" },
+    { id: "c3", from: "s3", to: "s4", label: "Allow" },
+    { id: "c4", from: "s5", to: "s6", label: "Pick plant" },
+    { id: "c5", from: "s6", to: "s7", label: "Add to jungle" },
+    { id: "c6", from: "s8", to: "s9", label: "Start trial" },
+  ],
+  notes: [{ id: "s1:Dana", frame: "s1", who: "Dana", text: "Hero image is big", pos: { mobile: [1, 2] } }],
+  scans: {},
+};
+
+const memory = (seed = {}) => {
+  const data = { ...seed };
+  return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => void (data[k] = String(v)) };
+};
+const make = (storage = memory(), over = {}) =>
+  FlowLayout.create({
+    key: KEY,
+    storage,
+    hasScreen: (id) => SCREENS.has(id),
+    defaults: () => DEFAULTS,
+    ...over,
+  });
+/* the module runs in its own vm context, so compare through JSON rather than by prototype */
+const eq = (actual, expected, message) =>
+  assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, message);
+const plain = (layout) => JSON.parse(layout.snapshot());
+
+test("empty storage gives the defaults, without page-only fields", () => {
+  const layout = make();
+  eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g3"]);
+  eq(Object.keys(layout.lanes[0]), ["id", "screens", "open"]);
+  assert.equal(layout.conns.length, 6);
+  eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
+  eq(layout.scans, {});
+  assert.equal(layout.notes[0].id, "s1:Dana");
+});
+
+test("corrupt or foreign storage gives the defaults", () => {
+  for (const raw of ["{not json", "null", "[]", '{"lanes":"x"}', '"hello"', "42"]) {
+    const layout = make(memory({ [KEY]: raw }));
+    eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g3"], raw);
+    assert.equal(layout.nextId("g"), "g4", raw);
+  }
+});
+
+test("save then load round-trips every kind and the counters", () => {
+  const storage = memory();
+  const a = make(storage);
+  a.lanes[1].open = true;
+  a.pos.mobile.s1 = { x: 10, y: 20 };
+  a.conns.push({ id: a.nextId("c"), from: "s1", to: "s9", label: "Jump" });
+  a.scans["s1:states"] = { gone: true, pos: { mobile: [1, 2] } };
+  a.notes.push({ id: "n1", frame: null, who: "You", text: "floating", x: 5, y: 6 });
+  a.lanes[2].screens = ["s8"];
+  a.lanes.push({ id: a.nextId("g"), screens: ["s9"], open: true });
+  a.save();
+  const b = make(storage);
+  assert.equal(b.snapshot(), a.snapshot());
+  assert.equal(b.nextId("c"), "c8");
+  assert.equal(b.nextId("g"), "g5");
+});
+
+test("a saved v1 layout from the real canvas loads unchanged and saves back byte for byte", () => {
+  const raw = fs.readFileSync(path.join(here, "fixtures/saved-layout-v1.json"), "utf8").trim();
+  const storage = memory({ [KEY]: raw });
+  const layout = make(storage);
+  const saved = JSON.parse(raw);
+  eq(plain(layout), { lanes: saved.lanes, pos: saved.pos, conns: saved.conns, scans: saved.scans, notes: saved.notes });
+  layout.save();
+  assert.equal(storage.data[KEY], raw);
+  assert.equal(layout.nextId("c"), "c8");
+  assert.equal(layout.nextId("g"), "g5");
+});
+
+test("load drops what no longer exists", () => {
+  const saved = {
+    lanes: [
+      { id: "g1", screens: ["s1", "ghost", "s2"], open: true },
+      { id: "g2", screens: ["s2", "s3"], open: false }, // s2 already seen
+      { id: "g9", screens: ["ghost"], open: true }, // emptied: dropped
+      null,
+    ],
+    pos: { mobile: { s1: { x: 1, y: 2 } } },
+    conns: [
+      { id: "c1", from: "s1", to: "s2" },
+      { id: "c2", from: "s1", to: "ghost" },
+      { id: "c3", from: "s3", to: "s3" },
+      null,
+    ],
+    scans: "nope",
+    notes: [{ id: "n1", text: "ok" }, { id: "n2" }, { text: "no id" }, null],
+    cc: 3,
+    gc: 1,
+  };
+  const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
+  eq(layout.lanes, [
+    { id: "g1", screens: ["s1", "s2"], open: true },
+    { id: "g2", screens: ["s3"], open: false },
+  ]);
+  eq(layout.conns.map((c) => c.id), ["c1"]);
+  eq(layout.scans, {});
+  eq(layout.notes.map((n) => n.id), ["n1"]);
+  eq(layout.pos.mobile, { s1: { x: 1, y: 2 } });
+  eq(Object.keys(layout.pos), ["mobile", "tablet", "desktop"]);
+});
+
+test("a saved layout with no groups at all stays empty", () => {
+  const layout = make(memory({ [KEY]: JSON.stringify({ lanes: [], conns: [], notes: [], cc: 6, gc: 3 }) }));
+  eq(layout.lanes, []);
+});
+
+test("counters never start below an id that is already in use", () => {
+  const saved = { lanes: [{ id: "g7", screens: ["s1"], open: true }], conns: [{ id: "c9", from: "s1", to: "s2" }], cc: 2, gc: 0 };
+  const layout = make(memory({ [KEY]: JSON.stringify(saved) }));
+  assert.equal(layout.nextId("c"), "c10");
+  assert.equal(layout.nextId("g"), "g8");
+});
+
+test("snapshot is a copy: later edits do not change it, equal state gives an equal string", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  assert.equal(layout.snapshot(), s);
+  layout.lanes[0].screens.push("s9");
+  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  assert.notEqual(layout.snapshot(), s);
+  eq(JSON.parse(s).lanes[0].screens, ["s1", "s2", "s3", "s4"]);
+});
+
+test("snapshot leaves out page-only group fields and the counters", () => {
+  const layout = make();
+  Object.assign(layout.lanes[0], { x: 5, top: 6, pinned: true, el: { not: "serialisable" } });
+  const s = plain(layout);
+  eq(Object.keys(s), ["lanes", "pos", "conns", "scans", "notes"]);
+  eq(Object.keys(s.lanes[0]), ["id", "screens", "open"]);
+});
+
+test("restore puts a snapshot back, replaces the live objects, and saves", () => {
+  const storage = memory();
+  const layout = make(storage);
+  const s = layout.snapshot();
+  layout.lanes.length = 0;
+  layout.conns.push({ id: "c99", from: "s1", to: "s9" });
+  layout.notes = [];
+  layout.restore(s);
+  assert.equal(layout.snapshot(), s);
+  assert.equal(JSON.parse(storage.data[KEY]).lanes.length, 3);
+  // later edits to the restored state do not reach the snapshot string
+  layout.lanes[0].open = false;
+  assert.equal(JSON.parse(s).lanes[0].open, true);
+});
+
+test("restore leaves the counters alone, so undone ids are not reused", () => {
+  const layout = make();
+  const s = layout.snapshot();
+  assert.equal(layout.nextId("c"), "c7");
+  layout.restore(s);
+  assert.equal(layout.nextId("c"), "c8");
+});
+
+test("history: marks come back last-in first-out, and an empty history says so", () => {
+  const layout = make();
+  layout.mark();
+  layout.lanes[0].open = false;
+  layout.mark();
+  layout.lanes[0].open = true;
+  layout.lanes[1].open = true;
+  assert.equal(layout.undo(), true);
+  assert.equal(layout.lanes[0].open, false);
+  assert.equal(layout.lanes[1].open, false);
+  assert.equal(layout.undo(), true);
+  assert.equal(layout.lanes[0].open, true);
+  assert.equal(layout.undo(), false);
+  assert.equal(layout.lanes[0].open, true);
+});
+
+test("history: mark(s) takes a snapshot from earlier, and keeps 40", () => {
+  const layout = make();
+  const before = layout.snapshot();
+  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.mark(before);
+  assert.equal(layout.undo(), true);
+  eq(layout.pos.mobile, {});
+  for (let i = 0; i < 45; i++) {
+    layout.pos.mobile.s1 = { x: i, y: 0 };
+    layout.mark();
+  }
+  let undone = 0;
+  while (layout.undo()) undone++;
+  assert.equal(undone, 40);
+  // marks 0 to 4 were dropped: the oldest state still reachable is the one marked at x = 5
+  eq(layout.pos.mobile.s1, { x: 5, y: 0 });
+});
+
+test("reset returns the defaults with the counters at their starting point, and saves", () => {
+  const storage = memory();
+  const layout = make(storage);
+  layout.nextId("c");
+  layout.nextId("g");
+  layout.nextId("g");
+  layout.lanes.length = 0;
+  layout.conns.length = 0;
+  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.reset();
+  eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g3"]);
+  assert.equal(layout.conns.length, 6);
+  eq(layout.pos.mobile, {});
+  assert.equal(layout.nextId("g"), "g4");
+  assert.equal(layout.nextId("c"), "c7");
+  assert.equal(JSON.parse(storage.data[KEY]).lanes.length, 3);
+});
+
+test("reset hands out fresh copies, so editing after a reset never touches the defaults", () => {
+  const layout = make();
+  layout.reset();
+  layout.lanes[0].screens.push("s9");
+  layout.conns[0].label = "changed";
+  layout.notes[0].text = "changed";
+  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  eq(DEFAULTS.lanes[0].screens, ["s1", "s2", "s3", "s4"]);
+  assert.equal(DEFAULTS.conns[0].label, "Continue");
+  assert.equal(DEFAULTS.notes[0].text, "Hero image is big");
+  eq(DEFAULTS.pos.mobile, {});
+  layout.reset();
+  eq(layout.lanes[0].screens, ["s1", "s2", "s3", "s4"]);
+});
+
+test("nextId counts up per kind and refuses unknown kinds", () => {
+  const layout = make();
+  eq([layout.nextId("c"), layout.nextId("c"), layout.nextId("g")], ["c7", "c8", "g4"]);
+  assert.throws(() => layout.nextId("x"), /unknown kind/);
+});
+
+test("a storage that throws neither breaks loading nor saving", () => {
+  const broken = {
+    getItem() {
+      throw new Error("blocked");
+    },
+    setItem() {
+      throw new Error("quota");
+    },
+  };
+  const layout = make(broken);
+  assert.equal(layout.lanes.length, 3);
+  assert.doesNotThrow(() => layout.save());
+  assert.doesNotThrow(() => layout.reset());
+  layout.mark();
+  assert.equal(layout.undo(), true);
+});

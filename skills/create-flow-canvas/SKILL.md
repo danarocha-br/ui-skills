@@ -11,6 +11,8 @@ Turns a codebase into one self-contained HTML canvas: screens laid out as frames
 
 `assets/flow-canvas.html` is the reference build, made around a fictional plant-care app ("Loam"). The scanner and generator are not written yet. In the reference build the engine and the Loam data share one file; `docs/architecture-review.html` lists what to separate first (layout state owner, one commit seam, annotation kinds, engine vs scanned data).
 
+Done so far: the layout (groups, positions per device, connectors, scanner cards, notes, id counters, undo history) has one owner, the `FlowLayout` module, in its own `<script id="layout-module">` block at the top of the canvas. It has no DOM and no demo knowledge, and `tests/layout.test.mjs` runs it on its own: `node --test skills/create-flow-canvas/tests/layout.test.mjs`. Vocabulary is in `GLOSSARY.md`.
+
 ## What the canvas does
 
 - **Frames and flows:** screens as frames, grouped into flows that open as a row or close into a stack. Drag frames to reorder, regroup or free them. Marquee-select, group, ungroup, rename.

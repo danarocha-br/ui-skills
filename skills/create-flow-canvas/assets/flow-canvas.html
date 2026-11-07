@@ -4561,6 +4561,172 @@
     </aside>
     <div class="ui" id="toast"></div>
 
+    <script id="layout-module">
+      /* ======================================================================
+         LAYOUT MODULE
+         Owns the persisted layout: groups (saved as "lanes"), positions per device, connectors,
+         scanner-card state and notes, plus the id counters and the undo history. It knows nothing about
+         the page: no DOM, no screens, no demo data. Everything it needs is handed to create().
+      
+         Interface
+           const layout = FlowLayout.create({ key, storage, hasScreen, defaults })
+             key        localStorage key the layout is saved under
+             storage    anything with getItem(key) / setItem(key, value)
+             hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
+             defaults   () => { lanes, pos, conns, scans?, notes }, called for a fresh copy each time
+           layout.lanes layout.pos layout.conns layout.scans layout.notes
+                      Live state. Read through layout every time, never keep your own reference:
+                      restore, undo and reset swap the arrays and objects for new ones.
+           layout.save()           write to storage (callers do this after an edit)
+           layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string
+           layout.restore(s)       put a snapshot back and save. Counters are not restored.
+           layout.reset()          back to the defaults, counters included, and save
+           layout.nextId("c"|"g")  the next connector / group id, "c7" / "g4"
+           layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep
+           layout.undo()           restore the latest mark; false when there is none
+      
+         A new persisted kind is added here, in persisted() and load(), and nowhere else.
+         ====================================================================== */
+      var FlowLayout = (function () {
+        "use strict";
+        const MAX_UNDO = 40;
+        /* id prefix -> the field the counter is saved in */
+        const COUNTER_FIELD = { c: "cc", g: "gc" };
+        const clone = (o) => JSON.parse(JSON.stringify(o));
+        /* the highest number among ids like "c12": ids are never handed out twice */
+        function highestId(list, prefix) {
+          let top = 0;
+          (list || []).forEach((x) => {
+            const m = x && typeof x.id === "string" && x.id.startsWith(prefix) && /^\d+$/.test(x.id.slice(prefix.length));
+            if (m) top = Math.max(top, Number(x.id.slice(prefix.length)));
+          });
+          return top;
+        }
+
+        function create({ key, storage, hasScreen, defaults }) {
+          const layout = {};
+          let history = [];
+          let counters = { c: 0, g: 0 };
+
+          function freshDefaults() {
+            const d = clone(defaults());
+            return {
+              lanes: d.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
+              pos: d.pos,
+              conns: d.conns,
+              scans: d.scans || {},
+              notes: d.notes,
+            };
+          }
+          const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.lanes, "g") });
+          function adopt(state) {
+            layout.lanes = state.lanes;
+            layout.pos = state.pos;
+            layout.conns = state.conns;
+            layout.scans = state.scans;
+            layout.notes = state.notes;
+          }
+          /* what is saved and snapshotted: lanes keep id, screens and open; the page keeps its own
+             geometry on the same objects (x, top, pinned, el) and none of it is persisted */
+          const persisted = () => ({
+            lanes: layout.lanes.map((l) => ({ id: l.id, screens: l.screens, open: l.open })),
+            pos: layout.pos,
+            conns: layout.conns,
+            scans: layout.scans,
+            notes: layout.notes,
+          });
+
+          function load() {
+            const d = freshDefaults();
+            const start = startCounters(d);
+            const fallBack = () => {
+              adopt(d);
+              counters = start;
+            };
+            let st = null;
+            try {
+              st = JSON.parse(storage.getItem(key) || "null");
+            } catch (e) {}
+            if (!st || !Array.isArray(st.lanes)) return fallBack();
+            try {
+              const seen = new Set(),
+                lanes = [];
+              st.lanes.forEach((l) => {
+                const sc = ((l && l.screens) || []).filter((id) => hasScreen(id) && !seen.has(id));
+                sc.forEach((id) => seen.add(id));
+                if (sc.length) lanes.push({ id: l.id, screens: sc, open: !!l.open });
+              });
+              const out = {
+                lanes,
+                pos: Object.assign(d.pos, st.pos || {}),
+                conns: Array.isArray(st.conns)
+                  ? st.conns.filter((c) => c && hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to)
+                  : d.conns,
+                scans: st.scans && typeof st.scans === "object" ? st.scans : d.scans,
+                notes: Array.isArray(st.notes)
+                  ? st.notes.filter((n) => n && n.id && typeof n.text === "string")
+                  : d.notes,
+              };
+              adopt(out);
+              counters = {
+                c: Math.max(Number(st.cc) || start.c, highestId(out.conns, "c")),
+                g: Math.max(Number(st.gc) || start.g, highestId(out.lanes, "g")),
+              };
+            } catch (e) {
+              fallBack();
+            }
+          }
+
+          layout.save = () => {
+            try {
+              storage.setItem(
+                key,
+                JSON.stringify(Object.assign(persisted(), { cc: counters.c, gc: counters.g })),
+              );
+            } catch (e) {}
+          };
+          layout.snapshot = () => JSON.stringify(persisted());
+          layout.restore = (s) => {
+            const st = JSON.parse(s);
+            adopt({
+              lanes: st.lanes,
+              pos: st.pos,
+              conns: st.conns || layout.conns,
+              scans: st.scans || {},
+              notes: st.notes || layout.notes,
+            });
+            layout.save();
+          };
+          layout.reset = () => {
+            const d = freshDefaults();
+            adopt(d);
+            counters = startCounters(d);
+            layout.save();
+          };
+          layout.nextId = (kind) => {
+            if (!COUNTER_FIELD[kind]) throw new Error("FlowLayout.nextId: unknown kind " + kind);
+            counters[kind] += 1;
+            return kind + counters[kind];
+          };
+          layout.mark = (s) => {
+            history.push(s || layout.snapshot());
+            if (history.length > MAX_UNDO) history.shift();
+          };
+          layout.undo = () => {
+            const s = history.pop();
+            if (!s) return false;
+            layout.restore(s);
+            return true;
+          };
+
+          load();
+          return layout;
+        }
+
+        return { create };
+      })();
+    </script>
+
     <script>
       /* ======================================================================
    DATA — in the real skill this is what the scanner produces
@@ -5298,7 +5464,7 @@
       let noteSave;
       const saveNotesSoon = () => {
         clearTimeout(noteSave);
-        noteSave = setTimeout(saveLayout, 400);
+        noteSave = setTimeout(layout.save, 400);
       };
       const notePlace = (n) =>
         n.frame ? (n.pos && n.pos[DEV.id]) || [COL_W - 70, PH_TOP + 120] : [n.x, n.y];
@@ -5349,10 +5515,10 @@
       }
       function refreshNotes() {
         document.querySelectorAll(".note").forEach((n) => n.remove());
-        LAY.notes.forEach(buildNote);
+        layout.notes.forEach(buildNote);
       }
       function createNote({ text = "New note", frame = null, local = null, world = null }) {
-        pushUndo();
+        layout.mark();
         const n = {
           id: "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
           frame,
@@ -5365,9 +5531,9 @@
           n.x = world[0];
           n.y = world[1];
         }
-        LAY.notes.push(n);
+        layout.notes.push(n);
         const d = buildNote(n);
-        saveLayout();
+        layout.save();
         if (d) {
           const t = d.querySelector(".txt");
           t.focus();
@@ -5376,9 +5542,9 @@
         return d;
       }
       function removeNote(d) {
-        pushUndo();
-        LAY.notes = LAY.notes.filter((n) => n.id !== d.dataset.nid);
-        saveLayout();
+        layout.mark();
+        layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
+        layout.save();
         d.remove();
         toast("Note deleted. ⌘Z brings it back.");
       }
@@ -5407,7 +5573,7 @@
         d.style.left = x + "px";
         d.style.top = y + "px";
         d.style.zIndex = "";
-        saveLayout();
+        layout.save();
       }
 
       /* ======================================================================
@@ -5416,78 +5582,22 @@
    fans out into a flow (open) or stacks into a deck (closed). Membership is shared by
    every device; positions are remembered per device, because the frames change size.
    ====================================================================== */
-      const LAYOUT_KEY = "flow-canvas.layout.v1";
-      const defaultLayout = () => ({
-        lanes: DEFAULT_LANES.map((l) => ({
-          id: l.id,
-          screens: [...l.screens],
-          open: l.open,
-        })),
-        pos: { mobile: {}, tablet: {}, desktop: {} },
-        conns: CONN_DEFAULT.map((c) => ({ ...c })),
-        notes: seedNotes(),
-        scans: {} /* scanner findings: { "frame:kind": { gone, pos: { device: [left, top] } } } */,
-        cc: 6,
-        gc: 3,
+      const layout = FlowLayout.create({
+        key: "flow-canvas.layout.v1",
+        storage: {
+          getItem: (k) => localStorage.getItem(k),
+          setItem: (k, v) => localStorage.setItem(k, v),
+        },
+        hasScreen: (id) => !!SCREENS[id],
+        defaults: () => ({
+          lanes: DEFAULT_LANES,
+          pos: { mobile: {}, tablet: {}, desktop: {} },
+          conns: CONN_DEFAULT,
+          notes: seedNotes(),
+          scans: {} /* scanner findings: { "frame:kind": { gone, pos: { device: [left, top] } } } */,
+        }),
       });
-      function loadLayout() {
-        const d = defaultLayout();
-        try {
-          const st = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null");
-          if (st && Array.isArray(st.lanes)) {
-            const seen = new Set(),
-              lanes = [];
-            st.lanes.forEach((l) => {
-              const sc = (l.screens || []).filter(
-                (id) => SCREENS[id] && !seen.has(id),
-              );
-              sc.forEach((id) => seen.add(id));
-              if (sc.length)
-                lanes.push({ id: l.id, screens: sc, open: !!l.open });
-            });
-            d.lanes = lanes;
-            d.pos = Object.assign(d.pos, st.pos || {});
-            if (Array.isArray(st.conns))
-              d.conns = st.conns.filter(
-                (c) => c && SCREENS[c.from] && SCREENS[c.to] && c.from !== c.to,
-              );
-            if (st.scans && typeof st.scans === "object") d.scans = st.scans;
-            if (Array.isArray(st.notes))
-              d.notes = st.notes.filter((n) => n && n.id && typeof n.text === "string");
-            d.cc = st.cc || 6;
-            d.gc = st.gc || 3;
-          }
-        } catch (e) {}
-        return d;
-      }
-      let LAY = loadLayout(),
-        LANES = LAY.lanes,
-        POS = LAY.pos,
-        CONNS = LAY.conns,
-        SCANST = LAY.scans,
-        cCounter = LAY.cc,
-        gCounter = LAY.gc;
-      function saveLayout() {
-        try {
-          localStorage.setItem(
-            LAYOUT_KEY,
-            JSON.stringify({
-              lanes: LANES.map((l) => ({
-                id: l.id,
-                screens: l.screens,
-                open: l.open,
-              })),
-              pos: POS,
-              conns: CONNS,
-              scans: SCANST,
-              notes: LAY.notes,
-              cc: cCounter,
-              gc: gCounter,
-            }),
-          );
-        } catch (e) {}
-      }
-      const laneOf = (id) => LANES.find((l) => l.id && l.screens.includes(id));
+      const laneOf = (id) => layout.lanes.find((l) => l.id && l.screens.includes(id));
       const isFree = (id) => !laneOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${id}"]`);
       const laneEl = (id) => document.getElementById(id);
@@ -5495,7 +5605,7 @@
       const FR = {};
       let dragSet = new Set();
       function posOf() {
-        return POS[DEV.id] || (POS[DEV.id] = {});
+        return layout.pos[DEV.id] || (layout.pos[DEV.id] = {});
       }
       function laneH(L) {
         return L.open ? LANE_H : COLL_H;
@@ -5525,7 +5635,7 @@
       function placeLanes() {
         let top = TOP0;
         const P = posOf();
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           const p = P[L.id];
           if (p) {
             L.x = p.x;
@@ -5545,7 +5655,7 @@
         y: bottom + 140 + Math.floor(k / 5) * (PH_TOP + PH_H + CAP + 100),
       });
       function computeFrames() {
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           const n = L.screens.length;
           L.screens.forEach((id, i) => {
             if (L.open)
@@ -5578,7 +5688,7 @@
         });
         const P = posOf();
         let bottom = TOP0;
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
         });
         let k = 0;
@@ -5642,7 +5752,7 @@
         world.insertBefore(el, notesEl);
         el.querySelector(".ghead").addEventListener("click", (e) => {
           e.stopPropagation();
-          const Lc = LANES.find((l) => l.id === el.id);
+          const Lc = layout.lanes.find((l) => l.id === el.id);
           if (!Lc) return;
           if (e.target.closest(".grip")) return;
           if (e.target.closest(".fmore")) {
@@ -5679,11 +5789,11 @@
         }
       }
       function syncLanes() {
-        const ids = new Set(LANES.map((l) => l.id));
+        const ids = new Set(layout.lanes.map((l) => l.id));
         document.querySelectorAll(".lane").forEach((e) => {
           if (!ids.has(e.id)) e.remove();
         });
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           let el = document.getElementById(L.id);
           if (!el) el = makeLane(L);
           L.el = el;
@@ -5769,7 +5879,7 @@
         return { x0, y0: fr, d: rounded(pts, 12), end: T };
       }
       function buildScan(col, sc) {
-        const rec = SCANST[sc.key];
+        const rec = layout.scans[sc.key];
         if (rec && rec.gone) return;
         const saved = rec && rec.pos && rec.pos[DEV.id];
         const [dx, dy] = sc.pos[DEV.id];
@@ -5806,9 +5916,9 @@
           en.setAttribute("cy", g.end[1]);
         };
         const remember = () => {
-          const r = SCANST[sc.key] || (SCANST[sc.key] = {});
+          const r = layout.scans[sc.key] || (layout.scans[sc.key] = {});
           r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(left), Math.round(top)] });
-          saveLayout();
+          layout.save();
         };
         place(left, top, moved);
         const acts = {
@@ -5839,9 +5949,9 @@
         d.addEventListener("focusin", () => tie(true));
         d.addEventListener("focusout", () => tie(false));
         const dismiss = () => {
-          pushUndo();
-          (SCANST[sc.key] || (SCANST[sc.key] = {})).gone = true;
-          saveLayout();
+          layout.mark();
+          (layout.scans[sc.key] || (layout.scans[sc.key] = {})).gone = true;
+          layout.save();
           tie(false);
           st.remove();
           d.remove();
@@ -5859,7 +5969,7 @@
             if (!o.moved) {
               if (Math.hypot(ddx, ddy) * cam.k < 4) return;
               o.moved = true;
-              pushUndo();
+              layout.mark();
               d.classList.add("dragging");
               document.body.classList.add("selecting");
             }
@@ -5895,7 +6005,7 @@
             e.preventDefault();
             e.stopPropagation();
             if (!d._nudged) {
-              pushUndo();
+              layout.mark();
               d._nudged = true;
               setTimeout(() => (d._nudged = false), 600);
             }
@@ -5968,7 +6078,7 @@
           x1 = Math.max(x1, x + w);
           y1 = Math.max(y1, y + h);
         };
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           if (L.screens.length)
             add(L.x - 20, L.top - 20, laneWidth(L) + 40, laneH(L) + 40);
         });
@@ -5980,11 +6090,11 @@
         return { x: x0 - 40, y: y0 - 60, w: x1 - x0 + 80, h: y1 - y0 + 120 };
       }
       function setLane(id, open, opts = {}) {
-        const L = LANES.find((l) => l.id === id);
+        const L = layout.lanes.find((l) => l.id === id);
         if (!L || L.open === open) return;
         L.open = open;
         relayout();
-        saveLayout();
+        layout.save();
         if (open) {
           if (opts.fly !== false) fly(fitRect(laneRect(L), 40));
         } else {
@@ -6056,12 +6166,12 @@
           fly(fitRect(allRect(), 30));
           return;
         }
-        const L = LANES.find((l) => l.id === n);
+        const L = layout.lanes.find((l) => l.id === n);
         if (!L) return;
         if (!L.open) {
           L.open = true;
           relayout();
-          saveLayout();
+          layout.save();
         }
         fly(fitRect(laneRect(L), 40));
       }
@@ -6151,7 +6261,7 @@
         if (id && panelOpen && panelMode === "inspect") inspect(id, true, true);
       }
       function go(from, to) {
-        const hop = CONNS.find((c) => c.from === from && c.to === to);
+        const hop = layout.conns.find((c) => c.from === from && c.to === to);
         if (hop) tokenAlong(hop.id);
         select(to, false);
         const r = screenRect(to);
@@ -6554,7 +6664,7 @@
         panelMode = "search";
         pbody.innerHTML = `<div class="qrow"><input id="q" placeholder="Describe what you’re looking for" autocomplete="off"><label>Filter by</label>
     <select id="fType"><option value="any">Any type</option><option value="screens">Screens</option><option value="routes">Routes</option><option value="components">Components</option></select>
-    <select id="fWhere"><option value="any">Anywhere</option>${LANES.filter(
+    <select id="fWhere"><option value="any">Anywhere</option>${layout.lanes.filter(
       (l) => l.screens.length,
     )
       .map((l) => `<option value="${l.id}">${esc(laneName(l))}</option>`)
@@ -6585,7 +6695,7 @@
               ? "on the canvas"
               : "in " +
                 esc(
-                  laneName(LANES.find((l) => l.id === where) || { id: where }),
+                  laneName(layout.lanes.find((l) => l.id === where) || { id: where }),
                 );
         ptitle.innerHTML = `Search<span class="psub">${type === "any" ? "Any type" : { screens: "Screens", routes: "Routes", components: "Components" }[type]} of content ${whereName}</span>`;
         const hit = ORDER.filter((id) => {
@@ -6647,13 +6757,13 @@
           seen = new Set(),
           seq = [];
         const heads = L.screens.filter(
-          (id) => !CONNS.some((c) => c.to === id && allowed.has(c.from)),
+          (id) => !layout.conns.some((c) => c.to === id && allowed.has(c.from)),
         );
         let cur = start || heads[0] || L.screens[0];
         while (cur && !seen.has(cur)) {
           seq.push(cur);
           seen.add(cur);
-          const nx = CONNS.find(
+          const nx = layout.conns.find(
             (c) => c.from === cur && allowed.has(c.to) && !seen.has(c.to),
           );
           cur = nx && nx.to;
@@ -6687,7 +6797,7 @@
         let prev = null;
         for (const id of ids) {
           if (!playing) break;
-          const hop = prev && CONNS.find((c) => c.from === prev && c.to === id);
+          const hop = prev && layout.conns.find((c) => c.from === prev && c.to === id);
           if (hop) tokenAlong(hop.id);
           select(id, true);
           prev = id;
@@ -6894,7 +7004,7 @@
       function drawConns() {
         const m = worldM(),
           alive = new Set();
-        CONNS.forEach((c) => {
+        layout.conns.forEach((c) => {
           alive.add(c.id);
           const o = connEls.get(c.id) || mkConnEl(c);
           const fa = FR[c.from],
@@ -6951,7 +7061,7 @@
         requestAnimationFrame(tick);
       }
       const connBetween = (a, b) =>
-        CONNS.find((c) => c.from === a && c.to === b);
+        layout.conns.find((c) => c.from === a && c.to === b);
       function tokenAlong(id) {
         const o = connEls.get(id);
         if (!o || o.g.classList.contains("off")) return Promise.resolve();
@@ -6990,28 +7100,26 @@
           );
           return null;
         }
-        if (!opts.silentUndo) pushUndo();
+        if (!opts.silentUndo) layout.mark();
         const c = {
-          id: "c" + ++cCounter,
+          id: layout.nextId("c"),
           from,
           to,
           label: opts.label || "Next",
         };
-        CONNS.push(c);
-        LAY.conns = CONNS;
-        saveLayout();
+        layout.conns.push(c);
+        layout.save();
         drawConns();
         if (!opts.noEdit) setTimeout(() => editChip(c.id), 40);
         return c;
       }
       function deleteConn(id) {
-        const c = CONNS.find((x) => x.id === id);
+        const c = layout.conns.find((x) => x.id === id);
         if (!c) return;
-        pushUndo();
-        CONNS = CONNS.filter((x) => x.id !== id);
-        LAY.conns = CONNS;
+        layout.mark();
+        layout.conns = layout.conns.filter((x) => x.id !== id);
         if (selConn === id) selConn = null;
-        saveLayout();
+        layout.save();
         drawConns();
         toast("Connector deleted. ⌘Z to undo.");
       }
@@ -7042,7 +7150,7 @@
           toast("Select two or more frames to connect them in order.");
           return;
         }
-        pushUndo();
+        layout.mark();
         let n = 0;
         for (let i = 0; i < ids.length - 1; i++) {
           if (
@@ -7167,14 +7275,14 @@
         if (!lb || !lb.isContentEditable) return;
         lb.contentEditable = "false";
         const id = lb.closest(".echip").dataset.id,
-          c = CONNS.find((x) => x.id === id);
+          c = layout.conns.find((x) => x.id === id);
         if (!c) return;
         const v = lb.textContent.trim() || "Next";
         lb.textContent = v;
         if (c.label !== v) {
-          pushUndo();
+          layout.mark();
           c.label = v;
-          saveLayout();
+          layout.save();
         }
       });
       world.addEventListener("keydown", (e) => {
@@ -7202,39 +7310,11 @@
       /* ======================================================================
    EDIT THE ARRANGEMENT: group, name, remove, drag, undo
    ====================================================================== */
-      let undoStack = [];
-      const snap = () =>
-        JSON.stringify({
-          lanes: LANES.map((l) => ({
-            id: l.id,
-            screens: [...l.screens],
-            open: l.open,
-          })),
-          pos: POS,
-          conns: CONNS,
-          scans: SCANST,
-          notes: LAY.notes,
-        });
-      function pushUndo(s) {
-        undoStack.push(s || snap());
-        if (undoStack.length > 40) undoStack.shift();
-      }
       function undo() {
-        const s = undoStack.pop();
-        if (!s) {
+        if (!layout.undo()) {
           toast("Nothing to undo");
           return;
         }
-        const st = JSON.parse(s);
-        LANES = st.lanes;
-        POS = st.pos;
-        CONNS = st.conns || CONNS;
-        SCANST = st.scans || {};
-        LAY.notes = st.notes || LAY.notes;
-        LAY.lanes = LANES;
-        LAY.pos = POS;
-        LAY.conns = CONNS;
-        LAY.scans = SCANST;
         selConn = null;
         document.querySelectorAll(".lane").forEach((e) => delete e.dataset.sig);
         setSel(
@@ -7245,16 +7325,14 @@
         refreshScans();
         refreshNotes();
         drawConns();
-        saveLayout();
         toast("Undone");
       }
       function pruneLanes() {
-        LANES = LANES.filter((L) => L.screens.length);
-        LAY.lanes = LANES;
+        layout.lanes = layout.lanes.filter((L) => L.screens.length);
       }
       function dropPos(ids) {
         ids.forEach((i) =>
-          Object.values(POS).forEach((p) => {
+          Object.values(layout.pos).forEach((p) => {
             delete p[i];
           }),
         );
@@ -7272,26 +7350,25 @@
       function groupFrames(ids, opts = {}) {
         ids = [...new Set(ids)].filter((id) => SCREENS[id]);
         if (!ids.length) return null;
-        pushUndo();
+        if (!opts.silentUndo) layout.mark();
         const allFree = ids.every(isFree);
         if (!opts.keepOrder) ids = readingOrder(ids);
         const minX = Math.min(...ids.map((i) => FR[i].x)),
           minY = Math.min(...ids.map((i) => FR[i].y));
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           L.screens = L.screens.filter((x) => !ids.includes(x));
         });
         pruneLanes();
-        const id = "g" + ++gCounter;
+        const id = layout.nextId("g");
         const L = { id, screens: ids, open: true };
-        LANES.push(L);
-        LAY.lanes = LANES;
+        layout.lanes.push(L);
         dropPos(ids);
         if (allFree)
           posOf()[id] = { x: Math.round(minX), y: Math.round(minY - HEAD) };
         ensureAnn(id);
         saveAnn();
         relayout();
-        saveLayout();
+        layout.save();
         setSel(ids, ids[ids.length - 1]);
         if (!allFree) fly(fitRect(laneRect(L), 40));
         setTimeout(() => focusTitle(id), 650);
@@ -7305,7 +7382,7 @@
       function removeFromGroup(ids) {
         ids = ids.filter((i) => laneOf(i));
         if (!ids.length) return;
-        pushUndo();
+        layout.mark();
         const P = posOf();
         const byLane = new Map();
         ids.forEach((i) => {
@@ -7331,7 +7408,7 @@
         });
         pruneLanes();
         relayout();
-        saveLayout();
+        layout.save();
         toast(
           ids.length === 1
             ? "Removed from group. ⌘Z to undo."
@@ -7339,7 +7416,7 @@
         );
       }
       function dissolveGroup(L) {
-        pushUndo();
+        layout.mark();
         const P = posOf();
         L.screens.forEach((i, k) => {
           P[i] = {
@@ -7351,7 +7428,7 @@
         L.screens = [];
         pruneLanes();
         relayout();
-        saveLayout();
+        layout.save();
         toast(`Ungrouped “${name}”. Frames stay on the canvas. ⌘Z to undo.`);
       }
       function groupSel() {
@@ -7364,26 +7441,25 @@
          connectors, names, annotations and every note's text stay; only positions are reset on this device */
       function tidy() {
         const norm = (o) => Object.keys(o || {}).sort().map((k) => [k, o[k]]),
-          key = () => JSON.stringify([LANES.map((l) => l.id), norm(POS[DEV.id]), norm(SCANST), LAY.notes]),
-          before = snap(),
+          key = () => JSON.stringify([layout.lanes.map((l) => l.id), norm(layout.pos[DEV.id]), norm(layout.scans), layout.notes]),
+          before = layout.snapshot(),
           was = key();
         /* keep the stacking order you arranged: top to bottom, then left to right */
         const rank = (L) => (L.screens.length ? 0 : 1);
-        LANES = LANES.slice().sort((a, b) => rank(a) - rank(b) || a.top - b.top || a.x - b.x);
-        LAY.lanes = LANES;
+        layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || a.top - b.top || a.x - b.x);
         const loose = readingOrder(ORDER.filter(isFree));
-        const P = POS[DEV.id];
-        LANES.forEach((L) => delete P[L.id]);
+        const P = layout.pos[DEV.id];
+        layout.lanes.forEach((L) => delete P[L.id]);
         loose.forEach((id) => delete P[id]);
         placeLanes();
         let bottom = TOP0;
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
         });
         loose.forEach((id, k) => (P[id] = freeSlot(k, bottom)));
         /* scanner cards back beside their frames; scanned notes back where the scan put them */
-        Object.values(SCANST).forEach((r) => r && r.pos && delete r.pos[DEV.id]);
-        LAY.notes.forEach((n) => {
+        Object.values(layout.scans).forEach((r) => r && r.pos && delete r.pos[DEV.id]);
+        layout.notes.forEach((n) => {
           const seed = NOTES.find((x) => x.frame + ":" + x.who === n.id);
           if (seed && n.frame === seed.frame && n.pos) n.pos[DEV.id] = [...seed.pos[DEV.id]];
         });
@@ -7391,33 +7467,26 @@
           toast("Already tidy.");
           return;
         }
-        pushUndo(before);
+        layout.mark(before);
         relayout();
         refreshScans();
         refreshNotes();
         drawConns();
-        saveLayout();
+        layout.save();
         fly(fitRect(allRect(), 40, 1.1));
         toast("Tidied. Groups, flows and connectors are as they were. ⌘Z to undo.");
       }
       function resetLayout() {
-        pushUndo();
-        LAY = defaultLayout();
-        LANES = LAY.lanes;
-        POS = LAY.pos;
-        CONNS = LAY.conns;
-        SCANST = LAY.scans;
-        cCounter = LAY.cc;
+        layout.mark();
+        layout.reset();
         selConn = null;
-        gCounter = 3;
         setSel([]);
         buildWorld();
-        saveLayout();
         fly(fitRect(allRect(), 40, 1.1));
         toast("Layout reset to the scanned arrangement");
       }
       function focusTitle(id) {
-        const L = LANES.find((l) => l.id === id);
+        const L = layout.lanes.find((l) => l.id === id);
         if (!L) return;
         if (!L.open) setLane(id, true, { fly: false });
         const t = laneEl(id) && laneEl(id).querySelector(".gtitle");
@@ -7513,7 +7582,7 @@
       setTimeout(hideHint, 9000);
       function findTarget(c, ids) {
         let best = null;
-        for (const L of LANES) {
+        for (const L of layout.lanes) {
           const others = L.screens.filter((x) => !ids.includes(x)),
             m = others.length;
           if (L.open) {
@@ -7560,11 +7629,11 @@
         const cur = drag.target;
         if (cur && cur.kind === t.kind && cur.id === t.id && cur.idx === t.idx)
           return;
-        LANES.forEach((L) => {
+        layout.lanes.forEach((L) => {
           L.screens = L.screens.filter((x) => !ids.includes(x));
         });
         if (t.kind === "lane") {
-          const L = LANES.find((l) => l.id === t.id);
+          const L = layout.lanes.find((l) => l.id === t.id);
           L.screens.splice(t.idx, 0, ...ids);
         }
         drag.target = t;
@@ -7576,11 +7645,11 @@
           if (c) c.classList.add("merge");
         }
         relayout();
-        LANES.forEach((L) =>
+        layout.lanes.forEach((L) =>
           L.el.classList.toggle("drop", t.kind === "lane" && t.id === L.id),
         );
         if (t.kind === "lane") {
-          const L = LANES.find((l) => l.id === t.id);
+          const L = layout.lanes.find((l) => l.id === t.id);
           sizeDz(L);
         }
       }
@@ -7600,7 +7669,7 @@
             L,
             start: { x: L.x, y: L.top },
             w0: w,
-            snapshot: snap(),
+            snapshot: layout.snapshot(),
           };
           document.body.classList.add("gdrag");
           document
@@ -7620,7 +7689,8 @@
           ids,
           pid: id,
           off: {},
-          snapshot: snap(),
+          snapshot: layout.snapshot(),
+          wasIn: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
           target: null,
         };
         ids.forEach((i) => {
@@ -7681,24 +7751,23 @@
         selbox.classList.remove("live");
         if (d.kind === "group") {
           document.body.classList.remove("gdrag");
-          if (snap() !== d.snapshot) pushUndo(d.snapshot);
-          saveLayout();
+          if (layout.snapshot() !== d.snapshot) layout.mark(d.snapshot);
+          layout.save();
           return;
         }
-        const t = d.target || { kind: "free" },
-          before = JSON.parse(d.snapshot);
+        const t = d.target || { kind: "free" };
         document
           .querySelectorAll(".col.merge")
           .forEach((c) => c.classList.remove("merge"));
-        LANES.forEach((L) => L.el && L.el.classList.remove("drop"));
+        layout.lanes.forEach((L) => L.el && L.el.classList.remove("drop"));
         let msg = "";
         if (t.kind === "merge") {
           const target = t.id,
             ids = d.ids;
           d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
           dragSet = new Set();
-          groupFrames([target, ...ids], { keepOrder: true });
-          undoStack[undoStack.length - 1] = d.snapshot;
+          groupFrames([target, ...ids], { keepOrder: true, silentUndo: true });
+          layout.mark(d.snapshot);
           return;
         }
         if (t.kind === "free") {
@@ -7707,25 +7776,22 @@
           });
         } else {
           d.ids.forEach((i) =>
-            Object.values(POS).forEach((p) => {
+            Object.values(layout.pos).forEach((p) => {
               delete p[i];
             }),
           );
         }
-        const wasIn = new Map(
-          before.lanes.flatMap((l) => l.screens.map((s) => [s, l.id])),
-        );
         const moved0 = d.ids.some(
-          (i) => (wasIn.get(i) || null) !== (t.kind === "lane" ? t.id : null),
+          (i) => (d.wasIn.get(i) || null) !== (t.kind === "lane" ? t.id : null),
         );
         const nm =
-          t.kind === "lane" ? laneName(LANES.find((l) => l.id === t.id)) : "";
+          t.kind === "lane" ? laneName(layout.lanes.find((l) => l.id === t.id)) : "";
         pruneLanes();
         d.ids.forEach((i) => colOf(i).classList.remove("dragging"));
         dragSet = new Set();
         relayout();
-        saveLayout();
-        if (snap() !== d.snapshot) pushUndo(d.snapshot);
+        layout.save();
+        if (layout.snapshot() !== d.snapshot) layout.mark(d.snapshot);
         if (moved0)
           msg =
             t.kind === "lane" ? `Moved into “${nm}”` : "Taken out of its group";
@@ -7821,7 +7887,7 @@
         }
         const grip = e.target.closest(".grip");
         if (grip) {
-          const L = LANES.find((l) => l.id === grip.closest(".lane").id);
+          const L = layout.lanes.find((l) => l.id === grip.closest(".lane").id);
           e.preventDefault();
           stopPlay();
           moved = false;
@@ -7878,7 +7944,7 @@
             dy = (e.clientY - noteDrag.sy) / cam.k;
           if (!noteDrag.moved && Math.hypot(dx, dy) * cam.k > 3) {
             noteDrag.moved = true;
-            pushUndo();
+            layout.mark();
             noteDrag.el.classList.add("dragging");
             noteDrag.el.style.zIndex = 30;
           }
@@ -7926,7 +7992,7 @@
         if (noteDrag) {
           noteDrag.el.classList.remove("dragging");
           if (noteDrag.moved) {
-            const nn = LAY.notes.find((x) => x.id === noteDrag.el.dataset.nid);
+            const nn = layout.notes.find((x) => x.id === noteDrag.el.dataset.nid);
             if (nn) rehome(nn, noteDrag.el);
           }
           if (!noteDrag.moved) {
@@ -7953,11 +8019,7 @@
           const d = drag;
           drag = null;
           document.body.classList.remove("gdrag");
-          const st = JSON.parse(d.snapshot);
-          LANES = st.lanes;
-          POS = st.pos;
-          LAY.lanes = LANES;
-          LAY.pos = POS;
+          layout.restore(d.snapshot);
           dragSet = new Set();
           document
             .querySelectorAll(".col.dragging")
@@ -7999,7 +8061,7 @@
 
       /* deck hover fans the cards */
       function fanLane(id, on) {
-        const L = LANES.find((l) => l.id === id);
+        const L = layout.lanes.find((l) => l.id === id);
         if (L)
           L.screens.forEach((s) => {
             const c = colOf(s);
@@ -8014,7 +8076,7 @@
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = LANES.find((l) => l.id === h.closest(".lane").id);
+          const L = layout.lanes.find((l) => l.id === h.closest(".lane").id);
           if (L && !L.open) fanLane(L.id, true);
         }
       });
@@ -8031,7 +8093,7 @@
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = LANES.find((l) => l.id === h.closest(".lane").id);
+          const L = layout.lanes.find((l) => l.id === h.closest(".lane").id);
           if (L && !(e.relatedTarget && h.contains(e.relatedTarget)))
             fanLane(L.id, false);
         }
@@ -8182,7 +8244,7 @@
       function buildViews() {
         $("#mViews").innerHTML =
           `<button class="mi" data-view="all"><svg><use href="#i-frame"/></svg>Overview<span class="k">1</span></button>` +
-          LANES.filter((l) => l.screens.length)
+          layout.lanes.filter((l) => l.screens.length)
             .map(
               (l, i) =>
                 `<button class="mi" data-view="${l.id}"><svg><use href="#i-frame"/></svg>${esc(laneName(l))}<span class="k">${i < 3 ? i + 2 : ""}</span></button>`,
@@ -8334,9 +8396,9 @@
         if (e.key === "t") setDevice("tablet");
         if (e.key === "d") setDevice("desktop");
         if (e.key === "1") view("all");
-        if (e.key === "2" && LANES[0]) view(LANES[0].id);
-        if (e.key === "3" && LANES[1]) view(LANES[1].id);
-        if (e.key === "4" && LANES[2]) view(LANES[2].id);
+        if (e.key === "2" && layout.lanes[0]) view(layout.lanes[0].id);
+        if (e.key === "3" && layout.lanes[1]) view(layout.lanes[1].id);
+        if (e.key === "4" && layout.lanes[2]) view(layout.lanes[2].id);
         if (e.key === "ArrowRight") {
           step(1);
           e.preventDefault();
@@ -8386,7 +8448,7 @@
       function updateAllBtn() {
         const b = $("#btnAll");
         if (!b) return;
-        const L = LANES.filter((l) => l.screens.length),
+        const L = layout.lanes.filter((l) => l.screens.length),
           all = L.length > 0 && L.every((l) => l.open);
         b.querySelector("span").textContent = all ? "Close all" : "Open all";
         b.querySelector("use").setAttribute(
@@ -8398,7 +8460,7 @@
       }
       function toggleAll() {
         stopPlay();
-        const L = LANES.filter((l) => l.screens.length);
+        const L = layout.lanes.filter((l) => l.screens.length);
         if (!L.length) return;
         const open = !L.every((l) => l.open);
         if (!open && [...selSet].some((i) => laneOf(i))) select(null);
@@ -8406,7 +8468,7 @@
           l.open = open;
         });
         relayout();
-        saveLayout();
+        layout.save();
         fly(fitRect(allRect(), 40, 1.1));
       }
 
