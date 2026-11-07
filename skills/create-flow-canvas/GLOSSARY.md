@@ -6,7 +6,16 @@ An interactive canvas that shows a product's screens as frames, grouped into flo
 
 **Layout**:
 The saved arrangement of a canvas: which frames sit in which groups and what each group is called, where things are placed on each device, the user's edits to the scan's groups, connectors, notes, findings and captions, and the groups, connectors and notes the user made. Everything the scan provides is saved the same way, as edits over the scan.
+The layout owns its writes: what it holds is read-only from outside, and every change goes through one of its **mutators**. How the groups are shown is not in it (see **View state**).
 _Avoid_: View state, canvas state
+
+**Mutator**:
+One of the layout's own ways to change what it holds (`place`, `forgetPlaces`, `takeOut`, `moveInto`, `groupFrames`, `orderGroups`, `setGroupText`, `add`, `edit`, `remove`, `letGoOfMoves`, `resetText`), each keeping the layout's rules (a group left empty goes, an id is never used twice, a frame is in one group). The page reads the layout and asks it to change; it never writes to it, and a write to a read throws. A mutator says what it touched, so the commit knows what to redraw.
+_Avoid_: Setter, action, reducer
+
+**View state**:
+How the groups are shown: open or closed. It is kept apart from the layout's edits, in its own record that is saved with the layout and so comes back after a reload, but is never in a snapshot or an undo step, so undo does not open or close a group. Changed with `setOpen`; the sweep opening a group is the same change. Reset layout puts every group back as the scan shows it.
+_Avoid_: UI state, collapse state
 
 **Group**:
 An ordered set of frames. Open, it fans out into a flow; closed, it stacks into a deck. Membership is shared by every device. A group carries its own **title** and **description**, so they are saved, undone and reset with it and gone when it is dissolved.
@@ -93,6 +102,10 @@ _Avoid_: Scan card, insight, warning
 **Edit**:
 What the user changed on something the scan produced: moved it, rewrote it, relabelled it, dismissed it, or moved a frame between groups. The layout keeps edits over the scan, not copies of it (what the user made themselves is kept whole), so a new scan still reaches someone who has edits; their edits win where they touched it. An edit to something the scan no longer has is dropped.
 _Avoid_: Override, patch
+
+**Visit**:
+One stay in a field the user types in (a note, a caption, a group's title or description): from the first key to leaving the field. Each key goes through a mutator and is saved a moment after the last one, and leaving ends the visit as one undo step, however many keys it took. A commit or an undo ends a visit first, so the two are never one step. In code, `commit.typing`.
+_Avoid_: Session, burst (a burst is the arrow keys moving an item)
 
 **Caption**:
 A title and a body typed in place under a frame. It is an annotation and part of the layout, so it is saved, undone and reset with it ("Reset annotations" puts captions and group text back; "Reset layout" leaves captions alone). (A group's own title and description are part of the group, not captions.)

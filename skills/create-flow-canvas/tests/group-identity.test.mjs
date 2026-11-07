@@ -39,7 +39,7 @@ function addGroup(layout, screens) {
 test("the original bug: a group named Billing, Reset layout, a new group with the same id has a blank name", () => {
   const layout = make();
   const billing = addGroup(layout, ["s9"]);
-  billing.title = "Billing";
+  layout.setGroupText(billing.id, { title: "Billing" });
   assert.equal(billing.id, "g4");
   layout.reset();
   const again = addGroup(layout, ["s9"]);
@@ -51,7 +51,7 @@ test("the original bug: a group named Billing, Reset layout, a new group with th
 
 test("a new group starts blank and open, with no description shown", () => {
   const layout = make();
-  eq(layout.newGroup(["s9"]), { id: "g4", screens: ["s9"], open: true, title: "Untitled group", sub: "", subOn: false });
+  eq(addGroup(layout, ["s9"]), { id: "g4", screens: ["s9"], open: true, title: "Untitled group", sub: "", subOn: false });
 });
 
 test("a group's name is the part of its title before the colon, and reading it never changes anything", () => {
@@ -67,10 +67,9 @@ test("a group's name is the part of its title before the colon, and reading it n
 test("title, description and its visibility are saved with the layout and come back on load", () => {
   const storage = memory();
   const a = make(storage);
-  groupById(a, "g3").screens = ["s8"];
   const g = addGroup(a, ["s9"]);
-  Object.assign(g, { title: "Billing", sub: "Pay once", subOn: true });
-  groupById(a, "g1").title = "Welcome";
+  a.setGroupText(g.id, { title: "Billing", sub: "Pay once", subOn: true });
+  a.setGroupText("g1", { title: "Welcome" });
   a.save();
   const b = make(storage);
   assert.equal(b.snapshot(), a.snapshot());
@@ -82,12 +81,8 @@ test("the snapshot carries the text: rename, then undo through the commit seam p
   const layout = make();
   const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   const g = commit(() => addGroup(layout, ["s9"]));
-  commit(() => {
-    groupById(layout, g.id).title = "Billing";
-  });
-  commit(() => {
-    groupById(layout, g.id).title = "Payments";
-  });
+  commit(() => layout.setGroupText(g.id, { title: "Billing" }));
+  commit(() => layout.setGroupText(g.id, { title: "Payments" }));
   assert.equal(groupById(layout, "g4").title, "Payments");
   assert.equal(layout.undo(), true);
   assert.equal(groupById(layout, "g4").title, "Billing");
@@ -101,9 +96,7 @@ test("undoing a group's creation leaves no name behind, and a later group with t
   const layout = make();
   const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   commit(() => addGroup(layout, ["s9"]));
-  commit(() => {
-    groupById(layout, "g4").title = "Billing";
-  });
+  commit(() => layout.setGroupText("g4", { title: "Billing" }));
   layout.undo();
   layout.undo();
   assert.equal(groupById(layout, "g4"), undefined);
@@ -113,12 +106,8 @@ test("undoing a group's creation leaves no name behind, and a later group with t
 test("a group that leaves the layout (as a dissolved one does) takes its name with it, and undo brings both back", () => {
   const layout = make();
   const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
-  commit(() => {
-    groupById(layout, "g3").title = "Upgrade: pay";
-  });
-  commit(() => {
-    layout.groups = layout.groups.filter((l) => l.id !== "g3"); /* what dissolveGroup ends in: no frames, pruned */
-  });
+  commit(() => layout.setGroupText("g3", { title: "Upgrade: pay" }));
+  commit(() => layout.takeOut(["s8", "s9"])); /* what dissolveGroup ends in: no frames, pruned */
   assert.ok(!layout.snapshot().includes("Upgrade: pay"));
   assert.equal(layout.undo(), true);
   assert.equal(groupById(layout, "g3").title, "Upgrade: pay");
@@ -126,10 +115,8 @@ test("a group that leaves the layout (as a dissolved one does) takes its name wi
 
 test("Reset layout puts every default group's text back and drops the added groups with theirs", () => {
   const layout = make();
-  groupById(layout, "g1").title = "My own name";
-  groupById(layout, "g1").sub = "";
-  groupById(layout, "g1").subOn = false;
-  addGroup(layout, ["s9"]).title = "Billing";
+  layout.setGroupText("g1", { title: "My own name", sub: "", subOn: false });
+  layout.setGroupText(addGroup(layout, ["s9"]).id, { title: "Billing" });
   layout.reset();
   eq(groupById(layout, "g1"), { id: "g1", screens: ["s1", "s2", "s3", "s4"], open: true, title: "Onboarding: how fast to a first plant?", sub: "Four screens.", subOn: true });
   assert.ok(!layout.snapshot().includes("Billing"));
@@ -137,7 +124,7 @@ test("Reset layout puts every default group's text back and drops the added grou
 
 test("undoing a Reset layout brings back the group as it was named", () => {
   const layout = make();
-  addGroup(layout, ["s9"]).title = "Billing";
+  layout.setGroupText(addGroup(layout, ["s9"]).id, { title: "Billing" });
   layout.mark();
   layout.reset();
   assert.equal(layout.undo(), true);
@@ -146,11 +133,10 @@ test("undoing a Reset layout brings back the group as it was named", () => {
 
 test("resetText puts the scanned text on default groups and blanks the rest, without touching membership", () => {
   const layout = make();
-  groupById(layout, "g2").title = "Mine";
-  groupById(layout, "g2").subOn = false;
-  groupById(layout, "g2").screens = ["s5"];
+  layout.setGroupText("g2", { title: "Mine", subOn: false });
+  layout.takeOut(["s6", "s7"]);
   const added = addGroup(layout, ["s9"]);
-  Object.assign(added, { title: "Billing", sub: "x", subOn: true });
+  layout.setGroupText(added.id, { title: "Billing", sub: "x", subOn: true });
   layout.resetText();
   eq(groupById(layout, "g2"), { id: "g2", screens: ["s5"], open: false, title: "First use: add a plant", sub: "A dialog over Home.", subOn: true });
   eq(groupById(layout, "g4"), { id: "g4", screens: ["s9"], open: true, title: "Untitled group", sub: "", subOn: false });

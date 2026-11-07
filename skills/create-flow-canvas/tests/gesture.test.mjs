@@ -298,7 +298,7 @@ test("if the layout changes under a live drag (undo, group), the drop is discard
   gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
   gesture.move(at(170, 450)); /* over g2 */
   layout.mark();
-  layout.groups = layout.groups.filter((l) => l.id !== "g2"); /* ⌘Z or ⌘⇧G took the group away meanwhile */
+  layout.takeOut(layout.groups.find((l) => l.id === "g2").screens); /* ⌘Z or ⌘⇧G took the group away meanwhile */
   const changed = layout.snapshot();
   log.length = 0;
   const out = gesture.end();

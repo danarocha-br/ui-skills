@@ -23,8 +23,8 @@ function setup({ clock = () => 0, threshold } = {}) {
   const data = {};
   const storage = { getItem: (k) => data[k] ?? null, setItem: (k, v) => void (data[k] = String(v)) };
   const layout = FlowLayout.create({ key: "k", storage, hasScreen: () => true, defaults: () => DEFAULTS, kinds: builtinKinds(DEFAULTS) });
-  layout.pos.mobile.a = { x: 100, y: 100 };
-  layout.pos.mobile.b = { x: 300, y: 300 };
+  layout.place("mobile", "a", { x: 100, y: 100 });
+  layout.place("mobile", "b", { x: 300, y: 300 });
   layout.save();
   const redraw = { world: () => log.push("redraw:world"), layout: () => log.push("redraw:layout") };
   const commit = FlowCommit.create({ layout, kinds: builtinKinds(DEFAULTS, { refresh: (name) => log.push("redraw:" + name) }), redraw });
@@ -38,12 +38,12 @@ function setup({ clock = () => 0, threshold } = {}) {
     lift: (id) => log.push("lift:" + id),
     place: (id, pos) => log.push(`place:${id}:${pos.x},${pos.y}`),
     save: (id, pos, how) => {
-      layout.pos.mobile[id] = { x: pos.x, y: pos.y };
+      layout.place("mobile", id, pos);
       if (how.nudged) log.push("save:" + id + ":nudged");
     },
     settle: (id, how) => log.push(`settle:${id}:${how.moved ? "moved" : "still"}${how.cancelled ? ":cancelled" : ""}`),
     tap: (id) => log.push("tap:" + id),
-    erase: (id) => delete layout.pos.mobile[id],
+    erase: (id) => layout.forgetPlaces([id], "mobile"),
     erased: (id) => log.push("erased:" + id),
     redraw: ["conns"],
   };
@@ -73,7 +73,7 @@ test("past the threshold the item is lifted once and follows the pointer at worl
   assert.deepEqual(log, ["lift:a", "place:a:110,100", "place:a:120,110"]);
   log.length = 0;
   eq(annotations.up(), { moved: true });
-  assert.deepEqual(log, ["redraw:conns", "settle:a:moved"]); // the kind's own redraw names, then the DOM clean-up
+  assert.deepEqual(log, ["redraw:layout", "redraw:conns", "settle:a:moved"]); // what the write touched, the kind's own redraw names, then the DOM clean-up
   eq(layout.pos.mobile.a, { x: 120, y: 110 });
   assert.equal(layout.undo(), true);
   eq(layout.pos.mobile.a, { x: 100, y: 100 });
@@ -117,8 +117,8 @@ test("arrow keys move the focused item 8 px, 32 with Shift, each saved and redra
   eq(layout.pos.mobile.a, { x: 108, y: 132 });
   /* a keyboard move ends like a drop: saved, redrawn, then the kind settles (a note may change frame) */
   assert.deepEqual(log, [
-    "place:a:108,100", "save:a:nudged", "redraw:conns", "settle:a:moved",
-    "place:a:108,132", "save:a:nudged", "redraw:conns", "settle:a:moved",
+    "place:a:108,100", "save:a:nudged", "redraw:layout", "redraw:conns", "settle:a:moved",
+    "place:a:108,132", "save:a:nudged", "redraw:layout", "redraw:conns", "settle:a:moved",
   ]);
   assert.equal(annotations.keyDown({ dot: "a" }, "x", {}), false);
   assert.equal(annotations.keyDown({ other: true }, "ArrowLeft", {}), false);
@@ -154,7 +154,7 @@ test("Delete or Backspace on an annotation removes it as one undoable commit, th
   const { layout, annotations, log } = setup();
   assert.equal(annotations.keyDown({ dot: "a" }, "Delete", {}), true);
   assert.equal(layout.pos.mobile.a, undefined);
-  assert.deepEqual(log, ["redraw:conns", "erased:a"]);
+  assert.deepEqual(log, ["redraw:layout", "redraw:conns", "erased:a"]);
   assert.equal(annotations.keyDown({ dot: "b" }, "Backspace", {}), true);
   assert.equal(layout.pos.mobile.b, undefined);
   assert.equal(layout.undo(), true);
@@ -174,7 +174,7 @@ test("remove(kind, id) is the same path for a × button; an unknown kind fails l
   const { layout, annotations, log } = setup();
   annotations.remove("dot", "a");
   assert.equal(layout.pos.mobile.a, undefined);
-  assert.deepEqual(log, ["redraw:conns", "erased:a"]);
+  assert.deepEqual(log, ["redraw:layout", "redraw:conns", "erased:a"]);
   assert.throws(() => annotations.remove("sticker", "a"), /unknown annotation kind "sticker"/);
 });
 

@@ -74,15 +74,16 @@ test("corrupt or foreign storage gives the defaults", () => {
 test("save then load round-trips every kind and the counters", () => {
   const storage = memory();
   const a = make(storage);
-  a.groups[1].open = true;
-  a.pos.mobile.s1 = { x: 10, y: 20 };
-  a.conns.push({ id: a.nextId("c"), from: "s1", to: "s9", label: "Jump" });
-  a.scans[0].pos = { mobile: [1, 2] };
-  a.notes.push({ id: "n1", frame: null, who: "You", text: "floating", x: 5, y: 6 });
+  a.setOpen("g2", true);
+  a.place("mobile", "s1", { x: 10, y: 20 });
+  a.add("conns", { id: a.nextId("c"), from: "s1", to: "s9", label: "Jump" });
+  a.edit("scans", "s3:states", { pos: { mobile: [1, 2] } });
+  a.add("notes", { id: "n1", frame: null, who: "You", text: "floating", x: 5, y: 6 });
   a.groupFrames(["s9"], { device: "mobile" });
   a.save();
   const b = make(storage);
   assert.equal(b.snapshot(), a.snapshot());
+  assert.equal(b.groups[1].open, true, "and how the groups were shown");
   assert.equal(b.nextId("c"), "c8");
   assert.equal(b.nextId("g"), "g5");
 });
@@ -122,9 +123,9 @@ test("a current layout with one kind in an unreadable shape keeps what is readab
   for (const [kind, junk] of [["conns", "nope"], ["conns", [{ id: "c1" }]], ["notes", 7], ["scans", null], ["pos", "abc"], ["pos", [1, 2]]]) {
     const storage = memory();
     const first = make(storage);
-    first.groups[0].title = "Mine: renamed";
-    first.conns.find((c) => c.id === "c1").label = "My label";
-    first.pos.mobile.s1 = { x: 3, y: 4 };
+    first.setGroupText("g1", { title: "Mine: renamed" });
+    first.edit("conns", "c1", { label: "My label" });
+    first.place("mobile", "s1", { x: 3, y: 4 });
     first.save();
     const onDisk = JSON.parse(storage.data[KEY]);
     onDisk[kind] = junk;
@@ -201,34 +202,33 @@ test("snapshot is a copy: later edits do not change it, equal state gives an equ
   const layout = make();
   const s = layout.snapshot();
   assert.equal(layout.snapshot(), s);
-  layout.groups[0].screens.push("s9");
-  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.moveInto(["s9"], "g1", 4);
+  layout.place("mobile", "s1", { x: 1, y: 1 });
   assert.notEqual(layout.snapshot(), s);
   layout.restore(s);
   eq(layout.groups[0].screens, ["s1", "s2", "s3", "s4"]);
 });
 
-test("snapshot leaves out page-only group fields and the counters", () => {
+test("a snapshot holds the edits and the places, and nothing else: no counters, nothing about how the groups are shown", () => {
   const layout = make();
-  Object.assign(layout.groups[0], { x: 5, top: 6, pinned: true, el: { not: "serialisable" } });
+  layout.setOpen("g1", false);
   const s = plain(layout);
   eq(Object.keys(s).sort(), ["caps", "conns", "lanes", "notes", "pos", "scans"]);
-  eq(s.lanes.edits, {}, "nothing the page keeps on a group is an edit");
-  assert.ok(!layout.snapshot().includes("serialisable"));
+  eq(s.lanes.edits, {}, "nothing about how a group is shown is an edit");
 });
 
 test("restore puts a snapshot back, replaces the live objects, and saves", () => {
   const storage = memory();
   const layout = make(storage);
   const s = layout.snapshot();
-  layout.groups.length = 0;
-  layout.conns.push({ id: "c99", from: "s1", to: "s9" });
-  layout.notes = [];
+  layout.takeOut(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
+  layout.add("conns", { id: "c99", from: "s1", to: "s9" });
+  layout.remove("notes", "s1:Dana");
   layout.restore(s);
   assert.equal(layout.snapshot(), s);
   assert.equal(make(storage).groups.length, 3);
   // later edits to the restored state do not reach the snapshot string
-  layout.groups[0].title = "changed";
+  layout.setGroupText("g1", { title: "changed" });
   eq(JSON.parse(s).lanes.edits, {});
 });
 
@@ -243,10 +243,10 @@ test("restore leaves the counters alone, so undone ids are not reused", () => {
 test("history: marks come back last-in first-out, and an empty history says so", () => {
   const layout = make();
   layout.mark();
-  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.place("mobile", "s1", { x: 1, y: 1 });
   layout.mark();
-  layout.pos.mobile.s1 = { x: 2, y: 2 };
-  layout.pos.mobile.s2 = { x: 3, y: 3 };
+  layout.place("mobile", "s1", { x: 2, y: 2 });
+  layout.place("mobile", "s2", { x: 3, y: 3 });
   assert.equal(layout.undo(), true);
   eq(layout.pos.mobile, { s1: { x: 1, y: 1 } });
   assert.equal(layout.undo(), true);
@@ -258,12 +258,12 @@ test("history: marks come back last-in first-out, and an empty history says so",
 test("history: mark(s) takes a snapshot from earlier, and keeps 40", () => {
   const layout = make();
   const before = layout.snapshot();
-  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.place("mobile", "s1", { x: 1, y: 1 });
   layout.mark(before);
   assert.equal(layout.undo(), true);
   eq(layout.pos.mobile, {});
   for (let i = 0; i < 45; i++) {
-    layout.pos.mobile.s1 = { x: i, y: 0 };
+    layout.place("mobile", "s1", { x: i, y: 0 });
     layout.mark();
   }
   let undone = 0;
@@ -279,9 +279,9 @@ test("reset returns the defaults with the counters at their starting point, and 
   layout.nextId("c");
   layout.nextId("g");
   layout.nextId("g");
-  layout.groups.length = 0;
-  layout.conns.length = 0;
-  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.takeOut(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
+  layout.conns.forEach((c) => layout.remove("conns", c.id));
+  layout.place("mobile", "s1", { x: 1, y: 1 });
   layout.reset();
   eq(layout.groups.map((l) => l.id), ["g1", "g2", "g3"]);
   assert.equal(layout.conns.length, 6);
@@ -294,10 +294,10 @@ test("reset returns the defaults with the counters at their starting point, and 
 test("reset hands out fresh copies, so editing after a reset never touches the defaults", () => {
   const layout = make();
   layout.reset();
-  layout.groups[0].screens.push("s9");
-  layout.conns[0].label = "changed";
-  layout.notes[0].text = "changed";
-  layout.pos.mobile.s1 = { x: 1, y: 1 };
+  layout.moveInto(["s9"], "g1", 4);
+  layout.edit("conns", "c1", { label: "changed" });
+  layout.edit("notes", "s1:Dana", { text: "changed" });
+  layout.place("mobile", "s1", { x: 1, y: 1 });
   eq(DEFAULTS.groups[0].screens, ["s1", "s2", "s3", "s4"]);
   assert.equal(DEFAULTS.conns[0].label, "Continue");
   assert.equal(DEFAULTS.notes[0].text, "Hero image is big");
@@ -329,31 +329,10 @@ test("a storage that throws neither breaks loading nor saving", () => {
   assert.equal(layout.undo(), true);
 });
 
-test("restore keeps each group's current open state: open or closed is view state, not an edit", () => {
-  const layout = make();
-  layout.mark(); // g1 open, g2 closed
-  layout.groups[0].screens.pop(); // an edit
-  layout.groups[0].open = false; // collapsed since
-  layout.groups[1].open = true; // expanded since
-  assert.equal(layout.undo(), true);
-  eq(layout.groups[0].screens, ["s1", "s2", "s3", "s4"]); // the edit is undone
-  assert.equal(layout.groups[0].open, false); // the collapse stays
-  assert.equal(layout.groups[1].open, true); // the expand stays
-});
-
-test("a group that comes back through restore returns with the open state it had", () => {
-  const layout = make();
-  layout.groups[1].open = true;
-  layout.mark();
-  layout.groups.splice(1, 1); // the group is dissolved
-  assert.equal(layout.undo(), true);
-  eq(layout.groups.map((l) => [l.id, l.open]), [["g1", true], ["g2", true], ["g3", false]]);
-});
-
 test("restore never leaves a counter below an id it has just brought back, so undoing a reset cannot hand out a used id", () => {
   const layout = make();
   layout.groupFrames(["s9"], { device: "mobile" }); // g4
-  layout.conns.push({ id: "c7", from: "s1", to: "s9", label: "Jump" });
+  layout.add("conns", { id: "c7", from: "s1", to: "s9", label: "Jump" });
   layout.mark();
   layout.reset(); // counters back to c6 / g3
   assert.equal(layout.undo(), true); // the groups and connectors come back, c7 among them
@@ -387,8 +366,9 @@ test("groupFrames leaves no empty group behind", () => {
 
 test("groupFrames forgets the frames' own places on every device and pins the group only when asked", () => {
   const layout = make();
-  layout.pos.mobile = { s1: { x: 1, y: 1 }, s7: { x: 2, y: 2 } };
-  layout.pos.tablet = { s1: { x: 3, y: 3 } };
+  layout.place("mobile", "s1", { x: 1, y: 1 });
+  layout.place("mobile", "s7", { x: 2, y: 2 });
+  layout.place("tablet", "s1", { x: 3, y: 3 });
   const g = layout.groupFrames(["s1", "s7"], { device: "mobile" });
   eq(layout.pos, { mobile: {}, tablet: {}, desktop: {} });
   const h = layout.groupFrames(["s2"], { device: "mobile", at: { x: 10.4, y: 20.6 } });
@@ -411,13 +391,13 @@ test("groupOf says which group a frame is in, or nothing for a loose frame", () 
   const layout = make();
   assert.equal(layout.groupOf("s6").id, "g2");
   assert.equal(layout.groupOf("s6"), layout.groups[1], "the group itself, not a copy");
-  layout.groups[1].screens = [];
+  layout.takeOut(["s5", "s6", "s7"]);
   assert.equal(layout.groupOf("s6"), undefined);
 });
 
 test("takeOut removes frames from every group and drops a group it leaves empty, leaving their places alone", () => {
   const layout = make();
-  layout.pos.mobile = { s8: { x: 1, y: 2 } };
+  layout.place("mobile", "s8", { x: 1, y: 2 });
   layout.takeOut(["s8", "s9", "s1"]);
   eq(layout.groups.map((l) => [l.id, l.screens]), [["g1", ["s2", "s3", "s4"]], ["g2", ["s5", "s6", "s7"]]]);
   eq(layout.pos.mobile, { s8: { x: 1, y: 2 } }, "where a frame was put on a device is not a group's business");
@@ -425,15 +405,16 @@ test("takeOut removes frames from every group and drops a group it leaves empty,
 
 test("takeOut with nothing to take still drops the groups that are already empty", () => {
   const layout = make();
-  layout.groups[2].screens = [];
+  layout.takeOut(["s8", "s9"]);
   layout.takeOut([]);
   eq(layout.groups.map((l) => l.id), ["g1", "g2"]);
 });
 
 test("moveInto puts frames into a group at a slot, takes them out of the others, and forgets their own places", () => {
   const layout = make();
-  layout.pos.mobile = { s1: { x: 1, y: 1 }, g2: { x: 9, y: 9 } };
-  layout.pos.desktop = { s1: { x: 3, y: 3 } };
+  layout.place("mobile", "s1", { x: 1, y: 1 });
+  layout.place("mobile", "g2", { x: 9, y: 9 });
+  layout.place("desktop", "s1", { x: 3, y: 3 });
   layout.moveInto(["s1", "s2"], "g2", 1);
   eq(layout.groups.map((l) => [l.id, l.screens]), [
     ["g1", ["s3", "s4"]],

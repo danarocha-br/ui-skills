@@ -5268,11 +5268,14 @@
            FlowScan.dataKinds(get)   the data halves of the four kinds a scan provides (captions, findings, notes,
                                   connectors), in the order the page lists them (the page's KINDS list is what sets the redraw order). get() gives
                                   the scan as read() returns it.
-                                  Each is { name, scanned(), clean?(items, { hasScreen, scanned }), resetBy?, counter? }:
+                                  Each is { name, scanned(), clean?, valid?, letGo?, resetBy?, counter? }:
                                   name is the field in the layout and on disk; scanned() the items the scan gives;
-                                  clean what loading drops or repairs; resetBy "annotations" for a kind that "Reset
-                                  layout" leaves alone; counter { prefix, saved } for ids handed out as "c7". FlowLayout
-                                  reads these and nothing else about a kind.
+                                  clean(items, { hasScreen, scanned }) what loading drops or repairs; valid(item,
+                                  { hasScreen }) whether one item may be in the layout at all (loading drops the ones that
+                                  are not, and add refuses them); letGo(item, scannedItem, device) puts an item's moved
+                                  places back where the scan had them (Tidy); resetBy "annotations" for a kind that
+                                  "Reset layout" leaves alone; counter { prefix, saved } for ids handed out as "c7".
+                                  FlowLayout reads these and nothing else about a kind.
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
@@ -5557,17 +5560,32 @@
               clean: (items, { hasScreen, scanned }) =>
                 scanned.filter((c) => hasScreen(c.id)).map((c) => items.find((x) => x.id === c.id) || c),
             },
-            { name: "scans", scanned: () => list("findings") },
+            {
+              name: "scans",
+              scanned: () => list("findings"),
+              /* a finding goes back to the scan's places on every device: it carries a place it was moved to across them */
+              letGo(f, scanned) {
+                if (scanned && scanned.pos) f.pos = clone(scanned.pos);
+                else delete f.pos;
+              },
+            },
             {
               name: "notes",
               scanned: () => list("notes"),
-              clean: (items) => items.filter((n) => n.id && typeof n.text === "string"),
+              valid: (n) => !!n && !!n.id && typeof n.text === "string",
+              /* a scanned note goes back to the scan's place on this device; one the user made, or moved to another frame, has none */
+              letGo(n, scanned, device) {
+                if (!n.pos || !scanned || n.frame !== scanned.frame) return;
+                if (scanned.pos && scanned.pos[device]) n.pos[device] = [...scanned.pos[device]];
+                else delete n.pos[device];
+                if (!Object.keys(n.pos).length && !scanned.pos) delete n.pos;
+              },
             },
             {
               name: "conns",
               scanned: () => list("links"),
               counter: { prefix: "c", saved: "cc" },
-              clean: (items, { hasScreen }) => items.filter((c) => hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to),
+              valid: (c, { hasScreen }) => !!c && hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to,
             },
           ];
         }
@@ -5580,7 +5598,8 @@
       /* ======================================================================
          LAYOUT MODULE
          Owns the persisted layout: groups, positions per device and the annotation kinds (by default connectors,
-         findings, notes and frame captions), plus the id counters and the undo history. It knows nothing about the
+         findings, notes and frame captions), plus the id counters, the undo history and the view record (which groups
+         are open). It owns the writes to all of it too (see Mutators below). It knows nothing about the
          page: no DOM, no screens, no demo data, and no kind by name. Everything it needs is handed to create().
 
          Everything the scan provides is saved the same way, as the user's edits over it and the things the user
@@ -5589,66 +5608,104 @@
          every kind, and the user's edits win where they touched it. The saved layout holds edits over the scan,
          never copies of it; what the user made themselves is kept whole.
 
-         A group is { id, screens, open, title, sub, subOn }: its frames, whether it is fanned out, its
-         title (the text before a colon is its name), its description, and whether the description is
-         shown. The text belongs to the group, so it is saved, snapshotted, undone and reset with it, and
-         is gone when the group is. A caption is { id, title, body, on }, one per screen.
+         A group is { id, screens, title, sub, subOn }: its frames, its title (the text before a colon is its
+         name), its description, and whether the description is shown. The text belongs to the group, so it is
+         saved, snapshotted, undone and reset with it, and is gone when the group is. Whether it is fanned out
+         (open) is not part of that record: a read of a group adds it from the view record. A caption is
+         { id, title, body, on }, one per screen.
+
+         Everything the layout holds is read-only from outside, and everything it changes goes through one of its own
+         mutators. A read is a frozen copy, made once per change, so a write to it throws (in the page's strict code) and
+         what was read earlier is never changed behind the reader's back. The layout can keep its own rules because
+         nothing else writes: a group left empty goes, an id is never used twice, a frame is in one group. It can count
+         its changes too, so the snapshot is worked out once per change, however often it is asked for.
+
+         How the groups are shown (open or closed) is view state, not an edit: it has its own record and its own
+         mutator, is saved with the layout under "view", and is never in a snapshot or an undo step.
 
          Interface
            const layout = FlowLayout.create({ key, storage, hasScreen, defaults, kinds })
              key        localStorage key the layout is saved under
              storage    anything with getItem(key) / setItem(key, value)
              hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
-             defaults   () => { groups, pos }: the scan's groups and empty positions. Called for a fresh copy each
-                        time; a default group may carry title, sub and subOn (blank when it does not)
-             kinds      the data half of each annotation kind (required): { name, scanned(), clean?, resetBy?,
-                        counter? }. name is the kind's field on the layout and its key on disk; scanned() gives the
-                        items the scan has for it ([] for a kind the user alone makes); clean(items, { hasScreen,
-                        scanned }) drops or repairs what loading finds; resetBy "annotations" is a kind that
-                        reset() leaves alone and resetText() puts back (captions); counter { prefix, saved } is a
-                        kind whose ids are handed out as "c7" and saved under "cc". FlowScan.dataKinds gives
-                        the four the scan provides. The page passes its one list of kinds, whose objects also carry
-                        what the other modules read (a kind is one object: see FlowAnnotations).
+             defaults   () => { groups, pos }: the scan's groups and empty positions. A default group may carry title,
+                        sub and subOn (blank when it does not) and open (shown open when it is not false)
+             kinds      the data half of each annotation kind (required): { name, scanned(), clean?, valid?, letGo?,
+                        resetBy?, counter? }. name is the kind's field on the layout and its key on disk; scanned() gives
+                        the items the scan has for it ([] for a kind the user alone makes); clean(items, { hasScreen,
+                        scanned }) drops or repairs what loading finds; valid(item, { hasScreen }) says whether an item may
+                        be in the layout (loading drops what is not; add refuses it); letGo(item, scannedItem, device)
+                        puts its moved places back as the scan had them; resetBy "annotations" is a kind that reset()
+                        leaves alone and resetText() puts back (captions); counter { prefix, saved } is a kind whose ids
+                        are handed out as "c7" and saved under "cc". FlowScan.dataKinds gives the four the scan provides.
+                        The page passes its one list of kinds, whose objects also carry what the other modules read (a
+                        kind is one object: see FlowAnnotations).
            FlowLayout.groupName(group)   the short name: the title before its first colon, or
                                          "Untitled group". Pure; never changes the group.
-           layout.groups layout.pos layout.<name> for each kind
-                      Live state, as the user sees it: scanned items with their edits laid over, then the
-                      user's own (the findings are the ones still shown). Read through layout every time, never
-                      keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
-           layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.groups
-           layout.groupOf(id)        the group a frame is in, or undefined for a loose frame
-           layout.takeOut(ids)       the frames leave their groups; a group left empty (or already empty) goes. Their
-                             places are not touched.
-           layout.moveInto(ids, groupId, idx)
-                             the frames leave their groups and go into `groupId` at slot `idx` among the frames that
-                             stay there; their own places are forgotten on every device; a group left empty goes,
-                             but never the one they are going into. A data change: the caller commits it.
-           layout.groupFrames(ids, { device, at? })
-                             make a group of these frames, in this order: they leave their groups (a group left
-                             empty goes), their own places are forgotten on every device, and the new group is
-                             added last and returned. With `at` { x, y } the group is pinned there on `device`;
-                             without it, it takes the next free place. A data change: the caller commits it.
-           layout.resetText()        every group's title, description and visibility, and every caption, back
-                                     to the scanned text (blank for a group that was not scanned); the caller
-                                     commits it
-           layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
-                             save by themselves.
-           layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string.
-           layout.restore(s)       put a snapshot back and save. Two things are not restored: the counters
-                             (they never fall below an id the snapshot brings back) and the open state
-                             of groups that still exist (view state, not an edit).
-           layout.reset()          groups, positions and every kind back to the scan, counters included, and
-                             save. A kind with resetBy "annotations" (captions) is left as it is (resetText puts it back).
-           layout.nextId(prefix)   the next id of a counter: "g" (groups) or a kind's own ("c": connectors); "c7" / "g4"
-           layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
-                             is its caller)
-           layout.undo()           restore the latest mark; false when there is none
+
+         Reads (frozen; read through layout every time, never keep your own reference: a write gives a fresh one)
+           layout.groups   [{ id, screens, open, title, sub, subOn }]: open comes from the view record
+           layout.pos      { device: { frameOrGroupId: { x, y } } }
+           layout.<name>   the items of each kind: the scan's with the user's edits laid over, then the user's own
+                           (findings are the ones still shown)
+           layout.groupOf(id)   the group a frame is in, or undefined for a loose frame
+
+         Mutators (each keeps the layout's rules; the caller commits, see FlowCommit)
+           groups     layout.takeOut(ids)                the frames leave their groups; a group left empty (or already
+                                                         empty) goes. Their places are not touched.
+                      layout.moveInto(ids, groupId, idx) the frames leave their groups and go into `groupId` at slot `idx`
+                                                         among the frames that stay there; their own places are forgotten
+                                                         on every device; a group left empty goes, but never the one they
+                                                         are going into
+                      layout.groupFrames(ids, { device, at? })
+                                                         make a group of these frames, in this order: they leave their
+                                                         groups (a group left empty goes), their own places are forgotten
+                                                         on every device, and the new group is added last (open) and
+                                                         returned. With `at` { x, y } it is pinned there on `device`;
+                                                         without it, it takes the next free place.
+                      layout.orderGroups(ids)            the order the groups stack in; never adds or drops one; those not
+                                                         named follow in their order
+                      layout.setGroupText(id, { title?, sub?, subOn? })
+                                                         a group's text; nothing else of a group can be set. False for a
+                                                         group that is not there.
+                      layout.resetText()                 every group's text and every caption back to the scanned text
+                                                         (blank for a group that was not scanned)
+           positions  layout.place(device, id, { x, y }) where a frame or group sits on one device, in whole pixels;
+                                                         false for an id that is neither
+                      layout.forgetPlaces(ids, device?)  let go of places, on one device or (none named) on every one
+           kinds      layout.add(kind, item)             an item of a kind: its id is new, and the kind's valid() says yes
+                                                         (false when it says no; throws for a repeated id or no kind)
+                      layout.edit(kind, id, patch)       set the fields of one item: a value replaces, undefined takes the
+                                                         field away, the id stays. False for an item that is not there.
+                      layout.remove(kind, id)            take one item out; says whether there was one
+                      layout.letGoOfMoves(device)        every kind's moved places on this device back as the scan had them
+           view       layout.setOpen(ids, open)          show a group (or several) open or closed; true if any changed
+                      layout.viewStamp()                 changes when, and only when, how the groups are shown does
+           whole      layout.save()           write to storage. FlowCommit calls it after every edit; restore and reset
+                                              save by themselves.
+                      layout.snapshot()       the persisted kinds as an opaque string; equal state, equal string. Worked
+                                              out once per change.
+                      layout.restore(s)       put a snapshot back and save. The counters are not restored (they never fall
+                                              below an id the snapshot brings back), nor how the groups are shown.
+                      layout.reset()          groups, positions and every kind back to the scan, how the groups are shown
+                                              too, counters included, and save. A kind with resetBy "annotations"
+                                              (captions) is left as it is (resetText puts it back).
+                      layout.nextId(prefix)   the next id of a counter: "g" (groups) or a kind's own ("c": connectors)
+                      layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
+                                              is its caller)
+                      layout.undo()           restore the latest mark; false when there is none
+                      layout.takeTouched()    what the mutators since the last call changed that needs redrawing:
+                                              "layout" for groups, places and open, a kind's name for an edit to it.
+                                              Text (setGroupText) touches nothing. FlowCommit is its caller.
 
          A new kind needs nothing in this module: it is one more entry in kinds, and load, save, snapshot, restore,
-         reset and the counters loop over them. Showing and editing it is the kind's view half, which the page hands
-         to FlowCommit (redraw) and FlowAnnotations (input), not to this module. Needs FlowScan.
+         reset, the three kind mutators and the counters loop over them. Showing and editing it is the kind's view half,
+         which the page hands to FlowCommit (redraw) and FlowAnnotations (input), not to this module. Needs FlowScan.
 
-         On disk: { v: 3, lanes, pos, <one key per kind: caps, scans, notes, conns>, gc, cc }. Each kind (not pos) is
+         On disk: { v: 3, lanes, pos, <one key per kind: caps, scans, notes, conns>, view, gc, cc }. view is
+         { open: { groupId: bool } }, only where a group is shown otherwise than the scan has it (a group the user made
+         is open); a layout saved before it existed has the same thing as `open` in the groups' edits, which is read when
+         there is no view. Each kind (not pos) is
          { edits, mine }, and lanes (the groups) also has place (a frame the user put in a group or freed), order (a group
          the user arranged) and seq (the order of the groups). "lanes" is the older name for groups; in this module
          it is left only as the key on disk, kept so saved layouts still load.
@@ -5668,15 +5725,19 @@
         const BLANK_TEXT = { title: "Untitled group", sub: "", subOn: false };
         /* the short name of a group: its title up to the first colon */
         const groupName = (g) => String((g && g.title) || "").split(":")[0].trim() || BLANK_TEXT.title;
-        /* what is persisted of a group; text a group does not have yet is blank */
+        /* what is persisted of a group; text a group does not have yet is blank. Whether it is open is not here: that
+           is view state, kept apart (see the view record in create). */
         const groupRecord = (g) => ({
           id: g.id,
           screens: g.screens,
-          open: g.open,
           title: typeof g.title === "string" ? g.title : BLANK_TEXT.title,
           sub: typeof g.sub === "string" ? g.sub : BLANK_TEXT.sub,
           subOn: g.subOn === true,
         });
+        const deepFreeze = (o) => {
+          if (o && typeof o === "object") Object.values(o).forEach(deepFreeze);
+          return Object.freeze(o);
+        };
         /* the highest number among ids like "c12": ids are never handed out twice */
         function highestId(list, prefix) {
           let top = 0;
@@ -5698,6 +5759,11 @@
             if (typeof k.scanned !== "function") throw new Error('FlowLayout.create: "' + k.name + '" has no scanned()');
             taken.add(k.name);
           });
+          const kindOf = (name) => {
+            const k = kinds.find((x) => x.name === name);
+            if (!k) throw new Error('FlowLayout: unknown annotation kind "' + name + '"');
+            return k;
+          };
           /* the id counters: groups hand out "g4", and a kind may ask for the same (prefix "c" saved as "cc") */
           const COUNTERS = [{ field: "groups", prefix: "g", saved: "gc" }].concat(
             kinds.filter((k) => k.counter).map((k) => ({ field: k.name, prefix: k.counter.prefix, saved: k.counter.saved })),
@@ -5706,18 +5772,35 @@
           let history = [];
           let counters = Object.fromEntries(COUNTERS.map((c) => [c.prefix, 0]));
 
+          /* ---- the state: private, written only by the mutators below ---- */
+          let S = { groups: [], pos: {} }; /* groups are { id, screens, title, sub, subOn }; open is not here */
+          let openSaid = {}; /* the view record: group id -> open, only where it differs from the default */
+          let rev = 0; /* bumped by every write that changes S: the snapshot and the read-only views are kept per revision */
+          let viewRev = 0; /* bumped when how the groups are shown changes */
+          const touched = new Set(); /* what the writes since the last takeTouched() asked to have redrawn */
+          const wrote = (...names) => {
+            rev++;
+            names.forEach((n) => touched.add(n));
+          };
+
           function freshDefaults() {
             const d = clone(defaults());
             const out = { groups: d.groups.map(groupRecord), pos: d.pos };
             kinds.forEach((k) => (out[k.name] = clone(list(k.scanned()))));
             return out;
           }
+          /* the scan as it was when the layout was made: read, never written. It is what a snapshot is a difference from,
+             so it is worked out once instead of for every snapshot. */
+          const D0 = freshDefaults();
+          const scannedOpen = new Map(list(defaults().groups).map((g) => [g.id, g.open !== false]));
+          const openDefault = (id) => (scannedOpen.has(id) ? scannedOpen.get(id) : true);
+          const isOpen = (id) => (id in openSaid ? openSaid[id] : openDefault(id));
           /* the kinds that Reset layout leaves alone and Reset annotations puts back (captions) */
           const textual = () => kinds.filter((k) => k.resetBy === "annotations");
           /* the scanned text of a group, or blank when it is not a scanned group */
           const scannedText = (id) => {
-            const l = defaults().groups.find((x) => x.id === id);
-            const { title, sub, subOn } = l ? groupRecord(l) : BLANK_TEXT;
+            const l = D0.groups.find((x) => x.id === id);
+            const { title, sub, subOn } = l || BLANK_TEXT;
             return { title, sub, subOn };
           };
           const startCounters = (d) => Object.fromEntries(COUNTERS.map((c) => [c.prefix, highestId(d[c.field], c.prefix)]));
@@ -5725,27 +5808,59 @@
           const counted = (from, items) =>
             Object.fromEntries(COUNTERS.map((c) => [c.prefix, Math.max(from[c.prefix], highestId(items(c), c.prefix))]));
           function adopt(state) {
-            layout.groups = state.groups;
-            kinds.forEach((k) => (layout[k.name] = state[k.name]));
-            layout.pos = state.pos;
+            S = { groups: state.groups, pos: state.pos };
+            kinds.forEach((k) => (S[k.name] = state[k.name]));
+            rev++;
           }
-          /* what is saved and snapshotted: the edits over the scan for each kind, and the positions. A group's
-             DOM handle and the like (el, x, top) are the page's own and never reach here. */
+          const setView = (open) => {
+            openSaid = open;
+            viewRev++;
+          };
+
+          /* what is read: frozen copies, made once per change. Nothing outside writes to the layout; it asks (see the
+             mutators), which is what lets it keep the rules and count the changes. */
+          let seen = null;
+          function views() {
+            if (seen && seen.rev === rev && seen.viewRev === viewRev) return seen;
+            const shown = (g) => {
+              const { id, screens, title, sub, subOn } = clone(groupRecord(g));
+              return deepFreeze({ id, screens, open: isOpen(g.id), title, sub, subOn });
+            };
+            const out = { rev, viewRev, groups: S.groups.map(shown) };
+            out.groups = Object.freeze(out.groups);
+            out.pos = deepFreeze(clone(S.pos));
+            kinds.forEach((k) => (out[k.name] = deepFreeze(clone(S[k.name]))));
+            return (seen = out);
+          }
+          const readOnly = (name) =>
+            Object.defineProperty(layout, name, {
+              enumerable: true,
+              get: () => views()[name],
+              set() {
+                throw new Error("FlowLayout: layout." + name + " is read-only; change it with a mutator (place, setGroupText, add, edit, remove, setOpen, ...)");
+              },
+            });
+          OWN.concat(kinds.map((k) => k.name)).forEach(readOnly);
+
+          /* what is saved and snapshotted: the edits over the scan for each kind, and the positions. How the groups are
+             shown is not in it. */
+          let made = null;
           function persisted() {
-            const d = freshDefaults();
+            if (made && made.rev === rev) return made.out;
             const out = {};
-            out.lanes = FlowScan.diffGroups(d.groups, layout.groups.map(groupRecord)); /* "lanes" is the disk name */
-            out.pos = layout.pos;
-            kinds.forEach((k) => (out[k.name] = FlowScan.diff(d[k.name], layout[k.name])));
+            out.lanes = FlowScan.diffGroups(D0.groups, S.groups.map(groupRecord)); /* "lanes" is the disk name */
+            out.pos = S.pos;
+            kinds.forEach((k) => (out[k.name] = FlowScan.diff(D0[k.name], S[k.name])));
+            made = { rev, out, str: JSON.stringify(out) };
             return out;
           }
           /* an item of the user's own, of a kind with a counter, whose id a new scan now uses gets a fresh one */
           function freshIds() {
             COUNTERS.filter((c) => c.field !== "groups").forEach((c) => {
-              const seen = new Set();
-              layout[c.field].forEach((x) => {
-                if (seen.has(x.id)) x.id = layout.nextId(c.prefix);
-                seen.add(x.id);
+              const seenIds = new Set();
+              S[c.field].forEach((x) => {
+                if (seenIds.has(x.id)) x.id = layout.nextId(c.prefix);
+                seenIds.add(x.id);
               });
             });
           }
@@ -5758,23 +5873,37 @@
               const merged = isEdits(st[k.name])
                 ? FlowScan.merge(d[k.name], st[k.name]).filter((x) => x && typeof x === "object")
                 : d[k.name];
-              out[k.name] = k.clean ? k.clean(merged, { hasScreen, scanned: d[k.name] }) : merged;
+              const ctx = { hasScreen, scanned: d[k.name] };
+              out[k.name] = k.clean ? k.clean(merged, ctx) : k.valid ? merged.filter((x) => k.valid(x, ctx)) : merged;
             });
             return out;
           }
           /* groups as the user sees them: the scan's, with the saved edits laid over, cleaned. Says which of the
-             user's own groups had to take a new id because the scan now uses theirs. */
+             user's own groups had to take a new id because the scan now uses theirs, and (from a layout saved when
+             open was still an edit) which groups were open. */
           function groupsFrom(saved, d) {
             const merged = FlowScan.mergeGroups(d.groups, saved, { fresh: () => layout.nextId("g") });
-            const seen = new Set();
+            const seenIds = new Set();
+            const wasOpen = {};
             const groups = merged.groups
               .map((g) => {
-                const screens = g.screens.filter((id) => hasScreen(id) && !seen.has(id));
-                screens.forEach((id) => seen.add(id));
+                const screens = g.screens.filter((id) => hasScreen(id) && !seenIds.has(id));
+                screens.forEach((id) => seenIds.add(id));
+                if (typeof g.open === "boolean") wasOpen[g.id] = g.open;
                 return groupRecord({ ...g, screens });
               })
               .filter((g) => g.screens.length);
-            return { groups, renamed: merged.renamed };
+            return { groups, renamed: merged.renamed, wasOpen };
+          }
+          /* the view record as saved, for the groups that exist; a layout from before it was kept falls back to the
+             groups' own open (then an edit) */
+          function viewFrom(st, groups, wasOpen) {
+            const said = isObj(st.view) && isObj(st.view.open) ? st.view.open : isObj(st.view) ? {} : wasOpen;
+            const out = {};
+            groups.forEach((g) => {
+              if (typeof said[g.id] === "boolean" && said[g.id] !== openDefault(g.id)) out[g.id] = said[g.id];
+            });
+            return out;
           }
           /* places only for things that exist, and a renamed group of the user's keeps its place */
           function tidyPos(pos, groups, renamed) {
@@ -5790,6 +5919,7 @@
             const start = startCounters(d);
             const fallBack = () => {
               adopt(d);
+              setView({});
               counters = start;
             };
             let st = null;
@@ -5810,7 +5940,8 @@
               const out = Object.assign({ groups: g.groups, pos: d.pos }, overlays(st, d));
               tidyPos(out.pos, out.groups, g.renamed);
               adopt(out);
-              counters = counted(counters, (c) => out[c.field]);
+              setView(viewFrom(st, g.groups, g.wasOpen));
+              counters = counted(counters, (c) => S[c.field]);
               freshIds();
               /* a user's group whose id the scan now uses took a new one: write that down at once */
               if (Object.keys(g.renamed).length) layout.save();
@@ -5824,66 +5955,176 @@
               storage.setItem(
                 key,
                 JSON.stringify(
-                  Object.assign({ v: VERSION }, persisted(), Object.fromEntries(COUNTERS.map((c) => [c.saved, counters[c.prefix]]))),
+                  Object.assign({ v: VERSION }, persisted(), { view: { open: openSaid } }, Object.fromEntries(COUNTERS.map((c) => [c.saved, counters[c.prefix]]))),
                 ),
               );
             } catch (e) {}
           };
-          layout.snapshot = () => JSON.stringify(persisted());
+          layout.snapshot = () => {
+            persisted();
+            return made.str;
+          };
           layout.restore = (s) => {
             const st = JSON.parse(s);
             const d = freshDefaults();
-            /* open or closed is view state: a group still here keeps how it is shown now */
-            const shown = new Map(layout.groups.map((l) => [l.id, l.open]));
             const g = groupsFrom(st.lanes, d);
-            g.groups.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
             const kindsBack = overlays(st, d);
             adopt(Object.assign({ groups: g.groups, pos: st.pos }, kindsBack));
             freshIds();
             /* ids that came back with the snapshot must not be handed out again */
-            counters = counted(counters, (c) => layout[c.field]);
+            counters = counted(counters, (c) => S[c.field]);
+            touched.add("layout");
             layout.save();
           };
           layout.reset = () => {
             const d = freshDefaults();
-            textual().forEach((k) => (d[k.name] = layout[k.name]));
+            textual().forEach((k) => (d[k.name] = clone(S[k.name])));
             adopt(d);
+            setView({});
             counters = startCounters(d);
+            touched.add("layout");
             layout.save();
           };
-          layout.newGroup = (screens) => ({ id: layout.nextId("g"), screens, open: true, ...BLANK_TEXT });
+
+          /* ---- groups ---- */
           const leave = (ids) =>
-            layout.groups.forEach((L) => {
+            S.groups.forEach((L) => {
               L.screens = L.screens.filter((x) => !ids.includes(x));
             });
           const dropEmpty = () => {
-            layout.groups = layout.groups.filter((L) => L.screens.length);
+            S.groups = S.groups.filter((L) => L.screens.length);
           };
-          const forgetPlaces = (ids) => Object.values(layout.pos).forEach((P) => ids.forEach((i) => delete P[i]));
-          layout.groupOf = (id) => layout.groups.find((l) => l.screens.includes(id));
+          const placesOf = (device) => S.pos[device] || (S.pos[device] = {});
+          const forget = (ids, device) => (device ? [placesOf(device)] : Object.values(S.pos)).forEach((P) => ids.forEach((i) => delete P[i]));
+          layout.groupOf = (id) => views().groups.find((l) => l.screens.includes(id));
           layout.takeOut = (ids) => {
             leave(ids);
             dropEmpty();
+            wrote("layout");
           };
           layout.moveInto = (ids, groupId, idx) => {
             leave(ids);
-            layout.groups.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
-            forgetPlaces(ids);
+            S.groups.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
+            forget(ids);
             dropEmpty();
+            wrote("layout");
           };
           layout.groupFrames = (ids, { device, at } = {}) => {
-            layout.takeOut(ids);
-            const g = layout.newGroup(ids.slice());
-            layout.groups.push(g);
-            forgetPlaces(ids);
-            if (at) (layout.pos[device] || (layout.pos[device] = {}))[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
-            return g;
+            leave(ids);
+            dropEmpty();
+            const g = { id: layout.nextId("g"), screens: ids.slice(), ...BLANK_TEXT };
+            S.groups.push(g);
+            forget(ids);
+            if (at) placesOf(device)[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
+            wrote("layout");
+            return views().groups.find((l) => l.id === g.id);
+          };
+          /* the order the groups are stacked in; never adds or drops one. Those not named follow, in their order. */
+          layout.orderGroups = (ids) => {
+            const by = new Map(S.groups.map((g) => [g.id, g]));
+            const first = [...new Set(ids)].filter((id) => by.has(id)).map((id) => by.get(id));
+            S.groups = first.concat(S.groups.filter((g) => !first.includes(g)));
+            wrote("layout");
+          };
+          /* a group's title, description and whether the description is shown: the page draws a field as it is typed in,
+             so nothing is asked to be redrawn */
+          layout.setGroupText = (id, patch) => {
+            for (const k in patch) {
+              if (!(k in BLANK_TEXT)) throw new Error('FlowLayout.setGroupText: only title, sub and subOn can be set, not "' + k + '"');
+              if (typeof patch[k] !== typeof BLANK_TEXT[k]) throw new Error("FlowLayout.setGroupText: " + k + " must be a " + typeof BLANK_TEXT[k]);
+            }
+            const g = S.groups.find((x) => x.id === id);
+            if (!g) return false;
+            Object.assign(g, patch);
+            wrote();
+            return true;
           };
           layout.resetText = () => {
-            layout.groups.forEach((l) => Object.assign(l, scannedText(l.id)));
+            S.groups.forEach((l) => Object.assign(l, scannedText(l.id)));
             const d = freshDefaults();
-            textual().forEach((k) => (layout[k.name] = d[k.name]));
+            textual().forEach((k) => (S[k.name] = d[k.name]));
+            wrote();
           };
+
+          /* ---- positions: where a frame or a group sits on one device ---- */
+          const exists = (id) => hasScreen(id) || S.groups.some((g) => g.id === id);
+          layout.place = (device, id, at) => {
+            if (!exists(id)) return false;
+            placesOf(device)[id] = { x: Math.round(at.x), y: Math.round(at.y) };
+            wrote("layout");
+            return true;
+          };
+          /* let go of places: on one device, or (no device named) on every one */
+          layout.forgetPlaces = (ids, device) => {
+            forget(ids, device);
+            wrote("layout");
+          };
+
+          /* ---- annotations: any kind, by name ---- */
+          layout.add = (name, item) => {
+            const k = kindOf(name);
+            if (!isObj(item) || typeof item.id !== "string" || !item.id) throw new Error('FlowLayout.add("' + name + '"): an item needs an id');
+            if (S[name].some((x) => x.id === item.id)) throw new Error('FlowLayout.add("' + name + '"): "' + item.id + '" is already there');
+            const it = clone(item);
+            if (k.valid && !k.valid(it, { hasScreen })) return false;
+            S[name].push(it);
+            wrote(name);
+            return true;
+          };
+          layout.edit = (name, id, patch) => {
+            kindOf(name);
+            if ("id" in patch && patch.id !== id) throw new Error('FlowLayout.edit("' + name + '"): an item keeps its id');
+            const it = S[name].find((x) => x.id === id);
+            if (!it) return false;
+            for (const f in patch) {
+              if (f === "id") continue;
+              if (patch[f] === undefined) delete it[f];
+              else it[f] = clone(patch[f]);
+            }
+            wrote(name);
+            return true;
+          };
+          layout.remove = (name, id) => {
+            kindOf(name);
+            const n = S[name].length;
+            S[name] = S[name].filter((x) => x.id !== id);
+            if (S[name].length === n) return false;
+            wrote(name);
+            return true;
+          };
+          /* notes and findings back where the scan put them on this device (Tidy), each by its kind's own rule */
+          layout.letGoOfMoves = (device) => {
+            kinds.forEach((k) => {
+              if (typeof k.letGo !== "function") return;
+              S[k.name].forEach((it) => k.letGo(it, D0[k.name].find((x) => x.id === it.id), device));
+              wrote(k.name);
+            });
+          };
+
+          /* ---- view state: how the groups are shown. Saved with the layout, never in a snapshot or an undo step. ---- */
+          layout.setOpen = (ids, open) => {
+            let changed = false;
+            const next = { ...openSaid };
+            (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
+              if (!S.groups.some((g) => g.id === id) || isOpen(id) === open) return;
+              if (open === openDefault(id)) delete next[id];
+              else next[id] = open;
+              openSaid = next;
+              changed = true;
+            });
+            if (changed) {
+              viewRev++;
+              touched.add("layout");
+            }
+            return changed;
+          };
+          layout.viewStamp = () => viewRev;
+          layout.takeTouched = () => {
+            const out = [...touched];
+            touched.clear();
+            return out;
+          };
+
           layout.nextId = (kind) => {
             if (!(kind in counters)) throw new Error("FlowLayout.nextId: unknown kind " + kind);
             counters[kind] += 1;
@@ -5901,6 +6142,7 @@
           };
 
           load();
+          touched.clear();
           return layout;
         }
 
@@ -5916,33 +6158,43 @@
          to finish. It knows nothing about the DOM: the page hands it the kinds, each with its own refresh().
 
          Interface
-           const commit = FlowCommit.create({ layout, kinds, redraw })
+           const commit = FlowCommit.create({ layout, kinds, redraw, timer? })
              layout  a FlowLayout
-             kinds   the annotation kinds (the page's one list); each needs a name and a refresh(), its redraw
+             kinds   the annotation kinds (the page's one list); each needs a name and a refresh(), its redraw;
+                     a kind's own `redraw` (names, default none) is what a change to it asks for
              redraw  { world, layout }, one function each, both required
-           commit(change, { redraw, undo })
+             timer   { set, clear } for the typing save (default setTimeout / clearTimeout); tests pass their own
+           commit(change, { redraw, undo, force, quiet })
              Runs change(), returns its result. If the layout is now different: marks the state before
-             as one undo step, saves, then redraws what was asked for. If nothing changed, nothing
-             happens. A commit inside a change joins the outer one.
+             as one undo step, saves, then redraws. If nothing changed, nothing happens. A change to
+             only how the groups are shown (open or closed) is saved and redrawn but is not an undo step.
+             What is redrawn is what the change touched (the layout says: "layout" for groups and places, a kind's
+             name for an edit to it, which asks for that kind's own `redraw`) plus whatever `redraw` names.
                redraw  "all" (the layout and every kind) or a list of names ("world", "layout", a kind's name);
                        default none. Always drawn in this order: world, layout, then the kinds in the order of
                        the list they were declared in. A name nobody declared throws before anything changes.
-               undo    false for edits that are saved and redrawn but are not undo steps (folding a group)
+               undo    false for edits that are saved and redrawn but are not undo steps (an arrow-key burst)
                force   true to redraw even if nothing changed: a drag moved things on screen (a preview) and
                        the page must be drawn from the layout again, whether the drop changed it or not
+               quiet   true when the page has drawn the change itself (a card just built, a field just typed in): what
+                       the change touched is not redrawn, only what `redraw` names
              Only the outermost commit decides: a commit inside another one can add redraws, but its own
-             undo option and since() are ignored.
-           commit.since(before, { redraw, undo })
-             For an edit typed in place: the change already happened live, `before` is layout.snapshot() from the
-             start. (Dragging frames or a group does not need it: FlowGesture commits its proposal on the drop.)
-             Marks and saves only if something changed, but always redraws.
+             undo option is ignored.
+           commit.typing.change(fn)
+             For text typed in place (a note, a caption, a group's title): fn() writes through the layout's mutators
+             on each keystroke. The first change of a visit takes the starting point; the text is saved a moment after
+             the last key; nothing is redrawn (the field shows it already).
+           commit.typing.end()
+             The visit is over (blur): one undo step back to where it started if the text changed, and a save.
+             Returns whether it changed anything. Any commit or undo ends a visit first, so a step is never mixed.
            commit.undo(afterRestore)
              Undoes one step, runs afterRestore() (the page's own clean-up), redraws everything.
              Returns false when there is nothing to undo.
          ====================================================================== */
       var FlowCommit = (function () {
         "use strict";
-        function create({ layout, kinds, redraw }) {
+        const SAVE_AFTER = 400;
+        function create({ layout, kinds, redraw, timer }) {
           ["world", "layout"].forEach((k) => {
             if (typeof redraw[k] !== "function") throw new Error('FlowCommit: missing redraw function for "' + k + '"');
           });
@@ -5951,6 +6203,12 @@
             if (!k.name) throw new Error("FlowCommit: every kind needs a name");
             if (typeof k.refresh !== "function") throw new Error('FlowCommit: "' + k.name + '" has no refresh');
           });
+          /* the page's timers; where there are none (a bare context) the save waits for the end of the visit */
+          const clock =
+            timer ||
+            (typeof setTimeout === "function"
+              ? { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTimeout(t) }
+              : { set: () => null, clear: () => {} });
           const fns = { world: redraw.world, layout: redraw.layout };
           kinds.forEach((k) => {
             if (k.name in fns) throw new Error('FlowCommit: the kind name "' + k.name + '" is taken');
@@ -5966,19 +6224,34 @@
             });
             return list;
           };
+          /* what the layout says the writes touched, as redraw names: the arrangement itself, or what a kind asks for */
+          const redrawnFor = (touched) =>
+            touched.flatMap((t) => (t === "layout" ? ["layout"] : ((kinds.find((k) => k.name === t) || {}).redraw || []).filter((n) => ORDER.includes(n))));
           const redrawInOrder = (wanted) => ORDER.filter((k) => wanted.includes(k)).forEach((k) => fns[k]());
           let running = null; /* the outer commit's pending redraws while its change runs */
+          let visit = null; /* the typing visit in progress: { before, timer } */
 
           /* the tail every edit shares: undo point, save, redraw. Nothing changed, nothing to record;
              a live gesture (alwaysRedraw) still redraws, because it moved things on screen. */
-          function finish(before, opts, names, alwaysRedraw) {
-            if (layout.snapshot() === before) {
+          function finish(before, shown, opts, names, alwaysRedraw) {
+            const edited = layout.snapshot() !== before;
+            if (!edited && layout.viewStamp() === shown) {
               if (alwaysRedraw) redrawInOrder(names);
               return;
             }
-            if (opts.undo !== false) layout.mark(before);
+            if (edited && opts.undo !== false) layout.mark(before);
             layout.save();
             redrawInOrder(names);
+          }
+          function endVisit() {
+            if (!visit) return false;
+            const v = visit;
+            visit = null;
+            clock.clear(v.timer);
+            if (layout.snapshot() === v.before) return false;
+            layout.mark(v.before);
+            layout.save();
+            return true;
           }
           function commit(change, opts = {}) {
             const names = namesOf(opts.redraw);
@@ -5986,20 +6259,34 @@
               names.forEach((k) => running.add(k));
               return change();
             }
+            endVisit();
             const before = layout.snapshot();
+            const shown = layout.viewStamp();
+            layout.takeTouched();
             running = new Set(names);
             let result, wanted;
             try {
               result = change();
             } finally {
+              redrawnFor(layout.takeTouched()).forEach((k) => opts.quiet || running.add(k));
               wanted = [...running];
               running = null;
             }
-            finish(before, opts, wanted, !!opts.force);
+            finish(before, shown, opts, wanted, !!opts.force);
             return result;
           }
-          commit.since = (before, opts = {}) => finish(before, opts, namesOf(opts.redraw), true);
+          commit.typing = {
+            change(fn) {
+              if (!visit) visit = { before: layout.snapshot(), timer: null };
+              fn();
+              layout.takeTouched();
+              clock.clear(visit.timer);
+              visit.timer = clock.set(() => layout.save(), SAVE_AFTER);
+            },
+            end: endVisit,
+          };
           commit.undo = (afterRestore) => {
+            endVisit();
             if (!layout.undo()) return false;
             if (afterRestore) afterRestore();
             redrawInOrder(ALL);
@@ -6050,11 +6337,11 @@
            origin(id) -> {x, y}       where it is now, in the units place() takes
            lift(id)                   a drag began
            place(id, pos)             show it at pos while it moves (DOM only)
-           save(id, pos, {nudged})    the data change for a move, run inside a commit. nudged is true for an
+           save(id, pos, {nudged})    the data change for a move (layout.edit), run inside a commit. nudged is true for an
                                       arrow-key move, so a note can move in place instead of re-homing.
            settle(id, {moved, cancelled, nudged})   DOM clean-up, after the commit and its redraws
            tap(id)                    pressed and released without moving
-           erase(id)                  the data change for a delete, run inside a commit (needed to be deletable)
+           erase(id)                  the data change for a delete (layout.remove), run inside a commit (needed to be deletable)
            erased(id)                 DOM clean-up and message after a delete
            redraw                     kinds to redraw after a save or an erase (default none)
 
@@ -6766,16 +7053,13 @@
           function apply(d) {
             const p = d.proposal,
               dev = device();
-            const places = () => layout.pos[dev] || (layout.pos[dev] = {});
             if (p.kind === "into") {
               layout.moveInto(d.ids, p.id, p.idx);
               return { kind: "into", ids: d.ids, group: p.id, moved: d.ids.some((i) => (d.was.get(i) || null) !== p.id) };
             }
             if (p.kind === "loose") {
               layout.takeOut(d.ids);
-              d.ids.forEach((i) => {
-                places()[i] = { x: Math.round(p.at[i].x), y: Math.round(p.at[i].y) };
-              });
+              d.ids.forEach((i) => layout.place(dev, i, p.at[i]));
               return { kind: "loose", ids: d.ids, moved: d.ids.some((i) => d.was.get(i)) };
             }
             if (p.kind === "merge") {
@@ -6786,7 +7070,7 @@
               return { kind: "merge", ids, group };
             }
             if (p.kind === "move") {
-              places()[p.id] = { x: p.at.x, y: p.at.y };
+              layout.place(dev, p.id, p.at);
               return { kind: "move", id: p.id };
             }
             return { kind: "stay", ids: d.ids };
@@ -7166,6 +7450,7 @@
     </script>
 
     <script>
+      "use strict"; /* a write to what the layout holds (read-only) throws here instead of being ignored */
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
    product class names, no product words. Problems are reported in the console; a scan that cannot be read
@@ -7185,8 +7470,6 @@
       const SCREENS = Object.fromEntries(SCAN.screens.map((s) => [s.id, s]));
       const ORDER = SCAN.screens.map((s) => s.id);
       const DEFAULT_GROUPS = SCAN.groups;
-      const FINDINGS = SCAN.findings;
-      const NOTES = SCAN.notes;
       const shortName = (x) => SCREENS[x].name.split(" · ")[0];
       const hopTo = (x) => String(html`<button class="hop" data-to="${x}">${shortName(x)}</button>`);
       const andList = (a) =>
@@ -7437,27 +7720,14 @@
         if (!f) return;
         const w = f.closest("[data-k]");
         if (!w) return;
-        const L = groupById(w.dataset.k);
-        if (L) {
-          /* live while typing; the undo step is recorded when the field is left (below) */
-          L[f.dataset.f] = f.textContent;
-          saveNotesSoon();
-        } else if (capOf(w.dataset.k)) {
-          capOf(w.dataset.k)[f.dataset.f] = f.textContent;
-          saveNotesSoon();
-        }
+        /* each key goes through the layout; the undo step is recorded when the field is left (below) */
+        if (groupById(w.dataset.k)) commit.typing.change(() => layout.setGroupText(w.dataset.k, { [f.dataset.f]: f.textContent }));
+        else if (capOf(w.dataset.k)) commit.typing.change(() => layout.edit("caps", w.dataset.k, { [f.dataset.f]: f.textContent }));
       });
-      /* one undo step per visit to a group's or a frame's title or description, not one per keystroke */
-      let groupEdit = null;
-      const TYPED = ".gtitle,.gsub,.ctt,.cb";
-      world.addEventListener("focusin", (e) => {
-        if (e.target.closest(TYPED)) groupEdit = { before: layout.snapshot() };
-      });
+      /* one undo step per visit to a group's, a frame's or a note's text, not one per keystroke */
+      const TYPED = ".gtitle,.gsub,.ctt,.cb,.note .txt";
       world.addEventListener("focusout", (e) => {
-        if (!groupEdit || !e.target.closest(TYPED)) return;
-        const { before } = groupEdit;
-        groupEdit = null;
-        commit.since(before);
+        if (e.target.closest(TYPED)) commit.typing.end();
       });
       world.addEventListener("keydown", (e) => {
         const f = e.target.closest && e.target.closest("[data-f]");
@@ -7496,9 +7766,8 @@
           const w = b.closest("[data-k]"),
             k = w.dataset.k,
             on = b.classList.contains("cadd");
-          const L = groupById(k);
-          if (L) commit(() => (L.subOn = on));
-          else commit(() => (capOf(k).on = on));
+          if (groupById(k)) commit(() => layout.setGroupText(k, { subOn: on }));
+          else commit(() => layout.edit("caps", k, { on }));
           w.classList.toggle("off", !on);
           if (on)
             caretEnd(
@@ -7517,11 +7786,6 @@
         if (m < 60) return m + "m";
         const h = Math.round(m / 60);
         return h < 24 ? h + "h" : Math.round(h / 24) + "d";
-      };
-      let noteSave;
-      const saveNotesSoon = () => {
-        clearTimeout(noteSave);
-        noteSave = setTimeout(layout.save, 400);
       };
       const notePlace = (n) =>
         n.frame ? FlowDevice.placeOn(n.pos, DEV.id) : [n.x, n.y];
@@ -7548,8 +7812,8 @@
         d.setAttribute("role", "group");
         d.setAttribute("aria-label", "Note from " + n.who + ". Delete removes it.");
         d.querySelector(".txt").addEventListener("input", (e) => {
-          n.text = e.currentTarget.textContent;
-          saveNotesSoon();
+          const text = e.currentTarget.textContent;
+          commit.typing.change(() => layout.edit("notes", n.id, { text }));
         });
         d.querySelector(".nx").addEventListener("click", (e) => {
           e.stopPropagation();
@@ -7573,14 +7837,10 @@
           who: "You",
           at: Date.now(),
           text,
+          ...(frame ? { pos: { [DEV.id]: local } } : { x: world[0], y: world[1] }),
         };
-        if (frame) n.pos = { [DEV.id]: local };
-        else {
-          n.x = world[0];
-          n.y = world[1];
-        }
-        commit(() => layout.notes.push(n));
-        const d = buildNote(n);
+        commit(() => layout.add("notes", n));
+        const d = buildNote(noteOf(n.id));
         if (d) {
           const t = d.querySelector(".txt");
           t.focus();
@@ -7596,18 +7856,8 @@
           wx = (r.left - m.e) / m.a,
           wy = (r.top - m.f) / m.a,
           f = homeFor(wx + r.width / m.a / 2, wy + r.height / m.a / 2);
-        if (f) {
-          n.pos = f === n.frame ? { ...(n.pos || {}) } : {};
-          n.pos[DEV.id] = localFrom(f, wx, wy);
-          n.frame = f;
-          delete n.x;
-          delete n.y;
-        } else {
-          n.frame = null;
-          delete n.pos;
-          n.x = Math.round(wx);
-          n.y = Math.round(wy);
-        }
+        if (f) layout.edit("notes", n.id, { frame: f, pos: { ...(f === n.frame ? n.pos : {}), [DEV.id]: localFrom(f, wx, wy) }, x: undefined, y: undefined });
+        else layout.edit("notes", n.id, { frame: null, pos: undefined, x: Math.round(wx), y: Math.round(wy) });
       }
       function rehomeDom(n, d) {
         const parent = n.frame ? colOf(n.frame) : notesEl,
@@ -7671,8 +7921,8 @@
           if (!how.nudged) return rehomeData(n, d); /* a drop: it may land on another frame, or on empty canvas */
           /* a nudge moves the note where it is: 8 px must not attach it to a frame or let go of one */
           const at = [Math.round(p.x), Math.round(p.y)];
-          if (n.frame) n.pos = { ...(n.pos || {}), [DEV.id]: at };
-          else [n.x, n.y] = at;
+          if (n.frame) layout.edit("notes", n.id, { pos: { ...(n.pos || {}), [DEV.id]: at } });
+          else layout.edit("notes", n.id, { x: at[0], y: at[1] });
         },
         settle(id, how) {
           const d = noteEls.get(id);
@@ -7693,7 +7943,7 @@
           s.addRange(r);
         },
         erase(id) {
-          layout.notes = layout.notes.filter((n) => n.id !== id);
+          layout.remove("notes", id);
         },
         erased(id) {
           const d = noteEls.get(id);
@@ -7732,7 +7982,7 @@
           if (how.moved && !how.nudged) v.dragged(); /* the click that follows a drag is not a click on the card */
         },
         erase(id) {
-          layout.scans = layout.scans.filter((x) => x.id !== id);
+          layout.remove("scans", id);
         },
         erased(id) {
           const v = scanViews.get(id);
@@ -7753,7 +8003,7 @@
           return chip ? chip.dataset.id : selConn; /* a selected connector is deleted from anywhere */
         },
         erase(id) {
-          layout.conns = layout.conns.filter((x) => x.id !== id);
+          layout.remove("conns", id);
           if (selConn === id) selConn = null;
         },
         erased: () => toast("Connector deleted. ⌘Z to undo."),
@@ -7774,6 +8024,7 @@
    A canvas holds free frames and groups. A group is a sequence of frames that either
    fans out into a flow (open) or stacks into a deck (closed). Membership is shared by
    every device; positions are remembered per device, because the frames change size.
+   The page reads the layout and asks it to change (its mutators, through commit); it never writes to it.
    ====================================================================== */
       const layout = FlowLayout.create({
         key: "flow-canvas.layout.v1",
@@ -7789,8 +8040,6 @@
         }),
         kinds: KINDS,
       });
-      /* open or closed is view state: saved and redrawn, never an undo step */
-      const VIEW_STATE = { undo: false, redraw: ["layout"] };
       /* every edit ends here: undo point, save, redraw, in one fixed order */
       const commit = FlowCommit.create({ layout, kinds: KINDS, redraw: { world: buildWorld, layout: relayout } });
       /* the user is typing in this: Delete and the arrow keys are theirs, not an annotation's */
@@ -7800,9 +8049,8 @@
       const isFree = (id) => !groupOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${cssStr(id)}"]`);
       const groupEl = (id) => document.getElementById(id);
-      function posOf() {
-        return layout.pos[DEV.id] || (layout.pos[DEV.id] = {});
-      }
+      /* a group's element, by id: the page's own handle; the layout's groups carry none */
+      const groupEls = new Map();
       function sameAsDefault(L) {
         const d = DEFAULT_GROUPS.find((x) => x.id === L.id);
         return (
@@ -7919,7 +8167,7 @@
       }
       function sizeDz(L, n = L.screens.length) {
         const m = DEV.metrics;
-        const dz = L.el.querySelector(".dz");
+        const dz = groupEls.get(L.id).querySelector(".dz");
         if (L.open) {
           const w = Math.max(1, n) * (m.colW + GAP) - GAP;
           Object.assign(dz.style, {
@@ -7940,25 +8188,28 @@
       /* the group's title and description as the layout has them (after an undo, a reset, a load); the field
          being typed in is left alone */
       function showGroupText(L) {
+        const el = groupEls.get(L.id);
         const put = (sel, text) => {
-          const f = L.el.querySelector(sel);
+          const f = el.querySelector(sel);
           if (f !== document.activeElement && f.textContent !== text) f.textContent = text;
         };
         put(".gtitle", L.title);
         put(".gsub", L.sub);
-        L.el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
+        el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
       function syncGroups() {
         const m = DEV.metrics;
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
         document.querySelectorAll(".lane").forEach((e) => {
-          if (!ids.has(e.id)) e.remove();
+          if (ids.has(e.id)) return;
+          e.remove();
+          groupEls.delete(e.id);
         });
         shown.forEach(({ group: L, screens }) => {
           let el = document.getElementById(L.id);
           if (!el) el = makeGroup(L);
-          L.el = el;
+          groupEls.set(L.id, el);
           showGroupText(L);
           const n = screens.length;
           const box = geo.box(L.id);
@@ -8090,7 +8341,7 @@
         const savePos = (p) => {
           moved = true; /* it has a place of its own now, so its leader takes the "moved" route */
           const r = live();
-          if (r) r.pos = Object.assign(r.pos || {}, { [DEV.id]: [Math.round(p.x), Math.round(p.y)] });
+          if (r) layout.edit("scans", r.id, { pos: { ...(r.pos || {}), [DEV.id]: [Math.round(p.x), Math.round(p.y)] } });
         };
         place(left, top, moved);
         /* the finding and the thing it describes light up together */
@@ -8178,12 +8429,7 @@
       function setGroup(id, open, opts = {}) {
         const L = layout.groups.find((l) => l.id === id);
         if (!L || L.open === open) return;
-        commit(
-          () => {
-            L.open = open;
-          },
-          VIEW_STATE,
-        );
+        commit(() => layout.setOpen(id, open));
         if (open) {
           if (opts.fly !== false) fly(fitRect(groupRect(L), 40));
         } else {
@@ -8263,14 +8509,7 @@
         }
         const L = layout.groups.find((l) => l.id === n);
         if (!L) return;
-        if (!L.open) {
-          commit(
-            () => {
-              L.open = true;
-            },
-            VIEW_STATE,
-          );
-        }
+        if (!L.open) commit(() => layout.setOpen(L.id, true));
         fly(fitRect(groupRect(L), 40));
       }
 
@@ -8412,17 +8651,10 @@
         });
       }
       /* a sweep that has just begun: show the screens it found (closed groups open for it) and go there. Opening is
-         view state like any other, so the next save, whatever it is for, writes it down; it is not an undo step. */
+         view state like any other: it is saved at once, stays after the sweep ends, and is not an undo step. */
       function revealSweep(sw) {
-        let opened = false;
-        sw.uses.forEach((id) => {
-          const L = groupOf(id);
-          if (L && !L.open) {
-            L.open = true;
-            opened = true;
-          }
-        });
-        if (opened) relayout(); /* redraw only: nothing is saved or recorded for undo here */
+        const closed = sw.uses.map(groupOf).filter((L) => L && !L.open);
+        if (closed.length) commit(() => layout.setOpen(closed.map((L) => L.id), true));
         paintSweep(sw);
         let x0 = 1e9,
           y0 = 1e9,
@@ -8916,19 +9148,16 @@
           );
           return null;
         }
-        const c = commit(
-          () => {
-            const link = {
-              id: layout.nextId("c"),
-              from,
-              to,
-              label: opts.label || "Next",
-            };
-            layout.conns.push(link);
-            return link;
-          },
-          { redraw: ["conns"] },
-        );
+        const c = commit(() => {
+          const link = {
+            id: layout.nextId("c"),
+            from,
+            to,
+            label: opts.label || "Next",
+          };
+          layout.add("conns", link);
+          return link;
+        });
         if (!opts.noEdit) setTimeout(() => editChip(c.id), 40);
         return c;
       }
@@ -9076,11 +9305,7 @@
         if (!c) return;
         const v = lb.textContent.trim() || "Next";
         lb.textContent = v;
-        if (c.label !== v) {
-          commit(() => {
-            c.label = v;
-          });
-        }
+        if (c.label !== v) commit(() => layout.edit("conns", id, { label: v }), { quiet: true });
       });
       world.addEventListener("keydown", (e) => {
         const chip = e.target.closest && e.target.closest(".echip");
@@ -9144,7 +9369,7 @@
           minY = Math.min(...ids.map((i) => geo.place(i).y));
         /* frames that were all loose keep their spot; otherwise the group takes the next free one */
         const at = allFree ? { x: minX, y: minY - HEAD } : undefined;
-        const L = commit(() => layout.groupFrames(ids, { device: DEV.id, at }), { redraw: ["layout"] });
+        const L = commit(() => layout.groupFrames(ids, { device: DEV.id, at }));
         afterGrouped(L, ids, { fly: !allFree });
         return L;
       }
@@ -9154,7 +9379,6 @@
         if (!ids.length) return;
         commit(
           () => {
-            const P = posOf();
             const byGroup = new Map();
             ids.forEach((i) => {
               const L = groupOf(i);
@@ -9170,16 +9394,12 @@
                   : m.deckW + m.peekX * 3 + 120);
               let k = 0;
               list.forEach((i) => {
-                P[i] = {
-                  x: Math.round(end + k * (m.colW + 70)),
-                  y: Math.round(L.open ? geo.place(i).y : box.top + HEAD),
-                };
+                layout.place(DEV.id, i, { x: end + k * (m.colW + 70), y: L.open ? geo.place(i).y : box.top + HEAD });
                 k++;
               });
             });
             layout.takeOut(ids);
           },
-          { redraw: ["layout"] },
         );
         toast(
           ids.length === 1
@@ -9189,20 +9409,11 @@
       }
       function dissolveGroup(L) {
         const name = groupName(L);
-        commit(
-          () => {
-            const P = posOf();
-            const box = geo.box(L.id);
-            L.screens.forEach((i, k) => {
-              P[i] = {
-                x: Math.round(box.x + k * (DEV.metrics.colW + GAP)),
-                y: Math.round(box.top + HEAD),
-              };
-            });
-            layout.takeOut([...L.screens]);
-          },
-          { redraw: ["layout"] },
-        );
+        commit(() => {
+          const box = geo.box(L.id);
+          L.screens.forEach((i, k) => layout.place(DEV.id, i, { x: box.x + k * (DEV.metrics.colW + GAP), y: box.top + HEAD }));
+          layout.takeOut(L.screens);
+        });
         toast(`Ungrouped “${name}”. Frames stay on the canvas. ⌘Z to undo.`);
       }
       function groupSel() {
@@ -9221,33 +9432,15 @@
             /* keep the stacking order you arranged: top to bottom, then left to right */
             const rank = (L) => (L.screens.length ? 0 : 1);
             const at = (L) => geo.box(L.id);
-            layout.groups = layout.groups.slice().sort((a, b) => rank(a) - rank(b) || at(a).top - at(b).top || at(a).x - at(b).x);
+            layout.orderGroups(layout.groups.slice().sort((a, b) => rank(a) - rank(b) || at(a).top - at(b).top || at(a).x - at(b).x).map((L) => L.id));
             const loose = readingOrder(ORDER.filter(isFree));
-            const P = layout.pos[DEV.id];
-            layout.groups.forEach((L) => delete P[L.id]);
-            loose.forEach((id) => delete P[id]);
+            layout.forgetPlaces([...layout.groups.map((L) => L.id), ...loose], DEV.id);
             /* pinning the loose frames is the user's tidy, so it is written here, in reading order, and nowhere else */
             const M = DEV.metrics;
             const { bottom } = FlowGeometry.arrange(geoInput(), M);
-            loose.forEach((id, k) => (P[id] = FlowGeometry.loosePlace(k, bottom, M)));
-            /* scanned notes back where the scan put them; findings are handled below */
-            /* forgetting the user's position for this device puts a scanned card back where the scan put it */
-            const forget = (item, scanned) => {
-              if (!item.pos) return;
-              if (scanned && scanned.pos && scanned.pos[DEV.id]) item.pos[DEV.id] = [...scanned.pos[DEV.id]];
-              else delete item.pos[DEV.id];
-              if (!Object.keys(item.pos).length && !(scanned && scanned.pos)) delete item.pos;
-            };
-            /* a finding's place on one device is carried to the others, so putting it back lets go of them all */
-            layout.scans.forEach((f) => {
-              const scanned = FINDINGS.find((x) => x.id === f.id);
-              if (scanned && scanned.pos) f.pos = clone(scanned.pos);
-              else delete f.pos;
-            });
-            layout.notes.forEach((n) => {
-              const scanned = NOTES.find((x) => x.id === n.id);
-              if (scanned && n.frame === scanned.frame) forget(n, scanned);
-            });
+            loose.forEach((id, k) => layout.place(DEV.id, id, FlowGeometry.loosePlace(k, bottom, M)));
+            /* scanned notes and findings back where the scan put them (each kind knows its own rule) */
+            layout.letGoOfMoves(DEV.id);
             return layout.snapshot() !== was; /* the same test commit uses */
           },
           { redraw: "all" },
@@ -9390,7 +9583,7 @@
         });
         document.querySelectorAll(".col.merge").forEach((c) => c.dataset.id !== pv.mergeFrame && c.classList.remove("merge"));
         if (pv.mergeFrame) colOf(pv.mergeFrame)?.classList.add("merge");
-        layout.groups.forEach((L) => L.el && L.el.classList.toggle("drop", L.id === pv.dropGroup));
+        groupEls.forEach((el, id) => el.classList.toggle("drop", id === pv.dropGroup));
         if (pv.regrouped) relayout();
         else {
           Object.keys(pv.held).forEach((id) => putFrame(id));
@@ -9403,7 +9596,7 @@
         document.body.classList.remove("gdrag");
         selbox.classList.remove("live");
         document.querySelectorAll(".col.dragging,.col.merge").forEach((c) => c.classList.remove("dragging", "merge"));
-        layout.groups.forEach((L) => L.el && L.el.classList.remove("drop"));
+        groupEls.forEach((el) => el.classList.remove("drop"));
       }
       function beginDrag() {
         moved = true;
@@ -10019,14 +10212,7 @@
         if (!L.length) return;
         const open = !L.every((l) => l.open);
         if (!open && [...selSet].some((i) => groupOf(i))) select(null);
-        commit(
-          () => {
-            L.forEach((l) => {
-              l.open = open;
-            });
-          },
-          VIEW_STATE,
-        );
+        commit(() => layout.setOpen(L.map((l) => l.id), open));
         fly(fitRect(geo.bounds(), 40, 1.1));
       }
 

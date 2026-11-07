@@ -28,8 +28,8 @@ function flagKind(layoutRef, log) {
     match: (t) => t.flag || null,
     origin: (id) => ({ x: at(id).x, y: at(id).y }),
     place: (id, p) => log.push(`place:${id}:${p.x},${p.y}`),
-    save: (id, p) => Object.assign(at(id), { x: p.x, y: p.y }),
-    erase: (id) => (layoutRef().flags = layoutRef().flags.filter((f) => f.id !== id)),
+    save: (id, p) => layoutRef().edit("flags", id, { x: p.x, y: p.y }),
+    erase: (id) => layoutRef().remove("flags", id),
   };
 }
 
@@ -54,14 +54,14 @@ function setup({ storage = memory(), typing } = {}) {
 test("a fifth kind is saved with the layout and comes back after a reload", () => {
   const { layout, commit, storage } = setup();
   eq(layout.flags, []);
-  commit(() => layout.flags.push({ id: "f1", x: 5, y: 6 }));
+  commit(() => layout.add("flags", { id: "f1", x: 5, y: 6 }));
   const again = setup({ storage }).layout;
   eq(again.flags, [{ id: "f1", x: 5, y: 6 }]);
 });
 
 test("a fifth kind is one undo step, and undo refreshes it", () => {
   const { layout, commit, log } = setup();
-  commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }), { redraw: ["flags"] });
+  commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }), { redraw: ["flags"] });
   log.length = 0;
   assert.equal(commit.undo(), true);
   eq(layout.flags, []);
@@ -70,25 +70,25 @@ test("a fifth kind is one undo step, and undo refreshes it", () => {
 
 test("redraw runs the world, then the layout, then each kind in the order of the list", () => {
   const { commit, layout, log } = setup();
-  commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }), { redraw: ["flags", "world", "notes", "layout"] });
+  commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }), { redraw: ["flags", "world", "notes", "layout"] });
   eq(log, ["redraw:world", "redraw:layout", "refresh:notes", "refresh:flags"]);
 });
 
 test("redraw 'all' is the layout and every kind, the world excluded", () => {
   const { commit, layout, log } = setup();
-  commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }), { redraw: "all" });
+  commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }), { redraw: "all" });
   eq(log, ["redraw:layout", "refresh:caps", "refresh:scans", "refresh:notes", "refresh:conns", "refresh:flags"]);
 });
 
 test("asking for a kind nobody declared fails before anything changes", () => {
   const { commit, layout } = setup();
-  assert.throws(() => commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }), { redraw: ["flagz"] }), /unknown redraw kind "flagz"/);
+  assert.throws(() => commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }), { redraw: ["flagz"] }), /unknown redraw kind "flagz"/);
   eq(layout.flags, []);
 });
 
 test("a fifth kind is dragged, nudged and deleted through the shared annotation paths", () => {
   const { layout, commit, annotations, log } = setup();
-  commit(() => layout.flags.push({ id: "f1", x: 10, y: 10 }));
+  commit(() => layout.add("flags", { id: "f1", x: 10, y: 10 }));
   assert.equal(annotations.owns({ flag: "f1" }), true);
   assert.equal(annotations.owns({ other: 1 }), false);
   annotations.down({ flag: "f1" }, { x: 0, y: 0 });
@@ -106,7 +106,7 @@ test("a fifth kind is dragged, nudged and deleted through the shared annotation 
 
 test("remove(name, id) is the same removal as the Delete key", () => {
   const { layout, commit, annotations } = setup();
-  commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }));
+  commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }));
   annotations.remove("flags", "f1");
   eq(layout.flags, []);
   assert.throws(() => annotations.remove("flagz", "f1"), /unknown annotation kind "flagz"/);
@@ -114,7 +114,7 @@ test("remove(name, id) is the same removal as the Delete key", () => {
 
 test("while the page says the user is typing, no kind acts on Delete or an arrow", () => {
   const { layout, commit, annotations } = setup({ typing: (t) => !!t.typing });
-  commit(() => layout.flags.push({ id: "f1", x: 0, y: 0 }));
+  commit(() => layout.add("flags", { id: "f1", x: 0, y: 0 }));
   assert.equal(annotations.keyDown({ flag: "f1", typing: true }, "Delete", {}), false);
   assert.equal(annotations.keyDown({ flag: "f1", typing: true }, "ArrowLeft", {}), false);
   eq(layout.flags, [{ id: "f1", x: 0, y: 0 }]);
@@ -172,8 +172,16 @@ test("FlowScan.dataKinds: captions, findings, notes and connectors, in redraw or
   eq(by.conns.counter, { prefix: "c", saved: "cc" });
   assert.equal(by.caps.resetBy, "annotations");
   const has = (id) => id === "a" || id === "b";
-  eq(by.conns.clean([{ id: "1", from: "a", to: "a" }, { id: "2", from: "a", to: "z" }, { id: "3", from: "a", to: "b" }], { hasScreen: has }), [{ id: "3", from: "a", to: "b" }]);
-  eq(by.notes.clean([{ id: "n", text: "x" }, { id: "m" }, { text: "y" }], {}), [{ id: "n", text: "x" }]);
+  const valid = (k, items, ctx) => items.filter((x) => k.valid(x, ctx));
+  eq(valid(by.conns, [{ id: "1", from: "a", to: "a" }, { id: "2", from: "a", to: "z" }, { id: "3", from: "a", to: "b" }], { hasScreen: has }), [{ id: "3", from: "a", to: "b" }]);
+  eq(valid(by.notes, [{ id: "n", text: "x" }, { id: "m" }, { text: "y" }], {}), [{ id: "n", text: "x" }]);
+  /* what Tidy lets go of: a note back to the scan's place on one device, a finding to the scan's on every device */
+  const note = { id: "n", frame: "a", text: "hi", pos: { mobile: [9, 9], tablet: [8, 8] } };
+  by.notes.letGo(note, { id: "n", frame: "a", pos: { mobile: [1, 1] } }, "mobile");
+  eq(note.pos, { mobile: [1, 1], tablet: [8, 8] });
+  const finding = { id: "f", pos: { mobile: [9, 9] } };
+  by.scans.letGo(finding, { id: "f" }, "mobile");
+  assert.ok(!("pos" in finding));
   /* one caption per screen the scan has, whatever was saved */
   eq(by.caps.clean([{ id: "a", title: "mine" }, { id: "gone" }], { hasScreen: has, scanned: by.caps.scanned() }).map((c) => c.id), ["a", "b"]);
   scan.links = [];

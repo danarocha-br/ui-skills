@@ -49,12 +49,12 @@ const FIRST = {
 test("what is saved is the edits, not copies of the scan", () => {
   const storage = memory();
   const layout = over(FIRST, storage);
-  layout.notes[0].text = "my words";
-  layout.notes.push({ id: "n1", frame: null, who: "You", text: "mine", x: 1, y: 2 });
-  layout.conns[0].label = "Go";
-  layout.conns.push({ id: layout.nextId("c"), from: "s1", to: "s4", label: "Jump" });
-  layout.scans = layout.scans.filter((f) => f.id !== "s2:reuse");
-  layout.scans[0].pos = { mobile: [0, 600] };
+  layout.edit("notes", "s1:Dana", { text: "my words" });
+  layout.add("notes", { id: "n1", frame: null, who: "You", text: "mine", x: 1, y: 2 });
+  layout.edit("conns", "c1", { label: "Go" });
+  layout.add("conns", { id: layout.nextId("c"), from: "s1", to: "s4", label: "Jump" });
+  layout.remove("scans", "s2:reuse");
+  layout.edit("scans", "s3:states", { pos: { mobile: [0, 600] } });
   layout.save();
   const onDisk = JSON.parse(storage.data[KEY]);
   assert.equal(onDisk.v, 3);
@@ -68,11 +68,11 @@ test("what is saved is the edits, not copies of the scan", () => {
 test("a new scan reaches someone with saved edits: theirs win where they touched it, the scan wins everywhere else", () => {
   const storage = memory();
   const before = over(FIRST, storage);
-  before.notes[0].text = "my words"; // edited text
-  before.notes[1].pos.mobile = [30, 30]; // moved, text untouched
-  before.notes.push({ id: "n1", frame: "s4", who: "You", text: "mine" });
-  before.conns = before.conns.filter((c) => c.id !== "c2"); // deleted a connector
-  before.scans = before.scans.filter((f) => f.id !== "s2:reuse"); // dismissed a finding
+  before.edit("notes", "s1:Dana", { text: "my words" }); // edited text
+  before.edit("notes", "s2:Sam", { pos: { mobile: [30, 30] } }); // moved, text untouched
+  before.add("notes", { id: "n1", frame: "s4", who: "You", text: "mine" });
+  before.remove("conns", "c2"); // deleted a connector
+  before.remove("scans", "s2:reuse"); // dismissed a finding
   before.save();
 
   const NEXT = {
@@ -104,7 +104,7 @@ test("a new scan reaches someone with saved edits: theirs win where they touched
 test("a connector of the user's own that a new scan's link would share an id with gets a new id", () => {
   const storage = memory();
   const before = over(FIRST, storage);
-  before.conns.push({ id: before.nextId("c"), from: "s1", to: "s4", label: "Mine" }); // c3
+  before.add("conns", { id: before.nextId("c"), from: "s1", to: "s4", label: "Mine" }); // c3
   before.save();
   const after = over({ ...FIRST, links: [...FIRST.links, { id: "c3", from: "s2", to: "s4", label: "Scanned" }] }, storage);
   eq(after.conns.map((c) => [c.id, c.label]), [["c1", "Continue"], ["c2", "Next"], ["c3", "Scanned"], ["c4", "Mine"]]);
@@ -116,18 +116,18 @@ const onDisk = (layout, storage) => (layout.save(), JSON.parse(storage.data[KEY]
 test("a note the user put back where the scan had it leaves no edit behind (what tidy relies on)", () => {
   const storage = memory();
   const layout = over(FIRST, storage);
-  layout.notes[0].pos.mobile = [50, 50];
+  layout.edit("notes", "s1:Dana", { pos: { mobile: [50, 50], tablet: [2, 2] } });
   eq(onDisk(layout, storage).notes.edits, { "s1:Dana": { pos: { mobile: [50, 50] } } });
-  layout.notes[0].pos.mobile = [1, 1];
+  layout.edit("notes", "s1:Dana", { pos: { mobile: [1, 1], tablet: [2, 2] } });
   eq(onDisk(layout, storage).notes.edits, {});
 });
 
 test("reset drops every edit and everything the user made", () => {
   const storage = memory();
   const layout = over(FIRST, storage);
-  layout.notes[0].text = "mine";
-  layout.notes.push({ id: "n1", text: "x" });
-  layout.scans = [];
+  layout.edit("notes", "s1:Dana", { text: "mine" });
+  layout.add("notes", { id: "n1", text: "x" });
+  layout.scans.forEach((f) => layout.remove("scans", f.id));
   layout.reset();
   const saved = JSON.parse(storage.data[KEY]);
   eq(saved.notes, { edits: {}, mine: [] });
@@ -139,7 +139,7 @@ test("reset drops every edit and everything the user made", () => {
 test("undo across an edit to a scanned note puts the scanned text back", () => {
   const layout = over(FIRST, memory());
   layout.mark();
-  layout.notes[0].text = "mine";
+  layout.edit("notes", "s1:Dana", { text: "mine" });
   assert.equal(layout.undo(), true);
   assert.equal(layout.notes[0].text, "first words");
 });
@@ -183,7 +183,7 @@ test("a scan of another product reads, lays out, saves and reloads", () => {
   eq(layout.conns.map((c) => c.id), ["home>detail"]);
   eq(layout.notes.map((n) => n.id), ["home:Ana"]);
   assert.equal(layout.nextId("c"), "c1", "scanned links named by their screens leave the user's numbering alone");
-  layout.notes[0].text = "edited";
+  layout.edit("notes", "home:Ana", { text: "edited" });
   layout.save();
   assert.equal(over(scan, storage).notes[0].text, "edited");
 });

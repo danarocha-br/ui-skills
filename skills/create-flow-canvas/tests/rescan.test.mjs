@@ -65,12 +65,12 @@ const cap = (layout, id) => layout.caps.find((c) => c.id === id);
 const userSession = () => {
   const storage = memory();
   const layout = layoutFor(v1(), storage);
-  layout.groupOf("settings").title = "My settings";
+  layout.setGroupText(layout.groupOf("settings").id, { title: "My settings" });
   layout.moveInto(["help"], "g2", 0); /* help goes to Settings, ahead of its frame */
   const mine = layout.groupFrames(["detail", "about"], { device: "mobile", at: { x: 50, y: 60 } });
-  mine.title = "Mine: details";
-  layout.pos.mobile.g2 = { x: 7, y: 8 };
-  cap(layout, "detail").title = "Mine, the detail";
+  layout.setGroupText(mine.id, { title: "Mine: details" });
+  layout.place("mobile", "g2", { x: 7, y: 8 });
+  layout.edit("caps", "detail", { title: "Mine, the detail" });
   layout.save();
   return { storage, mineId: mine.id };
 };
@@ -139,7 +139,7 @@ test("a user's group whose id a rescan now uses gets a fresh id, with its frames
   const storage = memory();
   const a = layoutFor(v1(), storage);
   const g = a.groupFrames(["settings"], { device: "tablet", at: { x: 5, y: 6 } });
-  g.title = "Mine: settings";
+  a.setGroupText(g.id, { title: "Mine: settings" });
   a.save();
   assert.equal(g.id, "g3");
   const s2 = v1();
@@ -159,8 +159,10 @@ test("positions of things the scan no longer has are dropped when the layout is 
   const storage = memory();
   const a = layoutFor(v1(), storage);
   a.takeOut(["about"]);
-  a.pos.mobile.about = { x: 1, y: 1 };
-  a.pos.mobile.nothing = { x: 2, y: 2 };
+  a.place("mobile", "about", { x: 1, y: 1 });
+  const raw = JSON.parse(a.snapshot());
+  raw.pos.mobile.nothing = { x: 2, y: 2 }; /* a place for something that was never there: a saved file can hold one */
+  storage.data[KEY] = JSON.stringify({ ...JSON.parse((a.save(), storage.data[KEY])), pos: raw.pos });
   a.save();
   const s2 = v1();
   s2.screens = s2.screens.filter((x) => x.id !== "about");
@@ -175,7 +177,7 @@ test("positions of things the scan no longer has are dropped when the layout is 
 test("captions are saved with the layout, as edits, under the one key", () => {
   const storage = memory();
   const a = layoutFor(v1(), storage);
-  cap(a, "home").body = "My words";
+  a.edit("caps", "home", { body: "My words" });
   a.save();
   assert.deepEqual(plain(Object.keys(storage.data)), [KEY]);
   const saved = JSON.parse(storage.data[KEY]);
@@ -187,9 +189,8 @@ test("a caption edit is an undo step like a group's text", () => {
   const storage = memory();
   const layout = layoutFor(v1(), storage);
   const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
-  const before = layout.snapshot();
-  cap(layout, "home").title = "Changed";
-  commit.since(before);
+  commit.typing.change(() => layout.edit("caps", "home", { title: "Changed" }));
+  commit.typing.end();
   assert.equal(cap(layout, "home").title, "Changed");
   commit.undo(() => {});
   assert.equal(cap(layout, "home").title, tiny.screens[0].caption.title);
@@ -198,7 +199,7 @@ test("a caption edit is an undo step like a group's text", () => {
 test("a caption the scan changed reaches the user unless they edited that field", () => {
   const storage = memory();
   const a = layoutFor(v1(), storage);
-  cap(a, "home").body = "Mine";
+  a.edit("caps", "home", { body: "Mine" });
   a.save();
   const s2 = v1();
   s2.screens[0].caption = { title: "New title", body: "Scanner's body", on: true };
@@ -210,14 +211,14 @@ test("a caption the scan changed reaches the user unless they edited that field"
 test("resetting the layout leaves captions alone; resetting the text puts captions and group text back to the scan", () => {
   const storage = memory();
   const layout = layoutFor(v1(), storage);
-  cap(layout, "home").title = "Mine";
-  layout.groups[0].title = "Mine too";
+  layout.edit("caps", "home", { title: "Mine" });
+  layout.setGroupText("g1", { title: "Mine too" });
   layout.moveInto(["settings"], "g1", 0);
   layout.reset();
   assert.equal(cap(layout, "home").title, "Mine", "Reset layout is about groups, places and connectors");
   assert.equal(layout.groups[0].title, "Tally: count fast");
   eq(members(layout).g1, ["home", "detail", "help"]);
-  layout.groups[0].title = "Again";
+  layout.setGroupText("g1", { title: "Again" });
   layout.resetText();
   assert.equal(cap(layout, "home").title, tiny.screens[0].caption.title);
   assert.equal(layout.groups[0].title, "Tally: count fast");
