@@ -67,6 +67,18 @@ _Avoid_: Fallback, default position
 A frame travelling from where it was to its new place after the layout changed: each frame sets off in turn, grows or shrinks as it goes, and comes to rest. Everything that depends on where a frame is (connectors, notes, dropping and aiming at a frame) follows the frame as it slides, and the canvas is **settled** once the last frame has stopped. Someone who asks for reduced motion gets no slide: frames are simply at their places.
 _Avoid_: Transition, animation (those name the browser mechanism, not the thing the user sees)
 
+**Selection**:
+The frames the user has selected (a click, shift-click, a marquee, select all), or one connector, never both. One of the selected frames is the **primary** (the last one chosen): the frame the toolbar, the arrow keys, the counter ("03/09") and Inspect are about. Inspect follows the primary however the selection changes. Deselecting frames leaves a selected connector alone; selecting frames lets go of it. In code, `FlowSelection`; the page only paints it.
+_Avoid_: Focus (that is where the camera looks), active
+
+**Press**:
+What the pointer does from button down to button up on the canvas. What it landed on is a **hit** (an edge dot, a group's grip, a deck, a frame, an annotation, something that is not the canvas, or the empty canvas), and what follows is decided in one place by one **mode**: dragging a frame or group (a **gesture**), a marquee, a pan, a connector being drawn, or an annotation being dragged. The click that follows a press that travelled is not a click. In code, `FlowPointer`.
+_Avoid_: Drag state, tool (the hand tool and Space only decide what a press on empty canvas does)
+
+**Arrangement edit**:
+An edit that moves frames about as a whole rather than one at a time: **Tidy** (groups and loose frames back in order on this device, nothing about the flows changed), taking frames out of their groups, and dissolving a group (its frames stay where it was). Each is a write to the layout through its mutators. In code, `FlowArrange`.
+_Avoid_: Layout command, reset (that puts everything back as the scan has it)
+
 **Gesture**:
 A drag of frames, or of a whole group by its grip. While the pointer is down it only proposes; letting go commits, and cancelling (Escape, or the pointer being taken away) ends it with nothing changed. In code, `FlowGesture`.
 _Avoid_: Drag state
@@ -112,7 +124,7 @@ A title and a body typed in place under a frame. It is an annotation and part of
 _Avoid_: Heading
 
 **Panel**:
-The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none). The panel's **inset** is what it takes from the window; the camera leaves it free, so when the camera flies to a screen, a group or everything it fits them in what is left. A resize, while the panel is open and a screen is selected, centres that screen again in the room that remains; it does not re-fit the other frames. In code, `FlowPanel`; the page only paints what it says.
+The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none): the selection's primary frame, which it follows. The panel's **inset** is what it takes from the window; the camera leaves it free, so when the camera flies to a screen, a group or everything it fits them in what is left. A resize, while the panel is open and a screen is selected, centres that screen again in the room that remains; it does not re-fit the other frames. In code, `FlowPanel`; the page only paints what it says.
 _Avoid_: Sidebar, drawer, inspector (that is Inspect's label to a screen reader)
 
 **Sweep**:
