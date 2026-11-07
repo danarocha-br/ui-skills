@@ -4427,9 +4427,7 @@
 
     <div class="ui menu" id="mSpace">
       <button class="mi" data-a="rescan">
-        <svg><use href="#i-rescan" /></svg>Rescan codebase<span
-          >loam-app / main</span
-        >
+        <svg><use href="#i-rescan" /></svg>Rescan codebase<span id="rescanFacts"></span>
       </button>
       <hr />
       <button class="mi on" data-hide="edges">
@@ -5130,14 +5128,14 @@
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
-        const DEVICES = ["mobile", "tablet", "desktop"];
+        const RENDER_KEYS = ["mobile", "tablet", "desktop"];
         const clone = (o) => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const str = (v, d = "") => (typeof v === "string" ? v : d);
         const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
         const perDevice = (h) => {
           const out = {};
-          DEVICES.forEach((d) => (out[d] = str(isObj(h) ? h[d] : "")));
+          RENDER_KEYS.forEach((d) => (out[d] = str(isObj(h) ? h[d] : "")));
           return out;
         };
 
@@ -5177,10 +5175,21 @@
           });
           const known = (id) => ids.has(id);
 
+          /* two items of one kind may not share an id: edits are kept by id, so the second would be lost */
+          const unique = (kind, seen, id) => {
+            if (seen.has(id)) {
+              problems.push(`two ${kind} have the same id "${id}": the second is dropped`);
+              return false;
+            }
+            seen.add(id);
+            return true;
+          };
           const placed = new Set(),
+            groupIds = new Set(),
             groups = [];
           list("groups").forEach((g, i) => {
             if (!isObj(g) || typeof g.id !== "string") return problems.push(`group ${i} has no id: skipped`);
+            if (!unique("groups", groupIds, g.id)) return;
             const members = [];
             (Array.isArray(g.screens) ? g.screens : []).forEach((id) => {
               if (!known(id)) problems.push(`group "${g.id}" names screen "${id}", which the scan does not have`);
@@ -5197,21 +5206,26 @@
             groups.push(out);
           });
 
-          const links = [];
+          const links = [],
+            linkIds = new Set();
           list("links").forEach((l, i) => {
             if (!isObj(l) || !known(l.from) || !known(l.to)) return problems.push(`link ${i} joins a screen the scan does not have: dropped`);
             if (l.from === l.to) return problems.push(`link ${i} leads from "${l.from}" to itself: dropped`);
-            links.push({ id: str(l.id, l.from + ">" + l.to), from: l.from, to: l.to, label: str(l.label) });
+            const id = str(l.id, l.from + ">" + l.to);
+            if (unique("links", linkIds, id)) links.push({ id, from: l.from, to: l.to, label: str(l.label) });
           });
 
-          const findings = [];
+          const findings = [],
+            findingIds = new Set();
           list("findings").forEach((f, i) => {
             if (!isObj(f) || !known(f.frame)) return problems.push(`finding ${i} points at a screen the scan does not have: dropped`);
             const kind = str(f.kind, "note");
-            findings.push(Object.assign(clone(f), { id: str(f.id, f.frame + ":" + kind), kind }));
+            const id = str(f.id, f.frame + ":" + kind);
+            if (unique("findings", findingIds, id)) findings.push(Object.assign(clone(f), { id, kind }));
           });
 
-          const notes = [];
+          const notes = [],
+            noteIds = new Set();
           list("notes").forEach((n, i) => {
             if (!isObj(n)) return problems.push(`note ${i} is not a note: dropped`);
             if (n.frame != null && !known(n.frame)) return problems.push(`note ${i} is on a screen the scan does not have: dropped`);
@@ -5220,7 +5234,7 @@
             out.frame = n.frame || null;
             out.who = str(n.who, "Scanner");
             out.id = str(n.id, (out.frame || "canvas") + ":" + out.who);
-            notes.push(out);
+            if (unique("notes", noteIds, out.id)) notes.push(out);
           });
 
           let start = null;
@@ -5299,7 +5313,7 @@
           return { edits, mine };
         }
 
-        return { read, merge, diff, DEVICES };
+        return { read, merge, diff };
       })();
     </script>
 
@@ -5353,7 +5367,7 @@
                              is its caller)
            layout.undo()           restore the latest mark; false when there is none
       
-         A new persisted kind is added here, in persisted() and fromSaved(), and nowhere else; a kind the scan
+         A new persisted kind is added here, in persisted() and load()/restore() (through overlays()), and nowhere else; a kind the scan
          provides and the user edits goes in OVERLAID as well.
 
          On disk: { v: 2, lanes, pos, conns, scans, notes, cc, gc }. A layout saved before v2 kept connectors
@@ -5410,16 +5424,32 @@
           /* what the scan says for each overlaid kind: what the edits are taken against */
           const scanned = (kind) => freshDefaults()[kind];
           /* a scanned item an older layout cannot have held, so its absence there is not a deletion: before v2
-             every connector had a numbered id no higher than the saved counter */
-          const newToOld = (kind, cc) => (item) => kind === "conns" && !(/^c\d+$/.test(item.id) && Number(item.id.slice(1)) <= cc);
+             every connector had a numbered id no higher than the saved counter. With no counter saved, nothing
+             can be told to be new, and an absent connector counts as deleted. */
+          const couldNotHaveHad = (kind, cc) => (item) =>
+            kind === "conns" && Number.isFinite(cc) && !(/^c\d+$/.test(item.id) && Number(item.id.slice(1)) <= cc);
+          /* an old layout's connector the user drew by hand between the same two screens as a newer scanned link
+             is that link: it takes the link's id and keeps the user's label */
+          function adoptByEnds(saved, fresh) {
+            const out = saved.slice();
+            fresh.forEach((f) => {
+              const i = out.findIndex((c) => c && c.from === f.from && c.to === f.to && c.id !== f.id);
+              if (i >= 0) out[i] = Object.assign({}, out[i], { id: f.id });
+            });
+            return out;
+          }
           /* one kind as it was saved, as the user sees it: edits laid over the scan. A full list (notes and
              connectors) or an { id: edit } map (findings) from before v2 is read as it was, and what the scan
              has that it could not have had is added. Says whether it found the old form. */
           function overlaid(kind, saved, cc) {
             if (isObj(saved) && ("edits" in saved || "mine" in saved)) return { items: FlowScan.merge(scanned(kind), saved), old: false };
             if (Array.isArray(saved)) {
-              const known = scanned(kind).filter((x) => !newToOld(kind, cc)(x));
-              return { items: FlowScan.merge(scanned(kind), FlowScan.diff(known, saved.filter((x) => x && typeof x === "object" && typeof x.id === "string"))), old: true };
+              const fresh = scanned(kind).filter(couldNotHaveHad(kind, cc));
+              const had = saved.filter((x) => x && typeof x === "object" && typeof x.id === "string");
+              const edits = FlowScan.diff(scanned(kind), kind === "conns" ? adoptByEnds(had, fresh) : had);
+              /* what the old layout could not have held was not deleted by the user */
+              fresh.forEach((f) => edits.edits[f.id] && edits.edits[f.id].gone && delete edits.edits[f.id]);
+              return { items: FlowScan.merge(scanned(kind), edits), old: true };
             }
             if (kind === "scans" && isObj(saved)) return { items: FlowScan.merge(scanned(kind), { edits: saved }), old: true };
             return null;
@@ -5478,7 +5508,7 @@
           function overlays(st, d) {
             const out = { old: false };
             OVERLAID.forEach((k) => {
-              const o = overlaid(k, st[k], Number(st.cc) || 0);
+              const o = overlaid(k, st[k], st.cc == null ? NaN : Number(st.cc));
               out[k] = o ? o.items.filter((x) => x && typeof x === "object") : d[k];
               if (o && o.old) out.old = true;
             });
@@ -5558,6 +5588,7 @@
             const kinds = overlays(st, layout);
             delete kinds.old;
             adopt(Object.assign({ lanes: st.lanes.map(groupRecord), pos: st.pos }, kinds));
+            freshIds(layout.conns);
             /* ids that came back with the snapshot must not be handed out again */
             counters = {
               c: Math.max(counters.c, highestId(layout.conns, "c")),
@@ -5689,7 +5720,7 @@
     <script id="annotations-module">
       /* ======================================================================
          ANNOTATIONS MODULE
-         What notes, scanner cards and connectors share: one drag (threshold, zoom scale, cancel), one
+         What notes, findings and connectors share: one drag (threshold, zoom scale, cancel), one
          keyboard move (arrow keys, bursts count as one undo step), one delete, and one "is this an
          annotation" check. Each kind brings an adapter for what is its own: finding itself in the DOM,
          showing and saving a position, cleaning up. The module never touches the DOM and saves only
@@ -5870,9 +5901,10 @@
       const switchable = (id) => shownStates(id).length > 1;
       /* the state each switchable frame shows: view state, kept across device switches, not saved */
       const stateOf = {};
+      const stateIndex = (id) => stateOf[id] || 0;
       const screenHTML = (id) => {
-        const st = SCREENS[id].states[stateOf[id] || 0];
-        return stateOf[id] && st && st.html ? st.html[DEV.id] : SCREENS[id].html[DEV.id];
+        const st = SCREENS[id].states[stateIndex(id)];
+        return stateIndex(id) && st && st.html ? st.html[DEV.id] : SCREENS[id].html[DEV.id];
       };
 
       /* The finding kinds. The scan says what was found (a kind and its facts); the kind says it in words,
@@ -6086,6 +6118,7 @@
           } catch (e) {}
         }, 250);
       }
+      if (localStorage.getItem(ANN_KEY)) saveAnn(); /* a caption saved whole by an older build goes back as edits */
       const CE = (() => {
         const d = document.createElement("div");
         try {
@@ -6282,7 +6315,7 @@
       }
       /* A note's DOM is handled by hand around its commit, not by the "notes" redraw (which rebuilds every
          note): a new note takes focus, and a dragged one is already where it was dropped. Same for the
-         scanner cards below. */
+         finding cards below. */
       function createNote({ text = "New note", frame = null, local = null, world = null }) {
         const n = {
           id: "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
@@ -6729,7 +6762,7 @@
         updateAllBtn();
         if (typeof updateSelBox === "function") updateSelBox();
         if (typeof followConns === "function") followConns();
-        /* now that frames are attached and sized, the scanner cards' leaders can be drawn from real measurements */
+        /* now that frames are attached and sized, the finding cards' leaders can be drawn from real measurements */
         document.querySelectorAll(".scan").forEach((d) => d._scan.redrawLeader());
       }
 
@@ -6878,14 +6911,14 @@
         col.className = "col" + (many ? " hasstack" : "");
         col.dataset.id = id;
         col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}</div>
-    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}<div class="phone ${DEV.cls}" id="p-${id}" data-state="${stateOf[id] || 0}">${screenHTML(id)}</div><i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
+    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}<div class="phone ${DEV.cls}" id="p-${id}" data-state="${stateIndex(id)}">${screenHTML(id)}</div><i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
         layout.scans.filter((f) => f.frame === id).forEach((f) => buildScan(col, f));
         if (many)
           col.querySelector(".states").addEventListener("click", (e) => {
             e.stopPropagation();
             select(id);
             const shown = shownStates(id);
-            setState(id, shown[(shown.indexOf(stateOf[id] || 0) + 1) % shown.length]);
+            setState(id, shown[(shown.indexOf(stateIndex(id)) + 1) % shown.length]);
           });
         framesEl.appendChild(col);
         return col;
@@ -7399,12 +7432,12 @@
           .map((c) => {
             const n = compEls(id, c).length;
             const lbl = `${c}, ${n ? n + " on this screen" : "not on screen in this state"}`;
-            return `<button class="cc${usageComp === c ? " on" : ""}${n ? "" : " off"}" data-comp="${c}" aria-pressed="${usageComp === c}" aria-label="${lbl}" title="${n ? "" : "Not on screen in this state"}">${c}<small aria-hidden="true">${n ? "×" + n : "—"}</small></button>`;
+            return `<button class="cc${usageComp === c ? " on" : ""}${n ? "" : " off"}" data-comp="${esc(c)}" aria-pressed="${usageComp === c}" aria-label="${esc(lbl)}" title="${n ? "" : "Not on screen in this state"}">${esc(c)}<small aria-hidden="true">${n ? "×" + n : "—"}</small></button>`;
           })
           .join("");
         const only = (st) => !st.reachable;
         const shown = shownStates(id),
-          at = stateOf[id] || 0;
+          at = stateIndex(id);
         const states = many
           ? `<div class="chipsrow">${s.states
               .map(
@@ -7419,8 +7452,8 @@
               )
               .join("")}</ul>`;
         pbody.innerHTML = `<div class="ip${still ? " still" : ""}">
-    <header class="ihead" style="--n:0"><code class="r">${s.route}</code><p class="icap">${L ? esc(laneName(L)) : "Free frame"} · ${DEV.vp} · ${DEV.label}</p></header>
-    <section style="--n:1"><h3>Source</h3><div class="srcrow"><div class="crumbs">${file.map((p, i) => `<span class="${i === file.length - 1 ? "last" : ""}">${p}</span>`).join('<i aria-hidden="true">›</i>')}</div><button class="copy" aria-label="Copy path" title="Copy path"><svg class="ic-copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ic-done" aria-hidden="true"><use href="#i-check"/></svg></button></div><button class="open"><svg aria-hidden="true"><use href="#i-code"/></svg>Open in code</button></section>
+    <header class="ihead" style="--n:0"><code class="r">${esc(s.route)}</code><p class="icap">${L ? esc(laneName(L)) : "Free frame"} · ${DEV.vp} · ${DEV.label}</p></header>
+    <section style="--n:1"><h3>Source</h3><div class="srcrow"><div class="crumbs">${file.map((p, i) => `<span class="${i === file.length - 1 ? "last" : ""}">${esc(p)}</span>`).join('<i aria-hidden="true">›</i>')}</div><button class="copy" aria-label="Copy path" title="Copy path"><svg class="ic-copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ic-done" aria-hidden="true"><use href="#i-check"/></svg></button></div><button class="open"><svg aria-hidden="true"><use href="#i-code"/></svg>Open in code</button></section>
     <section style="--n:2"><h3>Components<em>${s.components.length}</em></h3><div class="chipsrow">${chips}</div><p class="ihint" id="ipHint" aria-live="polite"></p><div id="ipUses"></div></section>
     <section style="--n:3"><h3>States<em>${s.states.length}</em></h3><p class="sfact">${s.states.length} found${nOnly ? `. <b>${nOnly} only reachable in code.</b>` : ", all reachable from the UI."}${many ? " Tap one to see it on the screen." : ""}</p>${states}</section>
     <section style="--n:4"><h3>Notes</h3><p class="inote">${esc(s.note)}</p></section></div>`;
@@ -7567,7 +7600,7 @@
           clone
             .querySelectorAll(".ripple,.spot,.spotlbl")
             .forEach((n) => n.remove());
-          t.innerHTML = `<div class="th"></div><b>${s.name}</b><small>${s.route}</small>`;
+          t.innerHTML = `<div class="th"></div><b>${esc(s.name)}</b><small>${esc(s.route)}</small>`;
           t.querySelector(".th").appendChild(clone);
           t.onclick = () => select(id, true);
           res.appendChild(t);
@@ -8279,18 +8312,18 @@
               if (L.screens.length) bottom = Math.max(bottom, L.top + laneH(L));
             });
             loose.forEach((id, k) => (P[id] = freeSlot(k, bottom)));
-            /* scanner cards back beside their frames; scanned notes back where the scan put them */
+            /* findings back beside their frames; scanned notes back where the scan put them */
             /* forgetting the user's position for this device puts a scanned card back where the scan put it */
-            const forget = (item, seed) => {
+            const forget = (item, scanned) => {
               if (!item.pos) return;
-              if (seed && seed.pos && seed.pos[DEV.id]) item.pos[DEV.id] = [...seed.pos[DEV.id]];
+              if (scanned && scanned.pos && scanned.pos[DEV.id]) item.pos[DEV.id] = [...scanned.pos[DEV.id]];
               else delete item.pos[DEV.id];
-              if (!Object.keys(item.pos).length && !(seed && seed.pos)) delete item.pos;
+              if (!Object.keys(item.pos).length && !(scanned && scanned.pos)) delete item.pos;
             };
             layout.scans.forEach((f) => forget(f, FINDINGS.find((x) => x.id === f.id)));
             layout.notes.forEach((n) => {
-              const seed = NOTES.find((x) => x.id === n.id);
-              if (seed && n.frame === seed.frame) forget(n, seed);
+              const scanned = NOTES.find((x) => x.id === n.id);
+              if (scanned && n.frame === scanned.frame) forget(n, scanned);
             });
             return layout.snapshot() !== was; /* the same test commit uses */
           },
@@ -8924,11 +8957,12 @@
               console.error("flow-scan-behaviour:", err);
             }
           }
-          /* a button that leads somewhere follows the connector that says so; no connector, no jump */
+          /* a button that leads somewhere follows the connector that says so; no connector, no jump (a button
+             that leads to its own screen has nowhere to go and needs none) */
           if (goEl && goEl.dataset.go && SCREENS[goEl.dataset.go]) {
             const from = col.dataset.id,
               to = goEl.dataset.go;
-            if (layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), 180);
+            if (from === to || layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), 180);
             else toast(`No connector from ${shortName(from)} to ${shortName(to)}. Draw one to follow this button.`);
           }
         }
@@ -8951,7 +8985,7 @@
       });
 
       /* states: a switchable frame shows one state at a time, from the state's own render */
-      const stateLabel = (id) => `${shownStates(id).length} states · ${esc(SCREENS[id].states[stateOf[id] || 0].name)}`;
+      const stateLabel = (id) => `${shownStates(id).length} states · ${esc(SCREENS[id].states[stateIndex(id)].name)}`;
       function setState(id, i) {
         if (!shownStates(id).includes(i)) return;
         stateOf[id] = i;
@@ -9042,7 +9076,7 @@
           if (a === "resetlayout") resetLayout();
           if (a === "resetann") resetAnn();
           if (a === "rescan")
-            toast("Scanned 14 routes · 9 screens · no changes since 2m ago");
+            toast(`${SCAN.product.name}: ${ORDER.length} screens in this scan. Regenerate the canvas to rescan.`);
           if (a === "route") toast("Pick a route to render it on the canvas");
         }),
       );
@@ -9316,6 +9350,7 @@
       function boot() {
         labelUi();
         $("#productName").textContent = SCAN.product.name;
+        $("#rescanFacts").textContent = SCAN.product.name;
         $("#productFacts").textContent =
           ORDER.length + " screens" + (SCAN.product.scanned ? " · scanned " + SCAN.product.scanned : "");
         document.body.classList.add("boot");

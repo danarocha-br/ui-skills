@@ -109,26 +109,29 @@ test("a connector of the user's own that a new scan's link would share an id wit
   assert.equal(after.nextId("c"), "c5");
 });
 
-test("tidying a scanned note is forgetting the user's position for it", () => {
+const onDisk = (layout, storage) => (layout.save(), JSON.parse(storage.data[KEY]));
+
+test("a note the user put back where the scan had it leaves no edit behind (what tidy relies on)", () => {
   const storage = memory();
   const layout = over(FIRST, storage);
   layout.notes[0].pos.mobile = [50, 50];
-  layout.save();
-  const moved = layout.snapshot();
-  layout.notes[0].pos.mobile = [1, 1]; // back where the scan put it
-  assert.notEqual(layout.snapshot(), moved);
-  eq(JSON.parse(layout.snapshot()).notes.edits, {});
+  eq(onDisk(layout, storage).notes.edits, { "s1:Dana": { pos: { mobile: [50, 50] } } });
+  layout.notes[0].pos.mobile = [1, 1];
+  eq(onDisk(layout, storage).notes.edits, {});
 });
 
 test("reset drops every edit and everything the user made", () => {
-  const layout = over(FIRST, memory());
+  const storage = memory();
+  const layout = over(FIRST, storage);
   layout.notes[0].text = "mine";
   layout.notes.push({ id: "n1", text: "x" });
   layout.scans = [];
   layout.reset();
-  eq(JSON.parse(layout.snapshot()).notes, { edits: {}, mine: [] });
-  eq(JSON.parse(layout.snapshot()).scans, { edits: {}, mine: [] });
+  const saved = JSON.parse(storage.data[KEY]);
+  eq(saved.notes, { edits: {}, mine: [] });
+  eq(saved.scans, { edits: {}, mine: [] });
   assert.equal(layout.notes[0].text, "first words");
+  assert.equal(layout.scans.length, 2);
 });
 
 test("undo across an edit to a scanned note puts the scanned text back", () => {
@@ -198,6 +201,20 @@ test("an old layout gets the links a newer scan added, and keeps the ones the us
   eq(layout.conns.map((c) => c.id), ["c1", "c3", "c4", "c5", "c6", "s4>s5", "c12", "c7"]);
   eq(JSON.parse(storage.data[KEY]).conns.edits, { c2: { gone: true } });
   assert.equal(over(rescanned, storage).snapshot(), layout.snapshot());
+});
+
+test("a connector the user drew by hand where a newer scan now has a link is that link, wearing the user's label", () => {
+  const raw = JSON.stringify({ lanes: [{ id: "g1", screens: ["s1", "s4"], open: true }], conns: [{ id: "c7", from: "s4", to: "s5", label: "My name for it" }], cc: 7 });
+  const rescanned = { ...LOAM, links: [...LOAM.links, { id: "s4>s5", from: "s4", to: "s5", label: "Add a plant" }] };
+  const storage = memory({ [KEY]: raw });
+  const layout = over(rescanned, storage);
+  eq(layout.conns.filter((c) => c.from === "s4" && c.to === "s5").map((c) => [c.id, c.label]), [["s4>s5", "My name for it"]]);
+  eq(JSON.parse(storage.data[KEY]).conns.mine, []);
+});
+
+test("an old layout that lost its counter does not bring back connectors the user deleted", () => {
+  const raw = JSON.stringify({ lanes: [{ id: "g1", screens: ["s1", "s2"], open: true }], conns: [{ id: "c1", from: "s1", to: "s2", label: "Continue" }] });
+  eq(over(LOAM, memory({ [KEY]: raw })).conns.map((c) => c.id), ["c1"]);
 });
 
 test("an old layout's findings, saved as positions and dismissals by id, keep their positions", () => {

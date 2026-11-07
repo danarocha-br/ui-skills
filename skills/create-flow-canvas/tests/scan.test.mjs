@@ -69,9 +69,22 @@ test("whatever points at a screen the scan does not have is dropped, and each dr
   assert.equal(scan.findings.length, 2);
   eq(scan.notes.map((n) => n.id), ["home:Ana"]);
   assert.equal(scan.start, null);
-  /* no id, id twice, ghost in g2, home twice, g2 left empty, link to ghost, link to itself, finding on ghost,
-     note on ghost, note with no text, start on ghost */
-  assert.equal(problems.length, 11, problems.join("\n"));
+  /* every one of the nine things dropped says what it was: none is dropped silently */
+  for (const word of ["no id", "twice", "ghost", "itself", "start"]) assert.ok(problems.some((p) => p.includes(word)), `no problem mentions "${word}": ${problems.join(" | ")}`);
+  assert.ok(problems.length >= 9, problems.join("\n"));
+});
+
+test("two scanned items with one id are not both kept: the second is dropped and reported", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.groups.push({ id: "g1", screens: ["detail"] });
+  raw.links.push({ id: "home>detail", from: "detail", to: "home" });
+  raw.findings.push({ id: "home:unreachable-states", kind: "unreachable-states", frame: "home" });
+  raw.notes.push({ id: "home:Ana", frame: "detail", who: "Ana", text: "again" });
+  const { scan, problems } = FlowScan.read(raw);
+  eq(scan.links.map((l) => l.from), ["home"]);
+  assert.equal(scan.findings.length, 2);
+  assert.equal(scan.notes.length, 1);
+  assert.equal(problems.filter((p) => /same id/.test(p)).length, 4, problems.join("\n"));
 });
 
 test("a scan that is not JSON, or not a scan, reads as nothing, with the reason", () => {

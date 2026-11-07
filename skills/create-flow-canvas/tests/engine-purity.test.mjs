@@ -53,3 +53,12 @@ test("the engine reaches for none of the class names only the product's styles d
   assert.ok(used.has("phone") && used.has("scan"), "the check sees the engine's own classes");
   assert.deepEqual(productOnly.filter((c) => used.has(c)), []);
 });
+
+test("the page around the engine does not name the product either, nor report counts from the sample", () => {
+  const page = html
+    .replace(/<script\b[\s\S]*?<\/script>/g, "")
+    .replace(/<style\b[\s\S]*?<\/style>/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  assert.deepEqual(page.match(new RegExp(scan.product.name, "gi")) || [], []);
+  assert.ok(!/Scanned \d+ routes/.test(engine), "the rescan toast reports a count that only the sample had");
+});
