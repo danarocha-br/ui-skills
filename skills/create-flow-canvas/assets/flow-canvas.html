@@ -5106,28 +5106,28 @@
                metrics   colW phH cap body collH deckS deckW peekX peekY closedW edge   (what FlowGeometry arranges with)
                cssVars   { "--cw": "270px", … }                                          (what the stylesheet reads) }
            FlowDevice.idForKey(key)         -> the id a keyboard key reaches, or null
-           FlowDevice.restingSpot(id, top, drop) -> [x, y] where a note goes when it has no place anywhere:
+           FlowDevice.restingSpot(id, drop) -> [x, y] where a note goes when it has no place anywhere:
                                                near the frame's right edge, `drop` (120) below the screen's top
-           FlowDevice.carry(at, from, to, { top }) -> [x, y]  a spot in a frame's own coordinates, moved to
+           FlowDevice.carry(at, from, to) -> [x, y]  a spot in a frame's own coordinates, moved to
                                                the same relative place on another device's screen
-           FlowDevice.placeOn(saved, id, { top }) -> [x, y]  where an annotation sits on this device:
+           FlowDevice.placeOn(saved, id) -> [x, y]  where an annotation sits on this device:
                                                its saved place here, else carried from the device it was first placed on,
                                                else the resting spot. Never written back.
-           `top` is where the screen starts inside the frame's column (the canvas's phTop).
+           `metrics.phTop` is where the screen starts inside the frame's column; `at` below is a point in that column.
          ====================================================================== */
       var FlowDevice = (function () {
-        /* the facts, once. cw/ch: the screen (px); cr: its corner radius; ds: the deck's scale; tw: the
+        /* the facts, once. cw/ch: the screen (px); top: where it starts in the frame's column; cr: its corner radius; ds: the deck's scale; tw: the
            thumbnail's width; cap*: the caption's insets; edge: where connectors leave a frame; body: the
            frame's height below its head; findY: where a finding sits below its frame's caption */
         const TABLE = [
           { id: "mobile", label: "Mobile", vp: "390 × 844", key: "m", icon: "i-phone", cls: "dm",
-            cw: 270, ch: 585, cr: 38, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, edge: 509, body: 744,
+            top: 28, cw: 270, ch: 585, cr: 38, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, edge: 509, body: 744,
             cap: 170, capT: 19, capB: 12.5, capL: 4, collH: 290, closedW: 440, tw: 150, findY: 662 },
           { id: "tablet", label: "Tablet", vp: "768 × 1024", key: "t", icon: "i-tablet", cls: "dw dt",
-            cw: 400, ch: 560, cr: 26, ds: 0.4, deckW: 160, peekX: 12, peekY: 9, edge: 480, body: 724,
+            top: 28, cw: 400, ch: 560, cr: 26, ds: 0.4, deckW: 160, peekX: 12, peekY: 9, edge: 480, body: 724,
             cap: 150, capT: 22, capB: 13.5, capL: 3, collH: 300, closedW: 580, tw: 190, findY: 640 },
           { id: "desktop", label: "Desktop", vp: "1200 × 772", key: "d", icon: "i-desktop", cls: "dw dd",
-            cw: 600, ch: 420, cr: 14, ds: 0.38, deckW: 228, peekX: 12, peekY: 9, edge: 205, body: 584,
+            top: 28, cw: 600, ch: 420, cr: 14, ds: 0.38, deckW: 228, peekX: 12, peekY: 9, edge: 205, body: 584,
             cap: 140, capT: 26, capB: 15, capL: 2, collH: 240, closedW: 700, tw: 220, findY: 500 },
         ];
         const px = (n) => n + "px";
@@ -5142,7 +5142,7 @@
             cls: d.cls,
             findY: d.findY,
             metrics: Object.freeze({
-              colW: d.cw, phH: d.ch, cap: d.cap, body: d.body, collH: d.collH, deckS: d.ds,
+              colW: d.cw, phTop: d.top, phH: d.ch, cap: d.cap, body: d.body, collH: d.collH, deckS: d.ds,
               deckW: d.deckW, peekX: d.peekX, peekY: d.peekY, closedW: d.closedW, edge: d.edge,
             }),
             cssVars: Object.freeze({
@@ -5163,17 +5163,17 @@
           return d;
         }
         const idForKey = (key) => (TABLE.find((d) => d.key === key) || { id: null }).id;
-        const restingSpot = (id, top, drop = 120) => [describe(id).metrics.colW - 70, top + drop];
-        function carry(at, from, to, { top }) {
+        const restingSpot = (id, drop = 120) => [describe(id).metrics.colW - 70, describe(id).metrics.phTop + drop];
+        function carry(at, from, to) {
           const a = describe(from).metrics,
             b = describe(to).metrics;
-          return [Math.round((at[0] * b.colW) / a.colW), Math.round(top + ((at[1] - top) * b.phH) / a.phH)];
+          return [Math.round((at[0] * b.colW) / a.colW), Math.round(b.phTop + ((at[1] - a.phTop) * b.phH) / a.phH)];
         }
-        function placeOn(saved, id, { top }) {
+        function placeOn(saved, id) {
           const isPlace = (a) => Array.isArray(a) && a.length === 2 && a.every(Number.isFinite);
           if (saved && isPlace(saved[id])) return saved[id];
           const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && isPlace(saved[k]));
-          return from ? carry(saved[from], from, id, { top }) : restingSpot(id, top);
+          return from ? carry(saved[from], from, id) : restingSpot(id);
         }
         return { ids, describe, idForKey, restingSpot, carry, placeOn };
       })();
@@ -6013,9 +6013,9 @@
 
          Interface
            m  the numbers one device gives the arrangement (FlowDevice.describe(id).metrics):
-              colW phH cap body collH deckS deckW peekX peekY closedW edge
+              colW phTop phH cap body collH deckS deckW peekX peekY closedW edge
            FlowGeometry.laneH(m)         -> an open group's height on that device (the head, the body, the caption)
-           FlowGeometry.WORLD            laneLeft top0 gap head phTop laneGap (world px)
+           FlowGeometry.WORLD            laneLeft top0 gap head laneGap (world px)
            FlowGeometry.MOVES            { open, deck }: { dur ms, curve [x1,y1,x2,y2] } the slide the stylesheet
                                          eases its tilt and scale with, too
            FlowGeometry.arrange(input, m) -> { places, boxes, bottom }    pure; nothing is written back
@@ -6040,7 +6040,7 @@
            geo.step(now) -> [ids that moved]    geo.restsAt()    geo.settled(now)
          ====================================================================== */
       var FlowGeometry = (function () {
-        const WORLD = Object.freeze({ laneLeft: 96, top0: 150, gap: 104, head: 220, phTop: 28, laneGap: 64 });
+        const WORLD = Object.freeze({ laneLeft: 96, top0: 150, gap: 104, head: 220, laneGap: 64 });
         const ROTS = [-2, 1.6, -1.2, 2.2];
         const PER_ROW = 5;
 
@@ -6089,7 +6089,7 @@
         function loosePlace(k, bottom, m) {
           return {
             x: WORLD.laneLeft + (k % PER_ROW) * (m.colW + 70),
-            y: bottom + 140 + Math.floor(k / PER_ROW) * (WORLD.phTop + m.phH + m.cap + 100),
+            y: bottom + 140 + Math.floor(k / PER_ROW) * (m.phTop + m.phH + m.cap + 100),
           };
         }
 
@@ -6129,7 +6129,7 @@
                   }
                 : {
                     x: box.x + m.peekX * i,
-                    y: box.top + 10 + m.peekY * (n - 1 - i) - WORLD.phTop * m.deckS,
+                    y: box.top + 10 + m.peekY * (n - 1 - i) - m.phTop * m.deckS,
                     r: ROTS[i % 4],
                     s: m.deckS,
                     d: (n - 1 - i) * 40,
@@ -6179,11 +6179,11 @@
           /* a frame is drawn from its corner, scaled about it: a deck frame is small, and grows as it fans out */
           const screenRect = (id, now) => {
             const r = rect(id, now);
-            return r && { x: r.x, y: r.y + WORLD.phTop * r.s, w: m.colW * r.s, h: m.phH * r.s };
+            return r && { x: r.x, y: r.y + m.phTop * r.s, w: m.colW * r.s, h: m.phH * r.s };
           };
           const frameBox = (id, now) => {
             const r = rect(id, now);
-            return r && { x: r.x, y: r.y, w: m.colW * r.s, h: (WORLD.phTop + m.phH + m.cap) * r.s };
+            return r && { x: r.x, y: r.y, w: m.colW * r.s, h: (m.phTop + m.phH + m.cap) * r.s };
           };
 
           function retarget(input, now, o = {}) {
@@ -6802,7 +6802,7 @@
       const findingKind = (f) => FINDING_KINDS[f.kind] || PLAIN_FINDING;
 
       /* the canvas's fixed measurements, in world px (from the geometry) */
-      const { laneLeft: LANE_LEFT, gap: GAP, head: HEAD, phTop: PH_TOP } = FlowGeometry.WORLD;
+      const { laneLeft: LANE_LEFT, gap: GAP, head: HEAD } = FlowGeometry.WORLD;
       /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
       const geo = FlowGeometry.create({
         reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -7028,7 +7028,7 @@
         noteSave = setTimeout(layout.save, 400);
       };
       const notePlace = (n) =>
-        n.frame ? FlowDevice.placeOn(n.pos, DEV.id, { top: PH_TOP }) : [n.x, n.y];
+        n.frame ? FlowDevice.placeOn(n.pos, DEV.id) : [n.x, n.y];
       /* which frame is this point on, if any (world coordinates) */
       const homeFor = (wx, wy) => geo.frameAt({ x: wx, y: wy }, performance.now(), { margin: 20 });
       const localFrom = (id, wx, wy) => {
@@ -7290,7 +7290,7 @@
         layout,
         commit,
         device: () => DEV.id,
-        metrics: () => ({ ...DEV.metrics, gap: GAP, head: HEAD, phTop: PH_TOP }),
+        metrics: () => ({ ...DEV.metrics, gap: GAP, head: HEAD }),
         adapter: {
           frames: () => ORDER,
           box: (id) => geo.box(id),
@@ -7392,21 +7392,22 @@
         return el;
       }
       function sizeDz(L, n = L.screens.length) {
+        const m = DEV.metrics;
         const dz = L.el.querySelector(".dz");
         if (L.open) {
-          const w = Math.max(1, n) * (DEV.metrics.colW + GAP) - GAP;
+          const w = Math.max(1, n) * (m.colW + GAP) - GAP;
           Object.assign(dz.style, {
             left: "-28px",
             top: "-34px",
             width: w + 56 + "px",
-            height: PH_TOP + DEV.metrics.phH + DEV.metrics.cap + 60 + "px",
+            height: m.phTop + m.phH + m.cap + 60 + "px",
           });
         } else {
           Object.assign(dz.style, {
             left: "-34px",
             top: -HEAD - 14 + "px",
-            width: DEV.metrics.deckW + DEV.metrics.peekX * Math.max(n - 1, 0) + 68 + "px",
-            height: DEV.metrics.collH + 10 + "px",
+            width: m.deckW + m.peekX * Math.max(n - 1, 0) + 68 + "px",
+            height: m.collH + 10 + "px",
           });
         }
       }
@@ -7422,6 +7423,7 @@
         L.el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
       function syncLanes() {
+        const m = DEV.metrics;
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
         document.querySelectorAll(".lane").forEach((e) => {
@@ -7443,11 +7445,11 @@
           el.classList.toggle("empty", n === 0);
           el.style.setProperty(
             "--hx",
-            DEV.metrics.deckW + DEV.metrics.peekX * (Math.max(n, 1) - 1) + 60 + "px",
+            m.deckW + m.peekX * (Math.max(n, 1) - 1) + 60 + "px",
           );
           el.style.setProperty(
             "--hy",
-            Math.max(0, Math.round(DEV.metrics.collH / 2 - 100)) + "px",
+            Math.max(0, Math.round(m.collH / 2 - 100)) + "px",
           );
           el.querySelector(".gcount").textContent =
             n + (n === 1 ? " screen" : " screens");
@@ -7480,12 +7482,13 @@
       /* default: leave the frame's bottom edge, slip between frame and caption, run down the gutter and land on the card.
          once the card has been moved: a smooth curve from the same dock to the nearest side of the card */
       function leaderGeom(left, top, w, h, moved) {
-        const fr = PH_TOP + DEV.metrics.phH,
-          x0 = DEV.metrics.colW - 62,
+        const m = DEV.metrics;
+        const fr = m.phTop + m.phH,
+          x0 = m.colW - 62,
           right = left + w;
         if (!moved) {
           const yRun = fr + 24,
-            runX = DEV.metrics.colW + 22,
+            runX = m.colW + 22,
             midY = top + 26,
             toTop = runX <= right - 14,
             lead = `M${x0} ${fr}V${fr + 10}Q${x0} ${yRun} ${x0 + 14} ${yRun}H${runX - 14}Q${runX} ${yRun} ${runX} ${yRun + 14}`;
@@ -7502,7 +7505,7 @@
         if (top >= fr + 28) {
           T = [clamp(x0, left + 18, right - 18), top];
           nB = { nx: 0, ny: -1 };
-        } else if (left >= DEV.metrics.colW - 4) {
+        } else if (left >= m.colW - 4) {
           T = [left, top + h / 2];
           nB = { nx: -1, ny: 0 };
         } else if (right <= 4) {
@@ -7845,7 +7848,7 @@
         if (a === "focus") focusScreen(id);
         if (a === "inspect") inspect(id);
         if (a === "comment")
-          createNote({ text: "Add a comment…", frame: id, local: FlowDevice.restingSpot(DEV.id, PH_TOP, 60) });
+          createNote({ text: "Add a comment…", frame: id, local: FlowDevice.restingSpot(DEV.id, 60) });
         if (a === "play") {
           if (L) play(L.screens.slice(L.screens.indexOf(id)));
           else toast("Group this frame to play it as a flow");
@@ -8706,6 +8709,7 @@
         return L;
       }
       function removeFromGroup(ids) {
+        const m = DEV.metrics;
         ids = ids.filter((i) => laneOf(i));
         if (!ids.length) return;
         commit(
@@ -8722,12 +8726,12 @@
               const end =
                 box.x +
                 (L.open
-                  ? L.screens.length * (DEV.metrics.colW + GAP) + 40
-                  : DEV.metrics.deckW + DEV.metrics.peekX * 3 + 120);
+                  ? L.screens.length * (m.colW + GAP) + 40
+                  : m.deckW + m.peekX * 3 + 120);
               let k = 0;
               list.forEach((i) => {
                 P[i] = {
-                  x: Math.round(end + k * (DEV.metrics.colW + 70)),
+                  x: Math.round(end + k * (m.colW + 70)),
                   y: Math.round(L.open ? geo.place(i).y : box.top + HEAD),
                 };
                 k++;
@@ -8883,6 +8887,7 @@
       selbox.innerHTML = "<span></span>";
       world.insertBefore(selbox, notesEl);
       function updateSelBox() {
+        const m = DEV.metrics;
         const ids = [...selSet].filter(
           (id) => geo.place(id) && !geo.place(id).deck && colOf(id),
         );
@@ -8897,9 +8902,9 @@
         ids.forEach((id) => {
           const f = geo.place(id);
           x0 = Math.min(x0, f.x);
-          y0 = Math.min(y0, f.y + PH_TOP);
-          x1 = Math.max(x1, f.x + DEV.metrics.colW);
-          y1 = Math.max(y1, f.y + PH_TOP + DEV.metrics.phH);
+          y0 = Math.min(y0, f.y + m.phTop);
+          x1 = Math.max(x1, f.x + m.colW);
+          y1 = Math.max(y1, f.y + m.phTop + m.phH);
         });
         const pad = 14;
         Object.assign(selbox.style, {

@@ -38,7 +38,7 @@ test("a closed group stacks into a deck: peeking, tilted, staggered from the bac
   const p = a.places.s1;
   assert.equal(p.deck, true);
   assert.equal(p.x, WORLD.laneLeft + M.peekX);
-  assert.equal(p.y, WORLD.top0 + 10 + M.peekY * (3 - 1 - 1) - WORLD.phTop * M.deckS);
+  assert.equal(p.y, WORLD.top0 + 10 + M.peekY * (3 - 1 - 1) - M.phTop * M.deckS);
   assert.equal(p.r, 1.6);
   assert.equal(p.s, M.deckS, "a deck frame is drawn small");
   assert.equal(p.d, (3 - 1 - 1) * 40);
@@ -273,7 +273,7 @@ test("which frame is under a point: its screen, with a margin, looked up where t
   g.retarget(world([group("g", ids(2), true)]), 0);
   const to = g.place("s1");
   const cx = to.x + M.colW / 2,
-    cy = to.y + WORLD.phTop + M.phH / 2;
+    cy = to.y + M.phTop + M.phH / 2;
   assert.equal(g.frameAt({ x: cx, y: cy }, 800 + 60), "s1", "at rest, s1 is under its own centre");
   assert.equal(g.frameAt({ x: cx, y: cy }, 0), null, "at the start of the slide the point is over nothing");
   assert.equal(g.frameAt({ x: to.x + M.colW + 15, y: cy }, 1000, { margin: 20 }), "s1");
@@ -283,7 +283,7 @@ test("which frame is under a point: its screen, with a margin, looked up where t
 test("a frame in a deck is not under any point, and one being dragged out of it is", () => {
   const g = live([], [group("g", ids(2), false)], 0);
   const p = g.place("s0");
-  const pt = { x: p.x + 20, y: p.y + WORLD.phTop + 20 };
+  const pt = { x: p.x + 20, y: p.y + M.phTop + 20 };
   assert.equal(g.frameAt(pt, 0), null);
   g.hold("s0", p.x, p.y);
   assert.equal(g.frameAt(pt, 0), "s0");
@@ -292,7 +292,7 @@ test("a frame in a deck is not under any point, and one being dragged out of it 
 test("a frame can be left out of the question (a connector does not land on its own start)", () => {
   const g = live([], [group("g", ids(2))], 0);
   const p = g.place("s0");
-  const pt = { x: p.x + 10, y: p.y + WORLD.phTop + 10 };
+  const pt = { x: p.x + 10, y: p.y + M.phTop + 10 };
   assert.equal(g.frameAt(pt, 0), "s0");
   assert.equal(g.frameAt(pt, 0, { skip: "s0" }), null);
 });
@@ -300,14 +300,14 @@ test("a frame can be left out of the question (a connector does not land on its 
 test("the screen's area is the frame's column below its device bezel; the frame's box adds the caption", () => {
   const g = live([], [group("g", ids(2))], 0);
   const p = g.place("s1");
-  assert.deepEqual(plain(g.screenRect("s1", 0)), { x: p.x, y: p.y + WORLD.phTop, w: M.colW, h: M.phH });
-  assert.deepEqual(plain(g.frameBox("s1", 0)), { x: p.x, y: p.y, w: M.colW, h: WORLD.phTop + M.phH + M.cap });
+  assert.deepEqual(plain(g.screenRect("s1", 0)), { x: p.x, y: p.y + M.phTop, w: M.colW, h: M.phH });
+  assert.deepEqual(plain(g.frameBox("s1", 0)), { x: p.x, y: p.y, w: M.colW, h: M.phTop + M.phH + M.cap });
 });
 
 test("without a time, rect questions are about where the frame is going", () => {
   const g = live([], [group("g", ids(2), false)], 0);
   g.retarget(world([group("g", ids(2), true)]), 0);
-  assert.deepEqual(plain(g.screenRect("s1")), { x: g.place("s1").x, y: g.place("s1").y + WORLD.phTop, w: M.colW, h: M.phH });
+  assert.deepEqual(plain(g.screenRect("s1")), { x: g.place("s1").x, y: g.place("s1").y + M.phTop, w: M.colW, h: M.phH });
 });
 
 test("the canvas's extent covers the groups and the loose frames, and the camera gets room around it", () => {
