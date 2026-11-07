@@ -347,3 +347,23 @@ test("the page no longer polls the document to find where a frame is, or waits o
     assert.ok(!page.includes(gone), `${gone} is still in the page`);
   assert.ok(!/querySelector\("\.pwrap"\)\.getBoundingClientRect/.test(page), "a frame's rect is read from the page");
 });
+
+/* ---------- reading order: how frames are listed when a gesture needs "first to last" ---------- */
+test("reading order is rows from the top, each row left to right", () => {
+  const at = { a: { x: 400, y: 0 }, b: { x: 0, y: 0 }, c: { x: 200, y: 500 }, d: { x: 0, y: 500 } };
+  assert.deepEqual(plain(FlowGeometry.readingOrder(["a", "b", "c", "d"], (id) => at[id])), ["b", "a", "d", "c"]);
+});
+
+test("frames less than 60px apart in y are one row, so the leftmost comes first", () => {
+  const at = { a: { x: 0, y: 40 }, b: { x: 300, y: 0 } };
+  assert.deepEqual(plain(FlowGeometry.readingOrder(["a", "b"], (id) => at[id])), ["a", "b"], "a is lower, but within a row of b and further left");
+  at.a.y = 80;
+  assert.deepEqual(plain(FlowGeometry.readingOrder(["a", "b"], (id) => at[id])), ["b", "a"], "60px or more apart: the higher one is first");
+});
+
+test("reading order does not change the list it is given", () => {
+  const ids = ["b", "a"],
+    at = { a: { x: 0, y: 0 }, b: { x: 5, y: 0 } };
+  FlowGeometry.readingOrder(ids, (id) => at[id]);
+  assert.deepEqual(ids, ["b", "a"]);
+});

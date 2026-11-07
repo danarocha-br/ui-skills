@@ -433,3 +433,50 @@ test("moveInto drops a group it empties, but not the group the frames are going 
   again.moveInto(["s8", "s9"], "g3", 0);
   eq(again.groups.map((l) => [l.id, l.screens]).at(-1), ["g3", ["s8", "s9"]]);
 });
+
+/* ---------- flow order: the order a flow plays in (the page's Play, and "play from here") ---------- */
+const withConns = (conns) => {
+  const D = { ...DEFAULTS, conns: conns.map(([from, to], i) => ({ id: `c${i + 1}`, from, to, label: "Next" })) };
+  return make(memory(), { defaults: () => D, kinds: builtinKinds(() => D) });
+};
+const order = (layout, id, start) => FlowLayout.flowOrder(layout.groups.find((l) => l.id === id), layout.conns, start);
+
+test("a flow plays from its head along its connectors", () => {
+  const layout = withConns([["s1", "s2"], ["s2", "s3"], ["s3", "s4"]]);
+  eq(order(layout, "g1"), ["s1", "s2", "s3", "s4"]);
+});
+
+test("a flow plays from the frame asked for, and what comes before it is left out", () => {
+  const layout = withConns([["s1", "s2"], ["s2", "s3"], ["s3", "s4"]]);
+  eq(order(layout, "g1", "s3"), ["s3", "s4"]);
+});
+
+test("the head is the first frame nothing in the group leads to; a connector from outside the group does not count", () => {
+  const layout = withConns([["s2", "s3"], ["s3", "s4"], ["s9", "s1"]]);
+  /* s1 has an incoming connector, but from another group, so it is still a head; s2 comes after it in the group */
+  eq(order(layout, "g1"), ["s1", "s2", "s3", "s4"]);
+});
+
+test("frames the connectors do not reach follow in the group's order, from the start frame on", () => {
+  const layout = withConns([["s1", "s3"]]);
+  eq(order(layout, "g1"), ["s1", "s3", "s2", "s4"]);
+  eq(order(layout, "g1", "s2"), ["s2", "s3", "s4"], "from s2: only what comes after it in the group's order is added");
+});
+
+test("a connector that leaves the group is not followed", () => {
+  const layout = withConns([["s1", "s2"], ["s2", "s5"], ["s5", "s3"]]);
+  eq(order(layout, "g1"), ["s1", "s2", "s3", "s4"]);
+});
+
+test("a loop in the connectors ends at the frame that would repeat", () => {
+  const layout = withConns([["s1", "s2"], ["s2", "s3"], ["s3", "s1"]]);
+  eq(order(layout, "g1", "s1"), ["s1", "s2", "s3", "s4"]);
+  eq(order(layout, "g1"), ["s4", "s1", "s2", "s3"], "every frame of the loop has a connector in, so the head is s4");
+});
+
+test("flow order only reads: the layout is as it was", () => {
+  const layout = withConns([["s1", "s2"]]);
+  const before = layout.snapshot();
+  order(layout, "g1", "s2");
+  assert.equal(layout.snapshot(), before);
+});

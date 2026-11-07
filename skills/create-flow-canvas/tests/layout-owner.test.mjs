@@ -1,17 +1,18 @@
 /* Nothing but the layout writes to the layout (N5). The layout's reads are frozen, so a stray write throws once the
    page runs it in strict code; this guard reads the page's own script and fails on the shapes of a direct write, so it
    is caught here whether or not that line runs. It knows the page's names for what it gets from the layout (L, n, c, f ...);
-   a write through another alias is not seen here, and throws when it runs. The page's script is the one <script> with no id.
+   a write through another alias is not seen here, and throws when it runs. The page's script is the one <script> with no id; the arrange module's code is read with it.
    Run:  node --test skills/create-flow-canvas/tests/layout-owner.test.mjs   (from the repo root) */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { html } from "./modules.mjs";
+import { html, block } from "./modules.mjs";
 
 /* the page script, with comments and string/template contents left in (a write inside a string is not a write, but none is there) */
 const page = (() => {
   const m = html.match(/^\s*<script>\n([\s\S]*?)<\/script>/m);
   assert.ok(m, "the page's script block is not found");
-  return m[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* the arrange module writes to the layout for the page, so it is held to the same rule */
+  return (m[1] + "\n" + block("arrange-module")).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 })();
 const FIELDS = "groups|pos|caps|scans|notes|conns";
 const lines = (re) =>

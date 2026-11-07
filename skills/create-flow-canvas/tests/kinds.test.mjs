@@ -141,7 +141,7 @@ const code = (id) =>
   block(id)
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-for (const id of ["layout-module", "commit-module", "annotations-module"]) {
+for (const id of ["layout-module", "commit-module", "annotations-module", "arrange-module"]) {
   test(`${id}: no kind of the page is named in its code`, () => {
     const names = [...code(id).matchAll(/\b(notes|scans|conns|caps)\b/g)].map((m) => m[1]);
     assert.deepEqual(names, [], `${id} names ${names.join(", ")}`);

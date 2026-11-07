@@ -89,3 +89,45 @@ test("the drawn shape starts at the port, ends its arrowhead on the target, and 
   assert.deepEqual(tip, [end.x, end.y]);
   assert.ok(Number.isFinite(s.mid.x) && Number.isFinite(s.mid.y));
 });
+
+/* ---------- the leader of a scanner finding: from the frame's bottom edge to its card ---------- */
+const LM = { colW: 270, phTop: 40, phH: 585 }; /* the frame's bottom edge is at phTop + phH = 625; the dock sits colW - 62 = 208 across */
+const leader = (...a) => plain(FlowRouting.leader(LM, ...a));
+
+test("an unmoved card whose top is past the gutter run is reached from above: down the gutter to its top", () => {
+  /* left 300 is right of the run (colW + 22 = 292), so the line lands on the card's top edge at the run */
+  const l = leader(300, 700, 240, 100, false);
+  assert.deepEqual([l.x0, l.y0], [208, 625]);
+  assert.deepEqual(l.end, [292, 700]);
+  assert.ok(l.d.startsWith("M208 625V635Q208 649 222 649H278Q292 649 292 663"), "slips between frame and caption, runs down the gutter");
+  assert.ok(l.d.endsWith("V700"));
+});
+
+test("an unmoved card that reaches over the gutter run is entered from its right edge, half a line down", () => {
+  const l = leader(0, 700, 240, 100, false);
+  assert.deepEqual(l.end, [240, 726], "the card's right edge, 26 below its top");
+  assert.ok(l.d.endsWith("V712Q292 726 278 726H240"));
+});
+
+test("a moved card below the frame is docked at its top edge, the dock clamped to the card", () => {
+  const l = leader(0, 700, 240, 100, true);
+  assert.deepEqual([l.x0, l.y0], [208, 625]);
+  assert.deepEqual(l.end, [208, 700]);
+  assert.deepEqual(leader(0, 700, 120, 100, true).end, [102, 700], "a narrow card: the dock is kept 18px inside its right edge");
+  assert.deepEqual(leader(300, 700, 120, 100, true).end, [318, 700], "and 18px inside its left edge");
+});
+
+test("a moved card beside the frame is docked at the middle of its near side", () => {
+  assert.deepEqual(leader(400, 100, 240, 100, true).end, [400, 150], "right of the frame: its left edge");
+  assert.deepEqual(leader(-300, 100, 240, 100, true).end, [-60, 150], "left of the frame: its right edge");
+});
+
+test("a moved card over the frame is docked at its bottom edge", () => {
+  assert.deepEqual(leader(0, 100, 240, 100, true).end, [208, 200]);
+});
+
+test("a moved card's line is the connector's own right-angle path, rounded", () => {
+  const l = leader(0, 700, 240, 100, true);
+  const pts = FlowRouting.ortho({ x: 208, y: 625, nx: 0, ny: 1 }, { x: 208, y: 700, nx: 0, ny: -1 });
+  assert.equal(l.d, FlowRouting.rounded(pts, 12));
+});
