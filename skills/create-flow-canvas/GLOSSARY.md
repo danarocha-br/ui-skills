@@ -72,7 +72,7 @@ The frames the user has selected (a click, shift-click, a marquee, select all), 
 _Avoid_: Focus (that is where the camera looks), active
 
 **Press**:
-What the pointer does from button down to button up on the canvas. What it landed on is a **hit** (an edge dot, a group's grip, a deck, a frame, an annotation, something that is not the canvas, or the empty canvas), and what follows is decided in one place by one **mode**: about to drag a frame or group (a **gesture**, which `FlowGesture` holds), a marquee, a pan, or a connector being drawn. A note or finding being dragged stays with `FlowAnnotations`, which the pointer asks about before anything else. The click that follows a press that travelled is not a click. In code, `FlowPointer`.
+What the pointer does from button down to button up on the canvas. What it landed on is a **hit** (an edge dot, a group's grip, a deck, a frame, an annotation, something that is not the canvas, or the empty canvas), and what follows is decided in one place by one **mode**: a frame or group held but not yet dragged (**pending**; once it moves far enough it becomes a **gesture**, which `FlowGesture` holds), a marquee, a pan, or a connector being drawn. A note or finding being dragged stays with `FlowAnnotations`, which the pointer asks about before anything else. The click that follows a press that travelled is not a click. In code, `FlowPointer`.
 _Avoid_: Drag state, tool (the hand tool and Space only decide what a press on empty canvas does)
 
 **Arrangement edit**:

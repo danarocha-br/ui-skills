@@ -5730,7 +5730,6 @@
         const list = (x) => (Array.isArray(x) ? x : []);
         const clone = (o) => JSON.parse(JSON.stringify(o));
         const BLANK_TEXT = { title: "Untitled group", sub: "", subOn: false };
-        /* the short name of a group: its title up to the first colon */
         /* the order a group plays in; see the interface above */
         function flowOrder(L, edges, start) {
           const allowed = new Set(L.screens),
@@ -5753,6 +5752,7 @@
           });
           return seq;
         }
+        /* the short name of a group: its title up to the first colon */
         const groupName = (g) => String((g && g.title) || "").split(":")[0].trim() || BLANK_TEXT.title;
         /* what is persisted of a group; text a group does not have yet is blank. Whether it is open is not here: that
            is view state, kept apart (see the view record in create). */
@@ -7120,10 +7120,10 @@
       /* ======================================================================
          SELECTION MODULE
          What is selected, kept in one place: the frames, which of them is the primary one (the frame the toolbar, the
-         inspector, the arrow keys and "01/09" are about), and the selected connector. A connector and frames are never
+         Inspect panel, the arrow keys and the counter, "03/09", are about), and the selected connector. A connector and frames are never
          selected together: choosing frames lets go of the connector, selecting a connector lets go of the frames.
-         (Deselecting frames, by itself, leaves a selected connector alone.) No DOM, no panel, no product knowledge.
-         The page listens and paints; FlowSelection.follows tells the panel.
+         (Deselecting frames, by itself, leaves a selected connector alone.) No DOM, no product knowledge, and it
+         knows no panel: `follows` needs only something with follow(subject). The page listens and paints.
 
          Interface
            const sel = FlowSelection.create()
@@ -7216,8 +7216,8 @@
       /* ======================================================================
          POINTER MODULE
          Decides what a press, a move and a release mean on the canvas: pan, drag a frame or a group, draw a marquee,
-         draw a connector from an edge dot, drag a note or a finding card, or nothing. Its own mode is idle, press, pan,
-         marquee or connect; whether a frame drag (FlowGesture) or an annotation drag (FlowAnnotations) is live is asked of
+         draw a connector from an edge dot, drag a note or a finding card, or nothing. Its own mode is idle, pending (a frame or group is held,
+         not yet dragged), pan, marquee or connect; whether a frame drag (FlowGesture) or an annotation drag (FlowAnnotations) is live is asked of
          the host each time, because those two own that fact. The page used to hold this as
          seven flags (pan, moved, press, mq, connDrag, handMode, spaceDown) read by four handlers; here it is one mode
          and the rules for moving between modes, in one place. Everything it makes happen is done by the page, through
@@ -7245,7 +7245,7 @@
                                              travelled since the press, then forgets
            pointer.setHand(on)  pointer.space(down)  pointer.blur()   the hand tool (H, V) and Space held; a window that
                                              loses focus lets Space go
-           pointer.state() -> { mode, moved, hand, space }   mode: idle | press | pan | marquee | connect
+           pointer.state() -> { mode, moved, hand, space }   mode: idle | pending | pan | marquee | connect
 
            host (what the page does; all required)
              stopPlay()                      a press stops the flow that is playing
@@ -7323,7 +7323,7 @@
                 host.stopPlay();
                 moved = false;
                 reset();
-                mode = "press";
+                mode = "pending";
                 from = { x, y };
                 press = hit.kind === "frame" ? { kind: "frame", id: hit.id } : { kind: "group", group: hit.group };
                 return { prevent: hit.kind === "grip" };
@@ -7355,7 +7355,7 @@
               host.moveAnnotation(pt);
               return;
             }
-            if (mode === "press" && !host.gestureActive() && dist(pt) > PRESS_SLOP) {
+            if (mode === "pending" && !host.gestureActive() && dist(pt) > PRESS_SLOP) {
               moved = true;
               if (!host.beginDrag(press, from)) reset();
             }
@@ -7414,7 +7414,7 @@
             },
             cancelDrag() {
               if (!host.gestureActive() && !host.annotationDragging()) return false;
-              if (mode === "press") reset();
+              if (mode === "pending") reset();
               host.cancelAnnotation();
               host.cancelDrag();
               return true;
@@ -10058,9 +10058,9 @@
           );
       }
 
-      /* what a press landed on, in the order that matters: the annotations get the first look (a press on one may begin its
-         drag), then the edge dot, the group's grip, a frame or a deck, then anything that is not the canvas */
-      function hitOf(e) {
+      /* what a press landed on, in the order that matters. Not a pure question: the annotations get the first look and a
+         press on one begins its drag (annotations.down), then the edge dot, the group's grip, a frame or a deck, then anything that is not the canvas */
+      function classifyPress(e) {
         const t = e.target;
         const grabbed = annotations.down(t, { x: e.clientX, y: e.clientY });
         if (grabbed) return { kind: "annotation", prevent: !!grabbed.prevent };
@@ -10117,7 +10117,7 @@
           x: e.clientX,
           y: e.clientY,
           shift: e.shiftKey,
-          hit: e.button === 0 ? hitOf(e) : null,
+          hit: e.button === 0 ? classifyPress(e) : null,
         });
         if (prevent) e.preventDefault();
       });

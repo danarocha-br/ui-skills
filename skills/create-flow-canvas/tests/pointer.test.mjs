@@ -352,7 +352,7 @@ test("state says what the pointer is doing", () => {
   const t = setup();
   assert.equal(t.pointer.state().mode, "idle");
   down(t.pointer, FRAME);
-  assert.equal(t.pointer.state().mode, "press");
+  assert.equal(t.pointer.state().mode, "pending");
   t.pointer.up();
   down(t.pointer, CANVAS);
   assert.equal(t.pointer.state().mode, "marquee");
