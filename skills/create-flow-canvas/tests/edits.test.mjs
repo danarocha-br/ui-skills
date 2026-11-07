@@ -22,7 +22,7 @@ const over = (scan, storage) =>
     key: KEY,
     storage,
     hasScreen: (id) => scan.screens.some((s) => s.id === id),
-    defaults: () => ({ lanes: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} }, conns: scan.links, scans: scan.findings, notes: scan.notes }),
+    defaults: () => ({ groups: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} }, conns: scan.links, scans: scan.findings, notes: scan.notes }),
   });
 
 const SCREENS = ["s1", "s2", "s3", "s4"].map((id) => ({ id }));
@@ -177,7 +177,7 @@ test("a scan of another product reads, lays out, saves and reloads", () => {
   eq(problems, []);
   const storage = memory();
   const layout = over(scan, storage);
-  eq(layout.lanes.map((l) => [l.id, l.screens, l.title]), [["g1", ["home", "detail"], "Tally: count fast"]]);
+  eq(layout.groups.map((l) => [l.id, l.screens, l.title]), [["g1", ["home", "detail"], "Tally: count fast"]]);
   eq(layout.conns.map((c) => c.id), ["home>detail"]);
   eq(layout.notes.map((n) => n.id), ["home:Ana"]);
   assert.equal(layout.nextId("c"), "c1", "scanned links named by their screens leave the user's numbering alone");

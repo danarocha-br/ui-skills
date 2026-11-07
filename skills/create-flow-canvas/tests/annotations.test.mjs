@@ -9,7 +9,7 @@ import { FlowLayout, FlowCommit, FlowAnnotations } from "./modules.mjs";
 
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 const DEFAULTS = {
-  lanes: [{ id: "g1", screens: ["s1", "s2"], open: true }],
+  groups: [{ id: "g1", screens: ["s1", "s2"], open: true }],
   pos: { mobile: {}, tablet: {}, desktop: {} },
   conns: [],
   notes: [],

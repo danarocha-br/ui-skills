@@ -10,7 +10,7 @@ _Avoid_: View state, canvas state
 
 **Group**:
 An ordered set of frames. Open, it fans out into a flow; closed, it stacks into a deck. Membership is shared by every device. A group carries its own **title** and **description**, so they are saved, undone and reset with it and gone when it is dissolved.
-_Avoid_: Lane (the name the code and the saved data still use), cluster
+_Avoid_: Lane, cluster. "Lane" is the old name; it survives only where renaming would break something saved or styled: the `lanes` key in the saved layout and the stylesheet's `.lane` class (with the `data-lane` attribute on a frame). Everywhere else, in code and in words, it is a group.
 
 **Membership**:
 Which group a frame is in (or none, so it is loose) and its order there. What the user changed is saved one frame at a time, as "this frame is in group X" or "this frame is loose", and an order only for a group the user rearranged. A frame the user never moved follows the scan, so a rescan that regroups it moves it; one the user moved stays where they put it. A group the user dissolved stays dissolved, and one the user made is kept.
@@ -87,7 +87,7 @@ Something the scanner wants a reviewer to notice about a frame, shown as a card 
 _Avoid_: Scan card, insight, warning
 
 **Edit**:
-What the user changed on something the scan produced: moved it, rewrote it, relabelled it, dismissed it, or moved a frame between groups. The layout keeps edits, not copies, so a new scan still reaches someone who has edits; their edits win where they touched it. An edit to something the scan no longer has is dropped.
+What the user changed on something the scan produced: moved it, rewrote it, relabelled it, dismissed it, or moved a frame between groups. The layout keeps edits over the scan, not copies of it (what the user made themselves is kept whole), so a new scan still reaches someone who has edits; their edits win where they touched it. An edit to something the scan no longer has is dropped.
 _Avoid_: Override, patch
 
 **Caption**:
@@ -95,7 +95,7 @@ A title and a body typed in place under a frame. It is an annotation and part of
 _Avoid_: Heading
 
 **Panel**:
-The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none). The panel's **inset** is what it takes from the window; the camera leaves it free, so frames are centred in what is left, and a resize centres them again. In code, `FlowPanel`; the page only paints what it says.
+The right-hand side of the canvas, a sheet along the bottom on a narrow window. It shows **Inspect** (one screen: route, source, components, states) or **Search**, one at a time. It is open or closed, in one mode, and Inspect has a screen it is about (or none). The panel's **inset** is what it takes from the window; the camera leaves it free, so when the camera flies to a screen, a group or everything it fits them in what is left. A resize, while the panel is open and a screen is selected, centres that screen again in the room that remains; it does not re-fit the other frames. In code, `FlowPanel`; the page only paints what it says.
 _Avoid_: Sidebar, drawer, inspector (that is Inspect's label to a screen reader)
 
 **Sweep**:

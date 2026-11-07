@@ -8,7 +8,7 @@ import { FlowLayout, FlowCommit } from "./modules.mjs";
 
 const KEY = "flow-canvas.layout.v1";
 const DEFAULTS = {
-  lanes: [
+  groups: [
     { id: "g1", screens: ["s1", "s2"], open: true },
     { id: "g2", screens: ["s3"], open: false },
   ],

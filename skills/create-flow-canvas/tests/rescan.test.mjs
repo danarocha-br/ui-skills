@@ -54,7 +54,7 @@ const memory = (seed = {}) => {
 const layoutFor = (raw, storage, over = {}) => {
   const scan = readScan(raw).scan;
   const defaults = () => ({
-    lanes: scan.groups,
+    groups: scan.groups,
     pos: { mobile: {}, tablet: {}, desktop: {} },
     conns: scan.links,
     notes: scan.notes,
@@ -63,7 +63,7 @@ const layoutFor = (raw, storage, over = {}) => {
   });
   return FlowLayout.create({ key: KEY, storage, hasScreen: (id) => scan.screens.some((s) => s.id === id), defaults, ...over });
 };
-const members = (layout) => Object.fromEntries(layout.lanes.map((l) => [l.id, l.screens]));
+const members = (layout) => Object.fromEntries(layout.groups.map((l) => [l.id, l.screens]));
 const cap = (layout, id) => layout.caps.find((c) => c.id === id);
 
 /* the user's session against version 1 */
@@ -84,15 +84,15 @@ test("a rescan that renames, regroups, adds and removes reaches a saved layout, 
   const { storage, mineId } = userSession();
   const layout = layoutFor(v2(), storage);
   /* the scan's own news */
-  assert.equal(layout.lanes.find((l) => l.id === "g1").title, "Tally: count faster", "a group the user never retitled is renamed");
+  assert.equal(layout.groups.find((l) => l.id === "g1").title, "Tally: count faster", "a group the user never retitled is renamed");
   assert.deepEqual(plain(members(layout).g8), ["new2"], "a group the scan added, minus the frame the user had put elsewhere");
   assert.ok(members(layout).g1.includes("extra"), "a screen the scan added to a group lands in it, not loose");
   assert.equal(cap(layout, "home").title, "Start here, again", "a caption the user never touched");
   /* the user's edits */
-  assert.equal(layout.lanes.find((l) => l.id === "g2").title, "My settings", "a retitled group keeps the user's title");
+  assert.equal(layout.groups.find((l) => l.id === "g2").title, "My settings", "a retitled group keeps the user's title");
   assert.deepEqual(plain(members(layout).g2), ["help", "settings"], "a frame the user moved stays, in the place they gave it; the frame the scan moved in but the user had taken out does not follow");
   assert.deepEqual(plain(members(layout)[mineId]), ["detail"], "the user's own group stays, minus the screen the scan no longer has");
-  assert.equal(layout.lanes.find((l) => l.id === mineId).title, "Mine: details");
+  assert.equal(layout.groups.find((l) => l.id === mineId).title, "Mine: details");
   assert.equal(cap(layout, "detail").title, "Mine, the detail");
   eq(layout.pos.mobile.g2, { x: 7, y: 8 }, "a group the user pinned is still pinned");
   eq(layout.pos.mobile[mineId], { x: 50, y: 60 });
@@ -103,7 +103,7 @@ test("what the scan no longer has is gone from every kind, and what it points at
   const layout = layoutFor(v2(), storage);
   assert.equal(cap(layout, "about"), undefined);
   assert.deepEqual(plain(layout.conns.map((c) => c.id)), ["home>extra"], "a link the scan dropped is dropped");
-  assert.ok(layout.lanes.every((l) => l.screens.every((id) => id !== "about")));
+  assert.ok(layout.groups.every((l) => l.screens.every((id) => id !== "about")));
 });
 
 test("the version change is saved: a layout made again from what was saved is the same layout", () => {
@@ -151,8 +151,8 @@ test("a user's group whose id a rescan now uses gets a fresh id, with its frames
   s2.groups.push({ id: "g3", screens: ["extra"], open: true, title: "Scanner's three", sub: "", subOn: false, meta: "" });
   s2.screens.push(screen("extra", "Extra"));
   const b = layoutFor(s2, storage);
-  assert.equal(b.lanes.find((l) => l.id === "g3").title, "Scanner's three");
-  const mine = b.lanes.find((l) => l.title === "Mine: settings");
+  assert.equal(b.groups.find((l) => l.id === "g3").title, "Scanner's three");
+  const mine = b.groups.find((l) => l.title === "Mine: settings");
   assert.notEqual(mine.id, "g3");
   eq(mine.screens, ["settings"]);
   eq(b.pos.tablet[mine.id], { x: 5, y: 6 });
@@ -216,16 +216,16 @@ test("resetting the layout leaves captions alone; resetting the text puts captio
   const storage = memory();
   const layout = layoutFor(v1(), storage);
   cap(layout, "home").title = "Mine";
-  layout.lanes[0].title = "Mine too";
+  layout.groups[0].title = "Mine too";
   layout.moveInto(["settings"], "g1", 0);
   layout.reset();
   assert.equal(cap(layout, "home").title, "Mine", "Reset layout is about groups, places and connectors");
-  assert.equal(layout.lanes[0].title, "Tally: count fast");
+  assert.equal(layout.groups[0].title, "Tally: count fast");
   eq(members(layout).g1, ["home", "detail", "help"]);
-  layout.lanes[0].title = "Again";
+  layout.groups[0].title = "Again";
   layout.resetText();
   assert.equal(cap(layout, "home").title, tiny.screens[0].caption.title);
-  assert.equal(layout.lanes[0].title, "Tally: count fast");
+  assert.equal(layout.groups[0].title, "Tally: count fast");
 });
 
 /* ---------- layouts saved before groups were edits ---------- */

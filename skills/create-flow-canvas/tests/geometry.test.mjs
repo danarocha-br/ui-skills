@@ -5,11 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowDevice, FlowGeometry, FlowRouting, html } from "./modules.mjs";
 
-const { arrange, loosePlace, laneH, WORLD, create } = FlowGeometry;
+const { arrange, loosePlace, groupH, WORLD, create } = FlowGeometry;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const xy = (r) => ({ x: r.x, y: r.y });
 const M = FlowDevice.describe("mobile").metrics;
-const LANE_H = laneH(M);
+const GROUP_H = groupH(M);
 const ids = (n, p = "s") => Array.from({ length: n }, (_, i) => `${p}${i}`);
 const group = (id, screens, open = true) => ({ id, screens, open });
 /* a canvas of the given groups, plus loose frames, in one list of screens */
@@ -24,10 +24,10 @@ const deepFreeze = (o) => (Object.values(o).forEach((v) => typeof v === "object"
 
 test("an open group fans out in a row, one frame per slot, the first on top", () => {
   const a = plain(arrange(world([group("g", ids(3))]), M));
-  const x0 = WORLD.laneLeft;
+  const x0 = WORLD.groupLeft;
   assert.deepEqual(
     a.places.s1,
-    { x: x0 + (M.colW + WORLD.gap), y: WORLD.top0 + WORLD.head, r: 0, s: 1, d: 60, z: 2, fx: 0, fy: 0, deck: false, lane: "g", i: 1 },
+    { x: x0 + (M.colW + WORLD.gap), y: WORLD.top0 + WORLD.head, r: 0, s: 1, d: 60, z: 2, fx: 0, fy: 0, deck: false, group: "g", i: 1 },
   );
   assert.equal(a.places.s0.z, 3);
   assert.equal(a.places.s2.x, x0 + 2 * (M.colW + WORLD.gap));
@@ -37,7 +37,7 @@ test("a closed group stacks into a deck: peeking, tilted, staggered from the bac
   const a = plain(arrange(world([group("g", ids(3), false)]), M));
   const p = a.places.s1;
   assert.equal(p.deck, true);
-  assert.equal(p.x, WORLD.laneLeft + M.peekX);
+  assert.equal(p.x, WORLD.groupLeft + M.peekX);
   assert.equal(p.y, WORLD.top0 + 10 + M.peekY * (3 - 1 - 1) - M.phTop * M.deckS);
   assert.equal(p.r, 1.6);
   assert.equal(p.s, M.deckS, "a deck frame is drawn small");
@@ -48,9 +48,9 @@ test("a closed group stacks into a deck: peeking, tilted, staggered from the bac
 test("groups with no saved position stack down the canvas; an empty group takes no room", () => {
   const a = plain(arrange(world([group("a", ids(2, "a")), group("e", []), group("b", ids(2, "b"), false)]), M));
   assert.equal(a.boxes.a.top, WORLD.top0);
-  assert.equal(a.boxes.e.top, WORLD.top0 + LANE_H + WORLD.laneGap, "the empty group is placed where the next would go");
+  assert.equal(a.boxes.e.top, WORLD.top0 + GROUP_H + WORLD.groupGap, "the empty group is placed where the next would go");
   assert.equal(a.boxes.b.top, a.boxes.e.top, "and the next group takes the same place");
-  assert.equal(a.boxes.a.x, WORLD.laneLeft);
+  assert.equal(a.boxes.a.x, WORLD.groupLeft);
 });
 
 test("a group with a saved position goes there and does not push the others down", () => {
@@ -62,7 +62,7 @@ test("a group with a saved position goes there and does not push the others down
 test("a group's box is as wide as its row, or as its deck", () => {
   const a = plain(arrange(world([group("o", ids(3)), group("c", ids(3, "c"), false), group("one", ["x"])]), M));
   assert.equal(a.boxes.o.w, 3 * M.colW + 2 * WORLD.gap + 60);
-  assert.equal(a.boxes.o.h, LANE_H);
+  assert.equal(a.boxes.o.h, GROUP_H);
   assert.equal(a.boxes.c.w, M.closedW);
   assert.equal(a.boxes.c.h, M.collH);
   assert.equal(a.boxes.one.w, 460, "a short row still has room to drop a frame into");
@@ -70,13 +70,13 @@ test("a group's box is as wide as its row, or as its deck", () => {
 
 test("a loose frame with a saved position goes there", () => {
   const a = plain(arrange(world([], ["f"], { f: { x: 5, y: 7 } }), M));
-  assert.deepEqual(plain(a.places.f), { x: 5, y: 7, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, lane: null, i: -1 });
+  assert.deepEqual(plain(a.places.f), { x: 5, y: 7, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, group: null, i: -1 });
 });
 
 test("loose frames with no saved position line up in rows of five below the groups, and nothing is written back", () => {
   const input = deepFreeze(world([group("g", ids(2))], ids(7, "f"), {}));
   const a = plain(arrange(input, M));
-  const bottom = WORLD.top0 + LANE_H;
+  const bottom = WORLD.top0 + GROUP_H;
   assert.equal(a.bottom, bottom);
   assert.deepEqual(plain(a.places.f0), { ...plain(a.places.f0), x: loosePlace(0, bottom, M).x, y: loosePlace(0, bottom, M).y });
   assert.deepEqual([a.places.f5.x, a.places.f5.y], [loosePlace(5, bottom, M).x, loosePlace(5, bottom, M).y]);
@@ -87,7 +87,7 @@ test("loose frames with no saved position line up in rows of five below the grou
 test("a loose frame's default place follows the groups when one grows", () => {
   const closed = plain(arrange(world([group("g", ids(2), false)], ["f"]), M));
   const open = plain(arrange(world([group("g", ids(2), true)], ["f"]), M));
-  assert.equal(open.places.f.y - closed.places.f.y, LANE_H - M.collH);
+  assert.equal(open.places.f.y - closed.places.f.y, GROUP_H - M.collH);
 });
 
 test("default places are handed out only to the frames that have none", () => {
@@ -323,7 +323,7 @@ test("the canvas's extent covers the groups and the loose frames, and the camera
 
 test("a group's box can be asked for by id, and a missing one is undefined", () => {
   const g = live([], [group("g", ids(2))], 0);
-  assert.equal(g.box("g").x, WORLD.laneLeft);
+  assert.equal(g.box("g").x, WORLD.groupLeft);
   assert.equal(g.box("nope"), undefined);
 });
 

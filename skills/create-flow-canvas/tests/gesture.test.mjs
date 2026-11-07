@@ -8,7 +8,7 @@ import { FlowLayout, FlowCommit, FlowGesture } from "./modules.mjs";
 
 const KEY = "flow-canvas.layout.v1";
 const DEFAULTS = () => ({
-  lanes: [
+  groups: [
     { id: "g1", screens: ["s1", "s2", "s3"], open: true },
     { id: "g2", screens: ["s4", "s5"], open: true },
     { id: "g3", screens: ["s6"], open: false },
@@ -64,7 +64,7 @@ function setup({ pos = {} } = {}) {
   return { layout, commit, gesture, log, shown };
 }
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
-const ids = (layout, g) => layout.lanes.find((l) => l.id === g).screens;
+const ids = (layout, g) => layout.groups.find((l) => l.id === g).screens;
 /* the pointer that puts a frame's centre at (cx, cy): the centre is 50 right of and 110 below the corner */
 const at = (cx, cy) => ({ x: cx - 50, y: cy - 110 });
 
@@ -135,9 +135,9 @@ test("a free drop of the last frame of a group removes the empty group", () => {
   gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6", pointer: { x: 0, y: 0 } });
   gesture.move({ x: 2500, y: 1000 });
   gesture.end();
-  eq(layout.lanes.map((l) => l.id), ["g1", "g2"]);
+  eq(layout.groups.map((l) => l.id), ["g1", "g2"]);
   layout.undo();
-  eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g3"]);
+  eq(layout.groups.map((l) => l.id), ["g1", "g2", "g3"]);
 });
 
 test("dropping a frame from a group onto a loose frame makes a group pinned at that frame", () => {
@@ -150,7 +150,7 @@ test("dropping a frame from a group onto a loose frame makes a group pinned at t
   assert.equal(out.kind, "merge");
   assert.equal(out.group.id, "g4");
   eq(out.ids, ["s7", "s1"]);
-  eq(layout.lanes.find((l) => l.id === "g4").screens, ["s7", "s1"]);
+  eq(layout.groups.find((l) => l.id === "g4").screens, ["s7", "s1"]);
   eq(ids(layout, "g1"), ["s2", "s3"]);
   /* the group sits where the frame it was dropped on was, though one of its frames came from a group */
   eq(layout.pos.mobile.g4, { x: 2000, y: -40 });
@@ -163,7 +163,7 @@ test("dropping loose frames onto a loose frame merges them, pinned at that frame
   gesture.begin({ kind: "frame", ids: ["s8"], pid: "s8", pointer: { x: 0, y: 0 } });
   eq(gesture.move(at(2050, 110)), { kind: "merge", id: "s7" });
   gesture.end();
-  eq(layout.lanes.find((l) => l.id === "g4").screens, ["s7", "s8"]);
+  eq(layout.groups.find((l) => l.id === "g4").screens, ["s7", "s8"]);
   eq(layout.pos.mobile, { g4: { x: 2000, y: -40 } }, "the frames' own places are gone; the group has one");
 });
 
@@ -172,7 +172,7 @@ test("a merge that takes the last frame of a group leaves no empty group behind"
   gesture.begin({ kind: "frame", ids: ["s6"], pid: "s6", pointer: { x: 0, y: 0 } });
   gesture.move(at(2050, 110));
   gesture.end();
-  eq(layout.lanes.map((l) => l.id), ["g1", "g2", "g4"]);
+  eq(layout.groups.map((l) => l.id), ["g1", "g2", "g4"]);
 });
 
 test("a frame is never proposed as a merge with itself or with a frame in a group", () => {
@@ -296,7 +296,7 @@ test("if the layout changes under a live drag (undo, group), the drop is discard
   gesture.begin({ kind: "frame", ids: ["s1"], pid: "s1", pointer: { x: 0, y: 0 } });
   gesture.move(at(170, 450)); /* over g2 */
   layout.mark();
-  layout.lanes = layout.lanes.filter((l) => l.id !== "g2"); /* ⌘Z or ⌘⇧G took the group away meanwhile */
+  layout.groups = layout.groups.filter((l) => l.id !== "g2"); /* ⌘Z or ⌘⇧G took the group away meanwhile */
   const changed = layout.snapshot();
   log.length = 0;
   const out = gesture.end();

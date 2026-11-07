@@ -5537,14 +5537,14 @@
     <script id="layout-module">
       /* ======================================================================
          LAYOUT MODULE
-         Owns the persisted layout: groups (saved as "lanes"), positions per device, connectors, findings,
+         Owns the persisted layout: groups, positions per device, connectors, findings,
          notes and frame captions, plus the id counters and the undo history. It knows nothing about the page:
          no DOM, no screens, no demo data. Everything it needs is handed to create().
 
          Everything the scan provides is saved the same way, as the user's edits over it and the things the user
          made (FlowScan.merge and diff; for groups, mergeGroups and diffGroups, which add which frames are in
          which group). Loading lays those over the scan it is given. So a new scan reaches a saved layout in
-         every kind, and the user's edits win where they touched it. The saved layout holds edits, never copies.
+         every kind, and the user's edits win where they touched it. The saved layout holds edits over the scan, never copies of it; what the user made themselves is kept whole.
 
          A group is { id, screens, open, title, sub, subOn }: its frames, whether it is fanned out, its
          title (the text before a colon is its name), its description, and whether the description is
@@ -5556,17 +5556,17 @@
              key        localStorage key the layout is saved under
              storage    anything with getItem(key) / setItem(key, value)
              hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
-             defaults   () => { lanes, pos, conns, scans?, notes, caps? }: the scan's groups, connectors (links),
+             defaults   () => { groups, pos, conns, scans?, notes, caps? }: the scan's groups, connectors (links),
                         findings, notes and captions (one per screen, { id, title, body, on }), and empty
                         positions. Called for a fresh copy each time; a default group may carry title, sub and
                         subOn (blank when it does not)
            FlowLayout.groupName(group)   the short name: the title before its first colon, or
                                          "Untitled group". Pure; never changes the group.
-           layout.lanes layout.pos layout.conns layout.scans layout.notes layout.caps
+           layout.groups layout.pos layout.conns layout.scans layout.notes layout.caps
                       Live state, as the user sees it: scanned items with their edits laid over, then the
                       user's own (scans are the findings still shown). Read through layout every time, never
                       keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
-           layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.lanes
+           layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.groups
            layout.groupOf(id)        the group a frame is in, or undefined for a loose frame
            layout.takeOut(ids)       the frames leave their groups; a group left empty (or already empty) goes. Their
                              places are not touched.
@@ -5601,9 +5601,9 @@
          and needs code of its own. Needs FlowScan.
 
          On disk: { v: 3, lanes, pos, conns, scans, notes, caps, cc, gc }. Each of the first kinds (not pos) is
-         { edits, mine }, and lanes also has place (a frame the user put in a group or freed), order (a group
-         the user arranged) and seq (the order of the groups). "lanes" is the disk name for what the interface
-         calls groups. Nothing older than this is read: a saved layout whose groups are not in this form starts
+         { edits, mine }, and lanes (the groups) also has place (a frame the user put in a group or freed), order (a group
+         the user arranged) and seq (the order of the groups). "lanes" is the older name for groups and the only
+         place it is left: the key on disk, kept so saved layouts still load. Nothing older than this is read: a saved layout whose groups are not in this form starts
          from the scan (the file stays until the next save replaces it), and a kind that is not in this form
          is the scan's. Loading never throws.
          ====================================================================== */
@@ -5612,9 +5612,9 @@
         const MAX_UNDO = 40;
         const VERSION = 3;
         /* the kinds the scan provides and the user edits: saved as edits over the scan */
-        const KINDS = ["lanes", "conns", "scans", "notes", "caps"];
+        const KINDS = ["groups", "conns", "scans", "notes", "caps"];
         /* all but groups, whose frames have a rule of their own (FlowScan.mergeGroups) */
-        const PLAIN = KINDS.filter((k) => k !== "lanes");
+        const PLAIN = KINDS.filter((k) => k !== "groups");
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const list = (x) => (Array.isArray(x) ? x : []);
         /* id prefix -> the field the counter is saved in */
@@ -5652,7 +5652,7 @@
           function freshDefaults() {
             const d = clone(defaults());
             return {
-              lanes: d.lanes.map(groupRecord),
+              groups: d.groups.map(groupRecord),
               pos: d.pos,
               conns: list(d.conns),
               scans: list(d.scans),
@@ -5662,11 +5662,11 @@
           }
           /* the scanned text of a group, or blank when it is not a scanned group */
           const scannedText = (id) => {
-            const l = defaults().lanes.find((x) => x.id === id);
+            const l = defaults().groups.find((x) => x.id === id);
             const { title, sub, subOn } = l ? groupRecord(l) : BLANK_TEXT;
             return { title, sub, subOn };
           };
-          const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.lanes, "g") });
+          const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.groups, "g") });
           function adopt(state) {
             KINDS.forEach((k) => (layout[k] = state[k]));
             layout.pos = state.pos;
@@ -5676,7 +5676,7 @@
           function persisted() {
             const d = freshDefaults();
             const out = {};
-            out.lanes = FlowScan.diffGroups(d.lanes, layout.lanes.map(groupRecord));
+            out.lanes = FlowScan.diffGroups(d.groups, layout.groups.map(groupRecord)); /* "lanes" is the disk name */
             out.pos = layout.pos;
             PLAIN.forEach((k) => (out[k] = FlowScan.diff(d[k], layout[k])));
             return out;
@@ -5706,20 +5706,20 @@
           /* groups as the user sees them: the scan's, with the saved edits laid over, cleaned. Says which of the
              user's own groups had to take a new id because the scan now uses theirs. */
           function groupsFrom(saved, d) {
-            const { groups, renamed } = FlowScan.mergeGroups(d.lanes, saved, { fresh: () => layout.nextId("g") });
+            const merged = FlowScan.mergeGroups(d.groups, saved, { fresh: () => layout.nextId("g") });
             const seen = new Set();
-            const lanes = groups
+            const groups = merged.groups
               .map((g) => {
                 const screens = g.screens.filter((id) => hasScreen(id) && !seen.has(id));
                 screens.forEach((id) => seen.add(id));
                 return groupRecord({ ...g, screens });
               })
               .filter((g) => g.screens.length);
-            return { lanes, renamed };
+            return { groups, renamed: merged.renamed };
           }
           /* places only for things that exist, and a renamed group of the user's keeps its place */
-          function tidyPos(pos, lanes, renamed) {
-            const groupIds = new Set(lanes.map((g) => g.id));
+          function tidyPos(pos, groups, renamed) {
+            const groupIds = new Set(groups.map((g) => g.id));
             Object.values(pos).forEach((P) => {
               Object.keys(renamed).forEach((from) => from in P && ((P[renamed[from]] = P[from]), delete P[from]));
               Object.keys(P).forEach((id) => (hasScreen(id) || groupIds.has(id)) || delete P[id]);
@@ -5748,12 +5748,12 @@
               };
               const g = groupsFrom(st.lanes, d);
               if (isObj(st.pos)) for (const dev in st.pos) if (isObj(st.pos[dev])) d.pos[dev] = st.pos[dev];
-              const out = Object.assign({ lanes: g.lanes, pos: d.pos }, overlays(st, d));
-              tidyPos(out.pos, out.lanes, g.renamed);
+              const out = Object.assign({ groups: g.groups, pos: d.pos }, overlays(st, d));
+              tidyPos(out.pos, out.groups, g.renamed);
               adopt(out);
               counters = {
                 c: Math.max(counters.c, highestId(out.conns, "c")),
-                g: Math.max(counters.g, highestId(out.lanes, "g")),
+                g: Math.max(counters.g, highestId(out.groups, "g")),
               };
               freshIds(layout.conns);
               /* a user's group whose id the scan now uses took a new one: write that down at once */
@@ -5776,16 +5776,16 @@
             const st = JSON.parse(s);
             const d = freshDefaults();
             /* open or closed is view state: a group still here keeps how it is shown now */
-            const shown = new Map(layout.lanes.map((l) => [l.id, l.open]));
+            const shown = new Map(layout.groups.map((l) => [l.id, l.open]));
             const g = groupsFrom(st.lanes, d);
-            g.lanes.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
+            g.groups.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
             const kinds = overlays(st, d);
-            adopt(Object.assign({ lanes: g.lanes, pos: st.pos }, kinds));
+            adopt(Object.assign({ groups: g.groups, pos: st.pos }, kinds));
             freshIds(layout.conns);
             /* ids that came back with the snapshot must not be handed out again */
             counters = {
               c: Math.max(counters.c, highestId(layout.conns, "c")),
-              g: Math.max(counters.g, highestId(layout.lanes, "g")),
+              g: Math.max(counters.g, highestId(layout.groups, "g")),
             };
             layout.save();
           };
@@ -5798,34 +5798,34 @@
           };
           layout.newGroup = (screens) => ({ id: layout.nextId("g"), screens, open: true, ...BLANK_TEXT });
           const leave = (ids) =>
-            layout.lanes.forEach((L) => {
+            layout.groups.forEach((L) => {
               L.screens = L.screens.filter((x) => !ids.includes(x));
             });
           const dropEmpty = () => {
-            layout.lanes = layout.lanes.filter((L) => L.screens.length);
+            layout.groups = layout.groups.filter((L) => L.screens.length);
           };
           const forgetPlaces = (ids) => Object.values(layout.pos).forEach((P) => ids.forEach((i) => delete P[i]));
-          layout.groupOf = (id) => layout.lanes.find((l) => l.screens.includes(id));
+          layout.groupOf = (id) => layout.groups.find((l) => l.screens.includes(id));
           layout.takeOut = (ids) => {
             leave(ids);
             dropEmpty();
           };
           layout.moveInto = (ids, groupId, idx) => {
             leave(ids);
-            layout.lanes.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
+            layout.groups.find((l) => l.id === groupId).screens.splice(idx, 0, ...ids);
             forgetPlaces(ids);
             dropEmpty();
           };
           layout.groupFrames = (ids, { device, at } = {}) => {
             layout.takeOut(ids);
             const g = layout.newGroup(ids.slice());
-            layout.lanes.push(g);
+            layout.groups.push(g);
             forgetPlaces(ids);
             if (at) (layout.pos[device] || (layout.pos[device] = {}))[g.id] = { x: Math.round(at.x), y: Math.round(at.y) };
             return g;
           };
           layout.resetText = () => {
-            layout.lanes.forEach((l) => Object.assign(l, scannedText(l.id)));
+            layout.groups.forEach((l) => Object.assign(l, scannedText(l.id)));
             layout.caps = freshDefaults().caps;
           };
           layout.nextId = (kind) => {
@@ -6112,14 +6112,14 @@
          Interface
            m  the numbers one device gives the arrangement (FlowDevice.describe(id).metrics):
               colW phTop phH cap body collH deckS deckW peekX peekY closedW edge
-           FlowGeometry.laneH(m)         -> an open group's height on that device (the head, the body, the caption)
-           FlowGeometry.WORLD            laneLeft top0 gap head laneGap (world px)
+           FlowGeometry.groupH(m)         -> an open group's height on that device (the head, the body, the caption)
+           FlowGeometry.WORLD            groupLeft top0 gap head groupGap (world px)
            FlowGeometry.MOVES            { open, deck }: { dur ms, curve [x1,y1,x2,y2] } the slide the stylesheet
                                          eases its tilt and scale with, too
            FlowGeometry.arrange(input, m) -> { places, boxes, bottom }    pure; nothing is written back
              input  { groups: [{ id, screens, open }], screens: [every frame id, in order],
                       pos: { [group or loose frame id]: { x, y } } }   the saved positions on this device
-             place  { x, y, r, s, d, z, fx, fy, deck, lane, i }   s = drawn scale; d = ms it waits before it slides
+             place  { x, y, r, s, d, z, fx, fy, deck, group, i }   s = drawn scale; d = ms it waits before it slides
              box    { x, top, w, h, n, open }                  one per group; empty ones too
            FlowGeometry.loosePlace(k, bottom, m) -> { x, y }    the k-th default place of a loose frame
            FlowGeometry.bezier(x1, y1, x2, y2) -> (t) => y      the CSS cubic-bezier curve
@@ -6138,7 +6138,7 @@
            geo.step(now) -> [ids that moved]    geo.restsAt()    geo.settled(now)
          ====================================================================== */
       var FlowGeometry = (function () {
-        const WORLD = Object.freeze({ laneLeft: 96, top0: 150, gap: 104, head: 220, laneGap: 64 });
+        const WORLD = Object.freeze({ groupLeft: 96, top0: 150, gap: 104, head: 220, groupGap: 64 });
         const ROTS = [-2, 1.6, -1.2, 2.2];
         const PER_ROW = 5;
 
@@ -6181,12 +6181,12 @@
         });
         const EASE = { open: bezier(...MOVES.open.curve), deck: bezier(...MOVES.deck.curve) };
 
-        const laneH = (m) => WORLD.head + m.body + m.cap;
+        const groupH = (m) => WORLD.head + m.body + m.cap;
 
         /* loose frames with nowhere saved line up in rows of five below the groups */
         function loosePlace(k, bottom, m) {
           return {
-            x: WORLD.laneLeft + (k % PER_ROW) * (m.colW + 70),
+            x: WORLD.groupLeft + (k % PER_ROW) * (m.colW + 70),
             y: bottom + 140 + Math.floor(k / PER_ROW) * (m.phTop + m.phH + m.cap + 100),
           };
         }
@@ -6199,14 +6199,14 @@
             bottom = WORLD.top0;
           groups.forEach((g) => {
             const n = g.screens.length,
-              h = g.open ? laneH(m) : m.collH,
+              h = g.open ? groupH(m) : m.collH,
               w = g.open ? Math.max(Math.max(1, n) * m.colW + (Math.max(1, n) - 1) * WORLD.gap + 60, 460) : m.closedW;
             const p = pos[g.id];
             let box;
             if (p) box = { x: p.x, top: p.y, w, h, n, open: g.open };
             else {
-              box = { x: WORLD.laneLeft, top, w, h, n, open: g.open };
-              if (n) top += h + WORLD.laneGap;
+              box = { x: WORLD.groupLeft, top, w, h, n, open: g.open };
+              if (n) top += h + WORLD.groupGap;
             }
             boxes[g.id] = box;
             if (n) bottom = Math.max(bottom, box.top + h);
@@ -6222,7 +6222,7 @@
                     fx: 0,
                     fy: 0,
                     deck: false,
-                    lane: g.id,
+                    group: g.id,
                     i,
                   }
                 : {
@@ -6235,7 +6235,7 @@
                     fx: 22 * i,
                     fy: -10 * i,
                     deck: true,
-                    lane: g.id,
+                    group: g.id,
                     i,
                   };
             });
@@ -6244,7 +6244,7 @@
           screens.forEach((id) => {
             if (places[id]) return;
             const p = pos[id] || loosePlace(k++, bottom, m);
-            places[id] = { x: p.x, y: p.y, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, lane: null, i: -1 };
+            places[id] = { x: p.x, y: p.y, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, group: null, i: -1 };
           });
           return { places, boxes, bottom };
         }
@@ -6388,7 +6388,7 @@
               };
               Object.values(arr.boxes).forEach((b) => b.n && add(b.x - 20, b.top - 20, b.w + 40, b.h + 40));
               order.forEach((id) => {
-                if (arr.places[id].lane) return;
+                if (arr.places[id].group) return;
                 const b = frameBox(id);
                 add(b.x - 20, b.y - 20, b.w + 40, b.h + 40);
               });
@@ -6413,7 +6413,7 @@
           };
         }
 
-        return { WORLD, MOVES, laneH, arrange, loosePlace, bezier, create };
+        return { WORLD, MOVES, groupH, arrange, loosePlace, bezier, create };
       })();
     </script>
 
@@ -6637,7 +6637,7 @@
           function targetAt(c, ids) {
             const M = metrics();
             let best = null;
-            for (const L of layout.lanes) {
+            for (const L of layout.groups) {
               const m = L.screens.filter((x) => !ids.includes(x)).length;
               const B = geo.box(L.id);
               if (!B) continue;
@@ -6746,7 +6746,7 @@
                   pid: press.pid,
                   off,
                   held,
-                  was: new Map(layout.lanes.flatMap((l) => l.screens.map((s) => [s, l.id]))),
+                  was: new Map(layout.groups.flatMap((l) => l.screens.map((s) => [s, l.id]))),
                   proposal: { kind: "stay" },
                   last: keyOf(L0 ? { kind: "into", id: L0.id, idx: L0.screens.indexOf(press.pid) } : { kind: "loose" }),
                   base: layout.snapshot(),
@@ -6804,7 +6804,7 @@
             },
             view() {
               const pos = layout.pos[device()] || {};
-              const groups = layout.lanes.map((L) => ({ id: L.id, group: L, open: L.open, screens: L.screens }));
+              const groups = layout.groups.map((L) => ({ id: L.id, group: L, open: L.open, screens: L.screens }));
               const p = g && g.proposal;
               if (!p || p.kind === "stay") return { groups, pos };
               if (p.kind === "move") return { groups, pos: { ...pos, [p.id]: p.at } };
@@ -7106,7 +7106,7 @@
       const SCAN = READ.scan;
       const SCREENS = Object.fromEntries(SCAN.screens.map((s) => [s.id, s]));
       const ORDER = SCAN.screens.map((s) => s.id);
-      const DEFAULT_LANES = SCAN.groups;
+      const DEFAULT_GROUPS = SCAN.groups;
       const FINDINGS = SCAN.findings;
       const NOTES = SCAN.notes;
       const shortName = (x) => SCREENS[x].name.split(" · ")[0];
@@ -7546,7 +7546,7 @@
         hasScreen: (id) => !!SCREENS[id],
         /* the scan's groups, links (drawn as connectors), findings and notes; the layout keeps the user's edits */
         defaults: () => ({
-          lanes: SCAN.groups,
+          groups: SCAN.groups,
           pos: Object.fromEntries(FlowDevice.ids().map((id) => [id, {}])),
           conns: SCAN.links,
           notes: NOTES,
@@ -7670,23 +7670,23 @@
          take part in the ownership check, so a press on one is never a press on the canvas behind it */
       const captionKind = { name: "caption", owns: (t) => !!t.closest("[data-f],.cx,.cadd") };
       const annotations = FlowAnnotations.create({ commit, kinds: [noteKind, scanKind, linkKind, captionKind] });
-      const laneOf = (id) => layout.groupOf(id);
-      const isFree = (id) => !laneOf(id);
+      const groupOf = (id) => layout.groupOf(id);
+      const isFree = (id) => !groupOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${cssStr(id)}"]`);
-      const laneEl = (id) => document.getElementById(id);
+      const groupEl = (id) => document.getElementById(id);
       function posOf() {
         return layout.pos[DEV.id] || (layout.pos[DEV.id] = {});
       }
       function sameAsDefault(L) {
-        const d = DEFAULT_LANES.find((x) => x.id === L.id);
+        const d = DEFAULT_GROUPS.find((x) => x.id === L.id);
         return (
           !!d &&
           d.screens.length === L.screens.length &&
           d.screens.every((s) => L.screens.includes(s))
         );
       }
-      const laneName = FlowLayout.groupName;
-      const groupById = (id) => layout.lanes.find((l) => l.id === id);
+      const groupName = FlowLayout.groupName;
+      const groupById = (id) => layout.groups.find((l) => l.id === id);
 
       /* A drag of frames or of a group proposes; the drop commits (FlowGesture). While one is live the page is drawn from
          gesture.view(): the layout as it would be if the proposal were dropped. The layout itself is not touched. */
@@ -7728,8 +7728,8 @@
           if (!col || !f) return;
           const st = col.style;
           col.classList.toggle("deck", geo.isDeck(id));
-          col.classList.toggle("free", !f.lane);
-          col.dataset.lane = f.lane || "";
+          col.classList.toggle("free", !f.group);
+          col.dataset.lane = f.group || "";
           putFrame(id, now);
           st.setProperty("--r", f.r + "deg");
           st.setProperty("--d", f.d + "ms");
@@ -7737,7 +7737,7 @@
           st.setProperty("--fx", f.fx + "px");
           st.setProperty("--fy", f.fy + "px");
           const cn = col.querySelector(".cn");
-          if (cn) cn.textContent = f.lane ? String(f.i + 1) : "";
+          if (cn) cn.textContent = f.group ? String(f.i + 1) : "";
         });
       }
       /* the one loop that runs while a frame is on its way: move what moved, redraw what hangs off it. It stops
@@ -7762,7 +7762,7 @@
       }
 
       /* a group's own objects: headline, standfirst, edges between consecutive frames */
-      function makeLane(L) {
+      function makeGroup(L) {
         const el = document.createElement("section");
         el.className = "lane";
         el.id = L.id;
@@ -7775,7 +7775,7 @@
         world.insertBefore(el, notesEl);
         el.querySelector(".ghead").addEventListener("click", (e) => {
           e.stopPropagation();
-          const Lc = layout.lanes.find((l) => l.id === el.id);
+          const Lc = layout.groups.find((l) => l.id === el.id);
           if (!Lc) return;
           if (e.target.closest(".grip")) return;
           if (e.target.closest(".fmore")) {
@@ -7787,7 +7787,7 @@
             else play(Lc.screens);
             return;
           }
-          if (e.target.closest(".chev") || !Lc.open) setLane(Lc.id, !Lc.open);
+          if (e.target.closest(".chev") || !Lc.open) setGroup(Lc.id, !Lc.open);
         });
         return el;
       }
@@ -7822,7 +7822,7 @@
         put(".gsub", L.sub);
         L.el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
-      function syncLanes() {
+      function syncGroups() {
         const m = DEV.metrics;
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
@@ -7831,7 +7831,7 @@
         });
         shown.forEach(({ group: L, screens }) => {
           let el = document.getElementById(L.id);
-          if (!el) el = makeLane(L);
+          if (!el) el = makeGroup(L);
           L.el = el;
           showGroupText(L);
           const n = screens.length;
@@ -7853,7 +7853,7 @@
           );
           el.querySelector(".gcount").textContent =
             n + (n === 1 ? " screen" : " screens");
-          const dm = DEFAULT_LANES.find((x) => x.id === L.id);
+          const dm = DEFAULT_GROUPS.find((x) => x.id === L.id);
           el.querySelector(".gmeta").innerHTML =
             dm && sameAsDefault(L)
               ? " · <code>" +
@@ -7868,7 +7868,7 @@
       }
       function relayout(opts) {
         arrangeFrames(opts);
-        syncLanes();
+        syncGroups();
         updateBars();
         updateAllBtn();
         updateSelBox();
@@ -8046,12 +8046,12 @@
       }
 
       /* ---------- geometry helpers ---------- */
-      function laneRect(L) {
+      function groupRect(L) {
         const b = geo.box(L.id);
         return { x: b.x - 40, y: b.top - 40, w: b.w + 80, h: b.h + 80 };
       }
-      function setLane(id, open, opts = {}) {
-        const L = layout.lanes.find((l) => l.id === id);
+      function setGroup(id, open, opts = {}) {
+        const L = layout.groups.find((l) => l.id === id);
         if (!L || L.open === open) return;
         commit(
           () => {
@@ -8060,10 +8060,10 @@
           VIEW_STATE,
         );
         if (open) {
-          if (opts.fly !== false) fly(fitRect(laneRect(L), 40));
+          if (opts.fly !== false) fly(fitRect(groupRect(L), 40));
         } else {
           if ([...selSet].some((i) => L.screens.includes(i))) select(null);
-          if (playing && playLane === id) stopPlay();
+          if (playing && playGroup === id) stopPlay();
           if (opts.fly !== false) fly(fitRect(geo.bounds(), 60, 1.1));
         }
       }
@@ -8136,7 +8136,7 @@
           fly(fitRect(geo.bounds(), 30));
           return;
         }
-        const L = layout.lanes.find((l) => l.id === n);
+        const L = layout.groups.find((l) => l.id === n);
         if (!L) return;
         if (!L.open) {
           commit(
@@ -8146,7 +8146,7 @@
             VIEW_STATE,
           );
         }
-        fly(fitRect(laneRect(L), 40));
+        fly(fitRect(groupRect(L), 40));
       }
 
       /* thin scrollbars */
@@ -8211,7 +8211,7 @@
         seltb.classList.toggle("multi", selSet.size > 1);
         seltb.querySelector(".cnt").textContent = selSet.size + " selected";
         seltb.querySelector('[data-a="ungroup"]').hidden = ![...selSet].some(
-          (id) => laneOf(id),
+          (id) => groupOf(id),
         );
         updateSelBox();
       }
@@ -8225,8 +8225,8 @@
       }
       function select(id, focus) {
         if (id) {
-          const L = laneOf(id);
-          if (L && !L.open) setLane(L.id, true, { fly: false });
+          const L = groupOf(id);
+          if (L && !L.open) setGroup(L.id, true, { fly: false });
         }
         setSel(id ? [id] : [], id || null);
         if (focus && id) focusScreen(id);
@@ -8251,7 +8251,7 @@
         if (!a || !selSet.size) return;
         e.stopPropagation();
         const id = selected || [...selSet][0],
-          L = laneOf(id);
+          L = groupOf(id);
         if (a === "focus") focusScreen(id);
         if (a === "inspect") panel.open("inspect", id);
         if (a === "comment")
@@ -8286,17 +8286,18 @@
           col.classList.toggle("u-dim", !!sw && !hit);
         });
       }
-      /* a sweep that has just begun: show the screens it found (closed groups open for it without being saved) and go there */
+      /* a sweep that has just begun: show the screens it found (closed groups open for it) and go there. Opening is
+         view state like any other, so the next save, whatever it is for, writes it down; it is not an undo step. */
       function revealSweep(sw) {
         let opened = false;
         sw.uses.forEach((id) => {
-          const L = laneOf(id);
+          const L = groupOf(id);
           if (L && !L.open) {
             L.open = true;
             opened = true;
           }
         });
-        if (opened) relayout(); /* looking something up must not rewrite the saved layout */
+        if (opened) relayout(); /* redraw only: nothing is saved or recorded for undo here */
         paintSweep(sw);
         let x0 = 1e9,
           y0 = 1e9,
@@ -8436,7 +8437,7 @@
       }
       function renderInspect(id, sw, still) {
         const s = SCREENS[id],
-          L = laneOf(id),
+          L = groupOf(id),
           file = s.file.split("/"),
           nOnly = s.states.filter((x) => !x.reachable).length,
           many = FrameDom.switchable(id);
@@ -8467,7 +8468,7 @@
               )
               .join("")}</ul>`;
         pbody.innerHTML = `<div class="ip${still ? " still" : ""}">
-    <header class="ihead" style="--n:0"><code class="r">${esc(s.route)}</code><p class="icap">${L ? esc(laneName(L)) : "Free frame"} · ${DEV.vp} · ${DEV.label}</p></header>
+    <header class="ihead" style="--n:0"><code class="r">${esc(s.route)}</code><p class="icap">${L ? esc(groupName(L)) : "Free frame"} · ${DEV.vp} · ${DEV.label}</p></header>
     <section style="--n:1"><h3>Source</h3><div class="srcrow"><div class="crumbs">${file.map((p, i) => `<span class="${i === file.length - 1 ? "last" : ""}">${esc(p)}</span>`).join('<i aria-hidden="true">›</i>')}</div><button class="copy" aria-label="Copy path" title="Copy path"><svg class="ic-copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ic-done" aria-hidden="true"><use href="#i-check"/></svg></button></div><button class="open"><svg aria-hidden="true"><use href="#i-code"/></svg>Open in code</button></section>
     <section style="--n:2"><h3>Components<em>${s.components.length}</em></h3><div class="chipsrow">${chips}</div><p class="ihint" id="ipHint" aria-live="polite"></p><div id="ipUses"></div></section>
     <section style="--n:3"><h3>States<em>${s.states.length}</em></h3><p class="sfact">${s.states.length} found${nOnly ? `. <b>${nOnly} only reachable in code.</b>` : ", all reachable from the UI."}${many ? " Tap one to see it on the screen." : ""}</p>${states}</section>
@@ -8533,10 +8534,10 @@
       function renderSearchBody() {
         pbody.innerHTML = `<div class="qrow"><input id="q" placeholder="Describe what you’re looking for" autocomplete="off"><label>Filter by</label>
     <select id="fType"><option value="any">Any type</option><option value="screens">Screens</option><option value="routes">Routes</option><option value="components">Components</option></select>
-    <select id="fWhere"><option value="any">Anywhere</option>${layout.lanes.filter(
+    <select id="fWhere"><option value="any">Anywhere</option>${layout.groups.filter(
       (l) => l.screens.length,
     )
-      .map((l) => `<option value="${esc(l.id)}">${esc(laneName(l))}</option>`)
+      .map((l) => `<option value="${esc(l.id)}">${esc(groupName(l))}</option>`)
       .join(
         "",
       )}<option value="free">On the canvas</option></select></div><div id="results"></div>`;
@@ -8560,11 +8561,11 @@
             ? "anywhere"
             : where === "free"
               ? "on the canvas"
-              : "in " + laneName(layout.lanes.find((l) => l.id === where) || { id: where });
+              : "in " + groupName(layout.groups.find((l) => l.id === where) || { id: where });
         setTitle("Search", `${type === "any" ? "Any type" : { screens: "Screens", routes: "Routes", components: "Components" }[type]} of content ${whereName}`);
         const hit = ORDER.filter((id) => {
           const s = SCREENS[id],
-            g = laneOf(id);
+            g = groupOf(id);
           if (where !== "any" && (g ? g.id : "free") !== where) return false;
           if (!q) return true;
           const hay =
@@ -8606,7 +8607,7 @@
    PLAY FLOW
    ====================================================================== */
       let playing = false,
-        playLane = null;
+        playGroup = null;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       function flowOrder(L, start) {
         const allowed = new Set(L.screens),
@@ -8635,19 +8636,19 @@
       }
       async function play(ids) {
         if (!ids.length) return;
-        const L = laneOf(ids[0]);
+        const L = groupOf(ids[0]);
         if (!L) return;
         ids =
           ids.length >= L.screens.length ? flowOrder(L) : flowOrder(L, ids[0]);
         stopPlay();
         playing = true;
-        playLane = L.id;
-        const pl = laneEl(playLane).querySelector(".fplay");
+        playGroup = L.id;
+        const pl = groupEl(playGroup).querySelector(".fplay");
         pl.classList.add("on");
         pl.querySelector("use").setAttribute("href", "#i-stop");
         pl.querySelector("span").textContent = "Stop";
         if (!L.open) {
-          setLane(L.id, true, { fly: false });
+          setGroup(L.id, true, { fly: false });
           await sleep(450);
         }
         let prev = null;
@@ -8663,7 +8664,7 @@
       }
       function stopPlay() {
         playing = false;
-        playLane = null;
+        playGroup = null;
         document.querySelectorAll(".fplay").forEach((b) => {
           b.classList.remove("on");
           b.querySelector("use").setAttribute("href", "#i-play");
@@ -9002,7 +9003,7 @@
          and ask for its name */
       function afterGrouped(L, ids, { fly: bring }) {
         setSel(ids, ids[ids.length - 1]);
-        if (bring) fly(fitRect(laneRect(L), 40));
+        if (bring) fly(fitRect(groupRect(L), 40));
         setTimeout(() => focusTitle(L.id), 650);
         toast(
           ids.length === 1
@@ -9025,18 +9026,18 @@
       }
       function removeFromGroup(ids) {
         const m = DEV.metrics;
-        ids = ids.filter((i) => laneOf(i));
+        ids = ids.filter((i) => groupOf(i));
         if (!ids.length) return;
         commit(
           () => {
             const P = posOf();
-            const byLane = new Map();
+            const byGroup = new Map();
             ids.forEach((i) => {
-              const L = laneOf(i);
-              if (!byLane.has(L)) byLane.set(L, []);
-              byLane.get(L).push(i);
+              const L = groupOf(i);
+              if (!byGroup.has(L)) byGroup.set(L, []);
+              byGroup.get(L).push(i);
             });
-            byLane.forEach((list, L) => {
+            byGroup.forEach((list, L) => {
               const box = geo.box(L.id);
               const end =
                 box.x +
@@ -9063,7 +9064,7 @@
         );
       }
       function dissolveGroup(L) {
-        const name = laneName(L);
+        const name = groupName(L);
         commit(
           () => {
             const P = posOf();
@@ -9095,10 +9096,10 @@
             /* keep the stacking order you arranged: top to bottom, then left to right */
             const rank = (L) => (L.screens.length ? 0 : 1);
             const at = (L) => geo.box(L.id);
-            layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || at(a).top - at(b).top || at(a).x - at(b).x);
+            layout.groups = layout.groups.slice().sort((a, b) => rank(a) - rank(b) || at(a).top - at(b).top || at(a).x - at(b).x);
             const loose = readingOrder(ORDER.filter(isFree));
             const P = layout.pos[DEV.id];
-            layout.lanes.forEach((L) => delete P[L.id]);
+            layout.groups.forEach((L) => delete P[L.id]);
             loose.forEach((id) => delete P[id]);
             /* pinning the loose frames is the user's tidy, so it is written here, in reading order, and nowhere else */
             const M = DEV.metrics;
@@ -9141,10 +9142,10 @@
         toast("Layout reset to the scanned arrangement");
       }
       function focusTitle(id) {
-        const L = layout.lanes.find((l) => l.id === id);
+        const L = layout.groups.find((l) => l.id === id);
         if (!L) return;
-        if (!L.open) setLane(id, true, { fly: false });
-        const t = laneEl(id) && laneEl(id).querySelector(".gtitle");
+        if (!L.open) setGroup(id, true, { fly: false });
+        const t = groupEl(id) && groupEl(id).querySelector(".gtitle");
         if (!t) return;
         t.focus();
         const r = document.createRange();
@@ -9174,7 +9175,7 @@
               closeMenus();
               const a = b.dataset.ga;
               if (a === "rename") focusTitle(L.id);
-              if (a === "toggle") setLane(L.id, !L.open);
+              if (a === "toggle") setGroup(L.id, !L.open);
               if (a === "play") play(L.screens);
               if (a === "ungroup") dissolveGroup(L);
             }),
@@ -9243,7 +9244,7 @@
           /* a group dragged by its grip moves as one piece with its header: the frames do not slide after it */
           if (pv.regrouped) {
             arrangeFrames({ snap: true });
-            syncLanes();
+            syncGroups();
             updateBars();
             drawConns();
           }
@@ -9259,7 +9260,7 @@
         });
         document.querySelectorAll(".col.merge").forEach((c) => c.dataset.id !== pv.mergeFrame && c.classList.remove("merge"));
         if (pv.mergeFrame) colOf(pv.mergeFrame)?.classList.add("merge");
-        layout.lanes.forEach((L) => L.el && L.el.classList.toggle("drop", L.id === pv.dropGroup));
+        layout.groups.forEach((L) => L.el && L.el.classList.toggle("drop", L.id === pv.dropGroup));
         if (pv.regrouped) relayout();
         else {
           Object.keys(pv.held).forEach((id) => putFrame(id));
@@ -9272,7 +9273,7 @@
         document.body.classList.remove("gdrag");
         selbox.classList.remove("live");
         document.querySelectorAll(".col.dragging,.col.merge").forEach((c) => c.classList.remove("dragging", "merge"));
-        layout.lanes.forEach((L) => L.el && L.el.classList.remove("drop"));
+        layout.groups.forEach((L) => L.el && L.el.classList.remove("drop"));
       }
       function beginDrag() {
         moved = true;
@@ -9280,11 +9281,11 @@
         hideHint();
         const pointer = toWorld(press.sx, press.sy);
         if (press.kind === "group") {
-          if (!press.lane) {
+          if (!press.group) {
             press = null;
             return;
           }
-          gesture.begin({ kind: "group", id: press.lane.id, pointer });
+          gesture.begin({ kind: "group", id: press.group.id, pointer });
           return;
         }
         const id = press.id;
@@ -9303,8 +9304,8 @@
         if (!r) return;
         if (r.kind === "merge") afterGrouped(r.group, r.ids, { fly: false });
         else if (r.kind === "into") {
-          const where = layout.lanes.find((l) => l.id === r.group);
-          toast((r.moved ? `Moved into “${laneName(where)}”` : "Reordered") + ". ⌘Z to undo.");
+          const where = layout.groups.find((l) => l.id === r.group);
+          toast((r.moved ? `Moved into “${groupName(where)}”` : "Reordered") + ". ⌘Z to undo.");
         } else if (r.kind === "loose" && r.moved) toast("Taken out of its group. ⌘Z to undo.");
       }
       /* Escape and pointercancel: the pointer is taken off whatever it was dragging. Nothing was written, so there is
@@ -9392,11 +9393,11 @@
         }
         const grip = e.target.closest(".grip");
         if (grip) {
-          const L = layout.lanes.find((l) => l.id === grip.closest(".lane").id);
+          const L = layout.groups.find((l) => l.id === grip.closest(".lane").id);
           e.preventDefault();
           stopPlay();
           moved = false;
-          press = { kind: "group", lane: L, sx: e.clientX, sy: e.clientY };
+          press = { kind: "group", group: L, sx: e.clientX, sy: e.clientY };
           return;
         }
         const col = e.target.closest(".col");
@@ -9409,7 +9410,7 @@
           press = col.classList.contains("deck")
             ? {
                 kind: "group",
-                lane: laneOf(col.dataset.id),
+                group: groupOf(col.dataset.id),
                 sx: e.clientX,
                 sy: e.clientY,
               }
@@ -9524,8 +9525,8 @@
       );
 
       /* deck hover fans the cards */
-      function fanLane(id, on) {
-        const L = layout.lanes.find((l) => l.id === id);
+      function fanGroup(id, on) {
+        const L = layout.groups.find((l) => l.id === id);
         if (L)
           L.screens.forEach((s) => {
             const c = colOf(s);
@@ -9535,13 +9536,13 @@
       world.addEventListener("pointerover", (e) => {
         const c = e.target.closest(".col.deck");
         if (c) {
-          fanLane(c.dataset.lane, true);
+          fanGroup(c.dataset.lane, true);
           return;
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = layout.lanes.find((l) => l.id === h.closest(".lane").id);
-          if (L && !L.open) fanLane(L.id, true);
+          const L = layout.groups.find((l) => l.id === h.closest(".lane").id);
+          if (L && !L.open) fanGroup(L.id, true);
         }
       });
       world.addEventListener("pointerout", (e) => {
@@ -9552,22 +9553,22 @@
             e.relatedTarget.closest &&
             e.relatedTarget.closest(".col.deck");
           if (!to || to.dataset.lane !== c.dataset.lane)
-            fanLane(c.dataset.lane, false);
+            fanGroup(c.dataset.lane, false);
           return;
         }
         const h = e.target.closest(".ghead");
         if (h) {
-          const L = layout.lanes.find((l) => l.id === h.closest(".lane").id);
+          const L = layout.groups.find((l) => l.id === h.closest(".lane").id);
           if (L && !(e.relatedTarget && h.contains(e.relatedTarget)))
-            fanLane(L.id, false);
+            fanGroup(L.id, false);
         }
       });
 
       world.addEventListener("click", (e) => {
         const col = e.target.closest(".col");
         if (col && col.classList.contains("deck")) {
-          const L = laneOf(col.dataset.id);
-          if (L) setLane(L.id, true);
+          const L = groupOf(col.dataset.id);
+          if (L) setGroup(L.id, true);
           return;
         }
         if (col) {
@@ -9663,10 +9664,10 @@
       function buildViews() {
         $("#mViews").innerHTML =
           `<button class="mi" data-view="all"><svg><use href="#i-frame"/></svg>Overview<span class="k">1</span></button>` +
-          layout.lanes.filter((l) => l.screens.length)
+          layout.groups.filter((l) => l.screens.length)
             .map(
               (l, i) =>
-                `<button class="mi" data-view="${esc(l.id)}"><svg><use href="#i-frame"/></svg>${esc(laneName(l))}<span class="k">${i < 3 ? i + 2 : ""}</span></button>`,
+                `<button class="mi" data-view="${esc(l.id)}"><svg><use href="#i-frame"/></svg>${esc(groupName(l))}<span class="k">${i < 3 ? i + 2 : ""}</span></button>`,
             )
             .join("");
         $("#mViews")
@@ -9818,9 +9819,9 @@
         const device = FlowDevice.idForKey(e.key);
         if (device) setDevice(device);
         if (e.key === "1") view("all");
-        if (e.key === "2" && layout.lanes[0]) view(layout.lanes[0].id);
-        if (e.key === "3" && layout.lanes[1]) view(layout.lanes[1].id);
-        if (e.key === "4" && layout.lanes[2]) view(layout.lanes[2].id);
+        if (e.key === "2" && layout.groups[0]) view(layout.groups[0].id);
+        if (e.key === "3" && layout.groups[1]) view(layout.groups[1].id);
+        if (e.key === "4" && layout.groups[2]) view(layout.groups[2].id);
         if (e.key === "ArrowRight") {
           step(1);
           e.preventDefault();
@@ -9884,10 +9885,10 @@
       }
       function toggleAll() {
         stopPlay();
-        const L = layout.lanes.filter((l) => l.screens.length);
+        const L = layout.groups.filter((l) => l.screens.length);
         if (!L.length) return;
         const open = !L.every((l) => l.open);
-        if (!open && [...selSet].some((i) => laneOf(i))) select(null);
+        if (!open && [...selSet].some((i) => groupOf(i))) select(null);
         commit(
           () => {
             L.forEach((l) => {
