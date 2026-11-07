@@ -5883,7 +5883,7 @@
          The one place that knows where a frame is. Two questions, answered together:
          where it is meant to be (its place, from the groups, the saved positions and the device), and
          where it is right now (the place it is sliding to, and the time it set off). Connectors, note
-         homing, hit-tests and the camera all ask here; nobody reads the page to find out.
+         homing, hit-tests and the camera all ask here; nobody reads the page to find where a frame is.
 
          The slide is the module's, not the stylesheet's: it holds each frame's start, destination, wait,
          duration and curve, so "is it there yet" has an answer (restsAt, settled) that follows the flow's
@@ -5902,11 +5902,11 @@
                       pos: { [group or loose frame id]: { x, y } } }   the saved positions on this device
              place  { x, y, r, s, d, z, fx, fy, deck, lane, i }   s = drawn scale; d = ms it waits before it slides
              box    { x, top, w, h, n, open }                  one per group; empty ones too
-           FlowGeometry.slot(k, bottom, m) -> { x, y }          the k-th default place of a loose frame
+           FlowGeometry.loosePlace(k, bottom, m) -> { x, y }    the k-th default place of a loose frame
            FlowGeometry.bezier(x1, y1, x2, y2) -> (t) => y      the CSS cubic-bezier curve
 
            const geo = FlowGeometry.create({ reduceMotion })
-           geo.setMetrics(m)    geo.setReduceMotion(bool)    geo.reset()
+           geo.setMetrics(m)    geo.setReduceMotion(bool)    geo.reset()   (setMetrics first: retarget throws without it)
            geo.retarget(input, now, { snap }) -> arrangement   new places; frames slide there from where they
                                                 are now. A frame seen for the first time, or any frame under
                                                 reduced motion or { snap }, is simply there.
@@ -5979,7 +5979,7 @@
         }
 
         /* loose frames with nowhere saved line up in rows of five below the groups */
-        function slot(k, bottom, m) {
+        function loosePlace(k, bottom, m) {
           return {
             x: WORLD.laneLeft + (k % PER_ROW) * (m.colW + 70),
             y: bottom + 140 + Math.floor(k / PER_ROW) * (WORLD.phTop + m.phH + m.cap + 100),
@@ -6038,7 +6038,7 @@
           let k = 0;
           screens.forEach((id) => {
             if (places[id]) return;
-            const p = pos[id] || slot(k++, bottom, m);
+            const p = pos[id] || loosePlace(k++, bottom, m);
             places[id] = { x: p.x, y: p.y, r: 0, s: 1, d: 0, z: 5, fx: 0, fy: 0, deck: false, lane: null, i: -1 };
           });
           return { places, boxes, bottom };
@@ -6208,7 +6208,7 @@
           };
         }
 
-        return { WORLD, MOVES, metrics, arrange, slot, bezier, create };
+        return { WORLD, MOVES, metrics, arrange, loosePlace, bezier, create };
       })();
     </script>
 
@@ -6228,6 +6228,7 @@
            FlowRouting.pickSides(a, b)    -> [fromSide, toSide]
            FlowRouting.ortho(a, b)        a, b: { x, y, nx, ny }; b may be a free point (nx = ny = 0)
            FlowRouting.rounded(pts, r)    svg path through pts with rounded corners
+           FlowRouting.polyMid(pts)       the point half way along the polyline (where the label chip sits)
          ====================================================================== */
       var FlowRouting = (function () {
         function sidePt(r, side, edge) {
@@ -6449,30 +6450,18 @@
       const PLAIN_FINDING = { text: (f) => `<small>Scanner</small>${esc(f.text || "")}`, tie() {}, act() {} };
       const findingKind = (f) => FINDING_KINDS[f.kind] || PLAIN_FINDING;
 
-      /* geometry (lane-local, world px) */
-      const {
-        laneLeft: LANE_LEFT,
-        top0: TOP0,
-        gap: GAP,
-        head: HEAD,
-        phTop: PH_TOP,
-        laneGap: LANE_GAP,
-      } = FlowGeometry.WORLD;
+      /* the canvas's fixed measurements, in world px (from the geometry) */
+      const { laneLeft: LANE_LEFT, gap: GAP, head: HEAD, phTop: PH_TOP } = FlowGeometry.WORLD;
       /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
       const geo = FlowGeometry.create({
         reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
       });
-      matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (e) => geo.setReduceMotion(e.matches));
-      let CAP,
-        COL_W,
-        PH_H,
-        EDGE_Y,
-        LANE_H,
-        COLL_H,
-        DECK_S,
-        DECK_W,
-        PEEK_X,
-        PEEK_Y;
+      matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (e) => {
+        geo.setReduceMotion(e.matches);
+        applyFrames(); /* a slide in progress is put where it was going */
+        drawConns();
+      });
+      let CAP, COL_W, PH_H, COLL_H, DECK_W, PEEK_X;
       const DEVICES = {
         mobile: {
           id: "mobile",
@@ -6551,14 +6540,10 @@
         geo.setMetrics(M);
         COL_W = M.colW;
         PH_H = M.phH;
-        EDGE_Y = PH_TOP + M.edge;
         CAP = M.cap;
-        LANE_H = M.laneH;
         COLL_H = M.collH;
-        DECK_S = M.deckS;
         DECK_W = M.deckW;
         PEEK_X = M.peekX;
-        PEEK_Y = M.peekY;
         const r = document.documentElement.style;
         r.setProperty("--cw", DEV.cw + "px");
         r.setProperty("--ch", DEV.ch + "px");
@@ -8534,7 +8519,8 @@
             const was = layout.snapshot();
             /* keep the stacking order you arranged: top to bottom, then left to right */
             const rank = (L) => (L.screens.length ? 0 : 1);
-            layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || a.top - b.top || a.x - b.x);
+            const at = (L) => geo.box(L.id);
+            layout.lanes = layout.lanes.slice().sort((a, b) => rank(a) - rank(b) || at(a).top - at(b).top || at(a).x - at(b).x);
             const loose = readingOrder(ORDER.filter(isFree));
             const P = layout.pos[DEV.id];
             layout.lanes.forEach((L) => delete P[L.id]);
@@ -8542,7 +8528,7 @@
             /* pinning the loose frames is the user's tidy, so it is written here, in reading order, and nowhere else */
             const M = FlowGeometry.metrics(DEV);
             const { bottom } = FlowGeometry.arrange(geoInput(), M);
-            loose.forEach((id, k) => (P[id] = FlowGeometry.slot(k, bottom, M)));
+            loose.forEach((id, k) => (P[id] = FlowGeometry.loosePlace(k, bottom, M)));
             /* findings back beside their frames; scanned notes back where the scan put them */
             /* forgetting the user's position for this device puts a scanned card back where the scan put it */
             const forget = (item, scanned) => {
@@ -8811,11 +8797,11 @@
             x: Math.round(drag.start.x + (w.x - drag.w0.x)),
             y: Math.round(drag.start.y + (w.y - drag.w0.y)),
           };
-          arrangeFrames();
+          /* a group dragged by its grip moves as one piece with its header: the frames do not slide after it */
+          arrangeFrames({ snap: true });
           syncLanes();
           updateBars();
           drawConns();
-          pump();
           return;
         }
         selbox.classList.add("live");

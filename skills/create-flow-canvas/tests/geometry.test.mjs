@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowGeometry, FlowRouting, html } from "./modules.mjs";
 
-const { arrange, slot, metrics, WORLD, create } = FlowGeometry;
+const { arrange, loosePlace, metrics, WORLD, create } = FlowGeometry;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const xy = (r) => ({ x: r.x, y: r.y });
 const MOBILE = { cw: 270, ch: 585, cap: 170, body: 744, collH: 290, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, closedW: 440, edge: 509 };
@@ -78,21 +78,21 @@ test("loose frames with no saved position line up in rows of five below the grou
   const a = plain(arrange(input, M));
   const bottom = WORLD.top0 + M.laneH;
   assert.equal(a.bottom, bottom);
-  assert.deepEqual(plain(a.places.f0), { ...plain(a.places.f0), x: slot(0, bottom, M).x, y: slot(0, bottom, M).y });
-  assert.deepEqual([a.places.f5.x, a.places.f5.y], [slot(5, bottom, M).x, slot(5, bottom, M).y]);
+  assert.deepEqual(plain(a.places.f0), { ...plain(a.places.f0), x: loosePlace(0, bottom, M).x, y: loosePlace(0, bottom, M).y });
+  assert.deepEqual([a.places.f5.x, a.places.f5.y], [loosePlace(5, bottom, M).x, loosePlace(5, bottom, M).y]);
   assert.equal(a.places.f5.y > a.places.f0.y, true, "the sixth starts a new row");
   assert.deepEqual(input.pos, {}, "arranging is a question, not a save");
 });
 
-test("a loose frame's default slot follows the groups when one grows", () => {
+test("a loose frame's default place follows the groups when one grows", () => {
   const closed = plain(arrange(world([group("g", ids(2), false)], ["f"]), M));
   const open = plain(arrange(world([group("g", ids(2), true)], ["f"]), M));
   assert.equal(open.places.f.y - closed.places.f.y, M.laneH - M.collH);
 });
 
-test("slots count only the frames that have none", () => {
+test("default places are handed out only to the frames that have none", () => {
   const a = plain(arrange(world([], ["a", "b", "c"], { b: { x: 1, y: 1 } }), M));
-  assert.deepEqual([a.places.c.x, a.places.c.y], [slot(1, a.bottom, M).x, slot(1, a.bottom, M).y]);
+  assert.deepEqual([a.places.c.x, a.places.c.y], [loosePlace(1, a.bottom, M).x, loosePlace(1, a.bottom, M).y]);
 });
 
 /* ---------- easing ---------- */
