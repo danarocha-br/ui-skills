@@ -5152,6 +5152,8 @@
                                                its saved place here, else carried from the device it was first placed on
                                                (the same relative place on that device's screen), else the resting spot.
                                                Never written back.
+           FlowDevice.carried(saved, id) -> [x, y] | null   the same without the last step: null when no device has a
+                                               place, for an annotation (a finding) whose default is not the resting spot.
            `metrics.phTop` is where the screen starts inside the frame's column.
          ====================================================================== */
       var FlowDevice = (function () {
@@ -5208,13 +5210,15 @@
             b = describe(to).metrics;
           return [Math.round((at[0] * b.colW) / a.colW), Math.round(b.phTop + ((at[1] - a.phTop) * b.phH) / a.phH)];
         }
-        function placeOn(saved, id) {
+        /* the place saved on this device, else the one carried from the first device that has one, else null */
+        function carried(saved, id) {
           const isPlace = (a) => Array.isArray(a) && a.length === 2 && a.every(Number.isFinite);
           if (saved && isPlace(saved[id])) return saved[id];
           const from = saved && Object.keys(saved).find((k) => BY_ID.has(k) && isPlace(saved[k]));
-          return from ? carry(saved[from], from, id) : restingSpot(id);
+          return from ? carry(saved[from], from, id) : null;
         }
-        return { ids, describe, idForKey, restingSpot, placeOn };
+        const placeOn = (saved, id) => carried(saved, id) || restingSpot(id);
+        return { ids, describe, idForKey, restingSpot, placeOn, carried };
       })();
     </script>
     <script id="scan-module">
@@ -5261,6 +5265,13 @@
                                   Gives { groups, renamed: { oldId: newId } }.
            FlowScan.diffGroups(scanned, groups)   the reverse: { edits, mine, place, order, seq } holding only what the
                                   user changed (order and seq only where they differ from what the scan gives).
+           FlowScan.dataKinds(get)   the data halves of the four kinds a scan provides (captions, findings, notes,
+                                  connectors), in the order they are redrawn. get() gives the scan as read() returns it.
+                                  Each is { name, scanned(), clean?(items, { hasScreen, scanned }), resetBy?, counter? }:
+                                  name is the field in the layout and on disk; scanned() the items the scan gives;
+                                  clean what loading drops or repairs; resetBy "annotations" for a kind that "Reset
+                                  layout" leaves alone; counter { prefix, saved } for ids handed out as "c7". FlowLayout
+                                  reads these and nothing else about a kind.
          ====================================================================== */
       var FlowScan = (function () {
         "use strict";
@@ -5530,16 +5541,46 @@
           return { edits, mine, place, order, seq: same(ids, natural) ? [] : ids };
         }
 
-        return { read, merge, diff, mergeGroups, diffGroups };
+        /* The data halves of the four kinds a scan provides: what FlowLayout needs to save, load and reset them.
+           The list order is also the order they are redrawn in (captions first; connectors, which are drawn from
+           where the frames are, last). get() gives the scan as read(): it is called each time, so a new scan is seen. */
+        function dataKinds(get) {
+          const scan = () => get() || {};
+          const list = (k) => (Array.isArray(scan()[k]) ? scan()[k] : []);
+          return [
+            {
+              name: "caps",
+              resetBy: "annotations",
+              scanned: () => list("screens").map((s) => ({ id: s.id, ...s.caption })),
+              /* one caption per screen the scan has: a corrupt saved layout cannot take one away */
+              clean: (items, { hasScreen, scanned }) =>
+                scanned.filter((c) => hasScreen(c.id)).map((c) => items.find((x) => x.id === c.id) || c),
+            },
+            { name: "scans", scanned: () => list("findings") },
+            {
+              name: "notes",
+              scanned: () => list("notes"),
+              clean: (items) => items.filter((n) => n.id && typeof n.text === "string"),
+            },
+            {
+              name: "conns",
+              scanned: () => list("links"),
+              counter: { prefix: "c", saved: "cc" },
+              clean: (items, { hasScreen }) => items.filter((c) => hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to),
+            },
+          ];
+        }
+
+        return { read, merge, diff, mergeGroups, diffGroups, dataKinds };
       })();
     </script>
 
     <script id="layout-module">
       /* ======================================================================
          LAYOUT MODULE
-         Owns the persisted layout: groups, positions per device, connectors, findings,
-         notes and frame captions, plus the id counters and the undo history. It knows nothing about the page:
-         no DOM, no screens, no demo data. Everything it needs is handed to create().
+         Owns the persisted layout: groups, positions per device and the annotation kinds (by default connectors,
+         findings, notes and frame captions), plus the id counters and the undo history. It knows nothing about the
+         page: no DOM, no screens, no demo data, and no kind by name. Everything it needs is handed to create().
 
          Everything the scan provides is saved the same way, as the user's edits over it and the things the user
          made (FlowScan.merge and diff; for groups, mergeGroups and diffGroups, which add which frames are in
@@ -5553,19 +5594,25 @@
          is gone when the group is. A caption is { id, title, body, on }, one per screen.
 
          Interface
-           const layout = FlowLayout.create({ key, storage, hasScreen, defaults })
+           const layout = FlowLayout.create({ key, storage, hasScreen, defaults, kinds })
              key        localStorage key the layout is saved under
              storage    anything with getItem(key) / setItem(key, value)
              hasScreen  (id) => boolean, so saved layouts drop frames that no longer exist
-             defaults   () => { groups, pos, conns, scans?, notes, caps? }: the scan's groups, connectors (links),
-                        findings, notes and captions (one per screen, { id, title, body, on }), and empty
-                        positions. Called for a fresh copy each time; a default group may carry title, sub and
-                        subOn (blank when it does not)
+             defaults   () => { groups, pos }: the scan's groups and empty positions. Called for a fresh copy each
+                        time; a default group may carry title, sub and subOn (blank when it does not)
+             kinds      the data half of each annotation kind (required): { name, scanned(), clean?, resetBy?,
+                        counter? }. name is the kind's field on the layout and its key on disk; scanned() gives the
+                        items the scan has for it ([] for a kind the user alone makes); clean(items, { hasScreen,
+                        scanned }) drops or repairs what loading finds; resetBy "annotations" is a kind that
+                        reset() leaves alone and resetText() puts back (captions); counter { prefix, saved } is a
+                        kind whose ids are handed out as "c7" and saved under "cc". FlowScan.dataKinds gives
+                        the four the scan provides. The page passes its one list of kinds, whose objects also carry
+                        what the other modules read (a kind is one object: see FlowAnnotations).
            FlowLayout.groupName(group)   the short name: the title before its first colon, or
                                          "Untitled group". Pure; never changes the group.
-           layout.groups layout.pos layout.conns layout.scans layout.notes layout.caps
+           layout.groups layout.pos layout.<name> for each kind
                       Live state, as the user sees it: scanned items with their edits laid over, then the
-                      user's own (scans are the findings still shown). Read through layout every time, never
+                      user's own (the findings are the ones still shown). Read through layout every time, never
                       keep your own reference: restore, undo and reset swap the arrays and objects for new ones.
            layout.newGroup(screens)  a blank, open group with the next id ("g4"), not yet in layout.groups
            layout.groupOf(id)        the group a frame is in, or undefined for a loose frame
@@ -5591,17 +5638,16 @@
                              of groups that still exist (view state, not an edit).
            layout.reset()          groups, positions, connectors, findings and notes back to the scan, counters
                              included, and save. Captions are left as they are (resetText puts them back).
-           layout.nextId("c"|"g")  the next connector / group id, "c7" / "g4"
+           layout.nextId(prefix)   the next id of a counter: "g" (groups) or a kind's own ("c": connectors); "c7" / "g4"
            layout.mark(s?)         push s (default: a snapshot now) on the undo history, 40 deep (FlowCommit
                              is its caller)
            layout.undo()           restore the latest mark; false when there is none
 
-         Inside this module, a new kind the scan provides and the user edits is added to KINDS and to
-         freshDefaults(); load, save, snapshot and restore loop over those. A kind that needs cleaning on load
-         (overlays()) or that reset() leaves alone says so there. Showing and editing it is the page's business
-         and needs code of its own. Needs FlowScan.
+         A new kind needs nothing in this module: it is one more entry in kinds, and load, save, snapshot, restore,
+         reset and the counters loop over them. Showing and editing it is the kind's view half, which the page hands
+         to FlowCommit (redraw) and FlowAnnotations (input), not to this module. Needs FlowScan.
 
-         On disk: { v: 3, lanes, pos, conns, scans, notes, caps, cc, gc }. Each of the first kinds (not pos) is
+         On disk: { v: 3, lanes, pos, <one key per kind: caps, scans, notes, conns>, gc, cc }. Each kind (not pos) is
          { edits, mine }, and lanes (the groups) also has place (a frame the user put in a group or freed), order (a group
          the user arranged) and seq (the order of the groups). "lanes" is the older name for groups; in this module
          it is left only as the key on disk, kept so saved layouts still load.
@@ -5613,14 +5659,10 @@
         "use strict";
         const MAX_UNDO = 40;
         const VERSION = 3;
-        /* the kinds the scan provides and the user edits: saved as edits over the scan */
-        const KINDS = ["groups", "conns", "scans", "notes", "caps"];
-        /* all but groups, whose frames have a rule of their own (FlowScan.mergeGroups) */
-        const PLAIN = KINDS.filter((k) => k !== "groups");
+        /* the names the layout keeps for itself: groups have a rule of their own (FlowScan.mergeGroups), pos is not edits */
+        const OWN = ["groups", "pos"];
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const list = (x) => (Array.isArray(x) ? x : []);
-        /* id prefix -> the field the counter is saved in */
-        const COUNTER_FIELD = { c: "cc", g: "gc" };
         const clone = (o) => JSON.parse(JSON.stringify(o));
         const BLANK_TEXT = { title: "Untitled group", sub: "", subOn: false };
         /* the short name of a group: its title up to the first colon */
@@ -5646,31 +5688,44 @@
         /* a saved kind is in the edits form when it has an edits or mine part */
         const isEdits = (saved) => isObj(saved) && ("edits" in saved || "mine" in saved || "place" in saved);
 
-        function create({ key, storage, hasScreen, defaults }) {
+        function create({ key, storage, hasScreen, defaults, kinds }) {
+          if (!Array.isArray(kinds)) throw new Error("FlowLayout.create: kinds is required (the data half of each annotation kind; FlowScan.dataKinds gives the scan's)");
+          const taken = new Set(OWN);
+          kinds.forEach((k) => {
+            if (!k || typeof k.name !== "string" || !k.name) throw new Error("FlowLayout.create: every kind needs a name");
+            if (taken.has(k.name)) throw new Error('FlowLayout.create: the kind name "' + k.name + '" is taken');
+            if (typeof k.scanned !== "function") throw new Error('FlowLayout.create: "' + k.name + '" has no scanned()');
+            taken.add(k.name);
+          });
+          /* the id counters: groups hand out "g4", and a kind may ask for the same (prefix "c" saved as "cc") */
+          const COUNTERS = [{ field: "groups", prefix: "g", saved: "gc" }].concat(
+            kinds.filter((k) => k.counter).map((k) => ({ field: k.name, prefix: k.counter.prefix, saved: k.counter.saved })),
+          );
           const layout = {};
           let history = [];
-          let counters = { c: 0, g: 0 };
+          let counters = Object.fromEntries(COUNTERS.map((c) => [c.prefix, 0]));
 
           function freshDefaults() {
             const d = clone(defaults());
-            return {
-              groups: d.groups.map(groupRecord),
-              pos: d.pos,
-              conns: list(d.conns),
-              scans: list(d.scans),
-              notes: list(d.notes),
-              caps: list(d.caps),
-            };
+            const out = { groups: d.groups.map(groupRecord), pos: d.pos };
+            kinds.forEach((k) => (out[k.name] = clone(list(k.scanned()))));
+            return out;
           }
+          /* the kinds that Reset layout leaves alone and Reset annotations puts back (captions) */
+          const textual = () => kinds.filter((k) => k.resetBy === "annotations");
           /* the scanned text of a group, or blank when it is not a scanned group */
           const scannedText = (id) => {
             const l = defaults().groups.find((x) => x.id === id);
             const { title, sub, subOn } = l ? groupRecord(l) : BLANK_TEXT;
             return { title, sub, subOn };
           };
-          const startCounters = (d) => ({ c: highestId(d.conns, "c"), g: highestId(d.groups, "g") });
+          const startCounters = (d) => Object.fromEntries(COUNTERS.map((c) => [c.prefix, highestId(d[c.field], c.prefix)]));
+          /* counters that have run past what an id list holds: ids are never handed out twice */
+          const counted = (from, items) =>
+            Object.fromEntries(COUNTERS.map((c) => [c.prefix, Math.max(from[c.prefix], highestId(items(c), c.prefix))]));
           function adopt(state) {
-            KINDS.forEach((k) => (layout[k] = state[k]));
+            layout.groups = state.groups;
+            kinds.forEach((k) => (layout[k.name] = state[k.name]));
             layout.pos = state.pos;
           }
           /* what is saved and snapshotted: the edits over the scan for each kind, and the positions. A group's
@@ -5680,29 +5735,30 @@
             const out = {};
             out.lanes = FlowScan.diffGroups(d.groups, layout.groups.map(groupRecord)); /* "lanes" is the disk name */
             out.pos = layout.pos;
-            PLAIN.forEach((k) => (out[k] = FlowScan.diff(d[k], layout[k])));
+            kinds.forEach((k) => (out[k.name] = FlowScan.diff(d[k.name], layout[k.name])));
             return out;
           }
-          /* a connector of the user's own whose id a new scan now uses gets a fresh one */
-          function freshIds(conns) {
-            const seen = new Set();
-            conns.forEach((c) => {
-              if (seen.has(c.id)) c.id = layout.nextId("c");
-              seen.add(c.id);
+          /* an item of the user's own, of a kind with a counter, whose id a new scan now uses gets a fresh one */
+          function freshIds() {
+            COUNTERS.filter((c) => c.field !== "groups").forEach((c) => {
+              const seen = new Set();
+              layout[c.field].forEach((x) => {
+                if (seen.has(x.id)) x.id = layout.nextId(c.prefix);
+                seen.add(x.id);
+              });
             });
           }
 
-          /* connectors, findings, notes and captions as saved, laid over the scan, cleaned; d supplies the
-             fallbacks, and a kind not saved as edits (anything but { edits, mine }) is the scan's. */
+          /* each kind as saved, laid over the scan, then cleaned by the kind itself; d supplies the fallbacks,
+             and a kind not saved as edits (anything but { edits, mine }) is the scan's. */
           function overlays(st, d) {
             const out = {};
-            PLAIN.forEach((k) => {
-              out[k] = isEdits(st[k]) ? FlowScan.merge(d[k], st[k]).filter((x) => x && typeof x === "object") : d[k];
+            kinds.forEach((k) => {
+              const merged = isEdits(st[k.name])
+                ? FlowScan.merge(d[k.name], st[k.name]).filter((x) => x && typeof x === "object")
+                : d[k.name];
+              out[k.name] = k.clean ? k.clean(merged, { hasScreen, scanned: d[k.name] }) : merged;
             });
-            out.conns = out.conns.filter((c) => hasScreen(c.from) && hasScreen(c.to) && c.from !== c.to);
-            out.notes = out.notes.filter((n) => n.id && typeof n.text === "string");
-            /* one caption per screen the scan has: a corrupt saved layout cannot take one away */
-            out.caps = d.caps.filter((c) => hasScreen(c.id)).map((c) => out.caps.find((x) => x.id === c.id) || c);
             return out;
           }
           /* groups as the user sees them: the scan's, with the saved edits laid over, cleaned. Says which of the
@@ -5744,20 +5800,17 @@
             if (!isObj(st) || !isEdits(st.lanes)) return fallBack();
             try {
               /* ids the user's own groups hold are taken before any is handed out */
-              counters = {
-                c: Math.max(Number(st.cc) || start.c, start.c),
-                g: Math.max(Number(st.gc) || start.g, start.g, highestId(list(st.lanes.mine), "g")),
-              };
+              const savedCounters = Object.fromEntries(
+                COUNTERS.map((c) => [c.prefix, Math.max(Number(st[c.saved]) || start[c.prefix], start[c.prefix])]),
+              );
+              counters = counted(savedCounters, (c) => list((c.field === "groups" ? st.lanes : st[c.field] || {}).mine));
               const g = groupsFrom(st.lanes, d);
               if (isObj(st.pos)) for (const dev in st.pos) if (isObj(st.pos[dev])) d.pos[dev] = st.pos[dev];
               const out = Object.assign({ groups: g.groups, pos: d.pos }, overlays(st, d));
               tidyPos(out.pos, out.groups, g.renamed);
               adopt(out);
-              counters = {
-                c: Math.max(counters.c, highestId(out.conns, "c")),
-                g: Math.max(counters.g, highestId(out.groups, "g")),
-              };
-              freshIds(layout.conns);
+              counters = counted(counters, (c) => out[c.field]);
+              freshIds();
               /* a user's group whose id the scan now uses took a new one: write that down at once */
               if (Object.keys(g.renamed).length) layout.save();
             } catch (e) {
@@ -5769,7 +5822,9 @@
             try {
               storage.setItem(
                 key,
-                JSON.stringify(Object.assign({ v: VERSION }, persisted(), { cc: counters.c, gc: counters.g })),
+                JSON.stringify(
+                  Object.assign({ v: VERSION }, persisted(), Object.fromEntries(COUNTERS.map((c) => [c.saved, counters[c.prefix]]))),
+                ),
               );
             } catch (e) {}
           };
@@ -5781,19 +5836,16 @@
             const shown = new Map(layout.groups.map((l) => [l.id, l.open]));
             const g = groupsFrom(st.lanes, d);
             g.groups.forEach((l) => shown.has(l.id) && (l.open = shown.get(l.id)));
-            const kinds = overlays(st, d);
-            adopt(Object.assign({ groups: g.groups, pos: st.pos }, kinds));
-            freshIds(layout.conns);
+            const kindsBack = overlays(st, d);
+            adopt(Object.assign({ groups: g.groups, pos: st.pos }, kindsBack));
+            freshIds();
             /* ids that came back with the snapshot must not be handed out again */
-            counters = {
-              c: Math.max(counters.c, highestId(layout.conns, "c")),
-              g: Math.max(counters.g, highestId(layout.groups, "g")),
-            };
+            counters = counted(counters, (c) => layout[c.field]);
             layout.save();
           };
           layout.reset = () => {
             const d = freshDefaults();
-            d.caps = layout.caps;
+            textual().forEach((k) => (d[k.name] = layout[k.name]));
             adopt(d);
             counters = startCounters(d);
             layout.save();
@@ -5828,10 +5880,11 @@
           };
           layout.resetText = () => {
             layout.groups.forEach((l) => Object.assign(l, scannedText(l.id)));
-            layout.caps = freshDefaults().caps;
+            const d = freshDefaults();
+            textual().forEach((k) => (layout[k.name] = d[k.name]));
           };
           layout.nextId = (kind) => {
-            if (!COUNTER_FIELD[kind]) throw new Error("FlowLayout.nextId: unknown kind " + kind);
+            if (!(kind in counters)) throw new Error("FlowLayout.nextId: unknown kind " + kind);
             counters[kind] += 1;
             return kind + counters[kind];
           };
@@ -5859,18 +5912,20 @@
          COMMIT MODULE
          The one place that decides what happens after an edit to the layout: the undo point, the save,
          and which parts of the page are redrawn, in a fixed order. Callers say what changed, not how
-         to finish. It knows nothing about the DOM: the page hands it the redraw functions.
+         to finish. It knows nothing about the DOM: the page hands it the kinds, each with its own refresh().
 
          Interface
-           const commit = FlowCommit.create({ layout, redraw })
+           const commit = FlowCommit.create({ layout, kinds, redraw })
              layout  a FlowLayout
-             redraw  { world, layout, scans, notes, conns }, one function each, all required
+             kinds   the annotation kinds (the page's one list); each needs a name and a refresh(), its redraw
+             redraw  { world, layout }, one function each, both required
            commit(change, { redraw, undo })
              Runs change(), returns its result. If the layout is now different: marks the state before
              as one undo step, saves, then redraws what was asked for. If nothing changed, nothing
              happens. A commit inside a change joins the outer one.
-               redraw  "all" (layout, scans, notes, conns) or a list of kinds; default none.
-                       Always drawn in this order: world, layout, scans, notes, conns.
+               redraw  "all" (the layout and every kind) or a list of names ("world", "layout", a kind's name);
+                       default none. Always drawn in this order: world, layout, then the kinds in the order of
+                       the list they were declared in. A name nobody declared throws before anything changes.
                undo    false for edits that are saved and redrawn but are not undo steps (folding a group)
                force   true to redraw even if nothing changed: a drag moved things on screen (a preview) and
                        the page must be drawn from the layout again, whether the drop changed it or not
@@ -5886,13 +5941,21 @@
          ====================================================================== */
       var FlowCommit = (function () {
         "use strict";
-        const ORDER = ["world", "layout", "scans", "notes", "conns"];
-        const ALL = ORDER.filter((k) => k !== "world");
-
-        function create({ layout, redraw }) {
-          ORDER.forEach((k) => {
+        function create({ layout, kinds, redraw }) {
+          ["world", "layout"].forEach((k) => {
             if (typeof redraw[k] !== "function") throw new Error('FlowCommit: missing redraw function for "' + k + '"');
           });
+          if (!Array.isArray(kinds)) throw new Error("FlowCommit.create: kinds is required");
+          kinds.forEach((k) => {
+            if (typeof k.refresh !== "function") throw new Error('FlowCommit: "' + k.name + '" has no refresh');
+          });
+          const fns = { world: redraw.world, layout: redraw.layout };
+          kinds.forEach((k) => {
+            if (k.name in fns) throw new Error('FlowCommit: the kind name "' + k.name + '" is taken');
+            fns[k.name] = k.refresh;
+          });
+          const ORDER = Object.keys(fns);
+          const ALL = ORDER.filter((k) => k !== "world");
           /* the kinds a caller asked for, checked, so a typo fails before anything is changed */
           const kindsOf = (kinds) => {
             const list = kinds === "all" ? ALL : kinds || [];
@@ -5901,7 +5964,7 @@
             });
             return list;
           };
-          const redrawInOrder = (kinds) => ORDER.filter((k) => kinds.includes(k)).forEach((k) => redraw[k]());
+          const redrawInOrder = (wanted) => ORDER.filter((k) => wanted.includes(k)).forEach((k) => fns[k]());
           let running = null; /* the outer commit's pending redraws while its change runs */
 
           /* the tail every edit shares: undo point, save, redraw. Nothing changed, nothing to record;
@@ -5949,18 +6012,24 @@
     <script id="annotations-module">
       /* ======================================================================
          ANNOTATIONS MODULE
-         What notes, findings and connectors share: one drag (threshold, zoom scale, cancel), one
-         keyboard move (arrow keys, bursts count as one undo step), one delete, and one "is this an
-         annotation" check. Each kind brings an adapter for what is its own: finding itself in the DOM,
-         showing and saving a position, cleaning up. The module never touches the DOM and saves only
-         through FlowCommit, so every move and delete is one undoable commit.
+         What the annotation kinds (notes, findings, connectors, captions) share: one drag (threshold, zoom
+         scale, cancel), one keyboard move (arrow keys, bursts count as one undo step), one delete, and one
+         "is this an annotation" check. It is the one drag for annotation kinds; dragging frames or a group
+         (FlowGesture), panning and drawing a connector or a marquee are different gestures with their own rules.
+         A kind is one object that FlowLayout, FlowCommit and this module all read (the page declares one list
+         and hands it to each): this module reads the input half, described below. Items are ids: every method
+         takes the id of the item, and a kind keeps whatever it needs to find the item's DOM to itself. The
+         module never touches the DOM and saves only through FlowCommit, so every move and delete is one
+         undoable commit.
 
          Interface
-           const annotations = FlowAnnotations.create({ commit, kinds, threshold, clock })
+           const annotations = FlowAnnotations.create({ commit, kinds, threshold, clock, typing })
              commit     a FlowCommit
-             kinds      adapters, see below
+             kinds      the page's list of kinds (see below); one that takes no input has none of the fields
              threshold  screen px before a press becomes a drag (default 4)
              clock      () => ms, for the keyboard burst (default Date.now)
+             typing     (target) => bool, the page's own test for "the user is typing in this": while it is true,
+                        Delete and the arrow keys act on no kind (default: never)
            annotations.owns(target)             any kind recognises target as its own
            annotations.down(target, {x, y})     null, or { prevent } when a movable annotation was grabbed
            annotations.dragging()               a grab is in progress (pressed, moved or not)
@@ -5968,25 +6037,24 @@
            annotations.up()                     { moved } or null; saves a drag, or taps if it never moved
            annotations.cancel()                 the pointer was taken away: put the item back, save nothing
            annotations.keyDown(target, key, {shift})   true when handled: Delete/Backspace, arrow keys
-           annotations.remove(kindName, item)   the same removal, for a × button
+           annotations.remove(kindName, id)     the same removal, for a × button
 
-         Adapter. Only name is required; the rest depends on what the kind does, and create() refuses a
-         movable kind that is missing origin, place or save.
-           name
+         The input half of a kind. Only name is required; the rest depends on what the kind does, and create()
+         refuses a movable kind that is missing origin, place or save.
+           name                       also the kind's field in the layout and its redraw name in FlowCommit
            owns(target)               is target part of this kind (a kind without it is not part of owns())
            movable, preventDefault    can it be grabbed and moved; should the page preventDefault on press
-           match(target, how)         the item, or null. how is "pointer", "nudge" or "delete".
-                                      The same item must come back as the same object (a DOM element does).
-           origin(item) -> {x, y}     where it is now, in the units place() takes
-           lift(item)                 a drag began
-           place(item, pos)           show it at pos while it moves (DOM only)
-           save(item, pos, {nudged})  the data change for a move, run inside a commit. nudged is true for an
+           match(target, how)         the item's id, or null. how is "pointer", "nudge" or "delete".
+           origin(id) -> {x, y}       where it is now, in the units place() takes
+           lift(id)                   a drag began
+           place(id, pos)             show it at pos while it moves (DOM only)
+           save(id, pos, {nudged})    the data change for a move, run inside a commit. nudged is true for an
                                       arrow-key move, so a note can move in place instead of re-homing.
-           settle(item, {moved, cancelled, nudged})   DOM clean-up, after the commit and its redraws
-           tap(item)                  pressed and released without moving
-           erase(item)                the data change for a delete, run inside a commit (needed to be deletable)
-           erased(item)               DOM clean-up and message after a delete
-           redraw                     FlowCommit kinds to redraw after a save or an erase (default none)
+           settle(id, {moved, cancelled, nudged})   DOM clean-up, after the commit and its redraws
+           tap(id)                    pressed and released without moving
+           erase(id)                  the data change for a delete, run inside a commit (needed to be deletable)
+           erased(id)                 DOM clean-up and message after a delete
+           redraw                     kinds to redraw after a save or an erase (default none)
 
          One order throughout: the data change, then the commit's undo point and save, then its redraws,
          then settle()/erased(). The drag threshold is 4 screen px for every kind (notes used 3).
@@ -5998,7 +6066,7 @@
           NUDGE_BIG = 32,
           BURST_MS = 600;
 
-        function create({ commit, kinds, threshold = 4, clock = Date.now }) {
+        function create({ commit, kinds, threshold = 4, clock = Date.now, typing }) {
           kinds.forEach((k) => {
             if (!k.name) throw new Error("FlowAnnotations: every kind needs a name");
             if (k.movable)
@@ -6007,7 +6075,8 @@
           });
           const redrawOf = (kind) => kind.redraw || [];
           let grab = null;
-          let burst = null; /* the arrow-key burst in progress: { item, at } */
+          let burst = null; /* the arrow-key burst in progress: { key, at } */
+          const keyOf = (f) => f.kind.name + "\u0000" + f.item;
           const find = (target, how) => {
             for (const kind of kinds) {
               const item = kind.match && kind.match(target, how);
@@ -6061,6 +6130,7 @@
             },
             /* arrow keys move the focused item; a quick burst on one item is a single undo step */
             keyDown(target, key, mods = {}) {
+              if (typing && typing(target)) return false; /* typing in something: Delete and arrows are not ours */
               if (key === "Delete" || key === "Backspace") {
                 const f = find(target, "delete");
                 if (!f) return false;
@@ -6076,8 +6146,8 @@
               const pos = { x: at.x + dir[0] * by, y: at.y + dir[1] * by };
               f.kind.place(f.item, pos);
               const now = clock();
-              const first = !burst || burst.item !== f.item || now - burst.at >= BURST_MS;
-              if (first) burst = { item: f.item, at: now };
+              const first = !burst || burst.key !== keyOf(f) || now - burst.at >= BURST_MS;
+              if (first) burst = { key: keyOf(f), at: now };
               commit(() => f.kind.save(f.item, pos, { nudged: true }), { undo: first, redraw: redrawOf(f.kind) });
               if (f.kind.settle) f.kind.settle(f.item, { moved: true, nudged: true });
               return true;
@@ -7325,20 +7395,25 @@
     <button class="cx" title="Remove description" aria-label="Remove description">${X_ICON}</button>
     <button class="cadd">${ADD_ICON}Add description</button></div>`;
       }
-      function fillAnn() {
-        document.querySelectorAll("[data-k]").forEach((w) => {
+      /* the captions' redraw: a frame gets the caption it is missing (a new world), and every caption shows what the
+         layout has (after undo or a reset). A field the user is typing in is left alone when it already says so. */
+      function refreshCaps() {
+        ORDER.forEach((id) => {
+          const col = colOf(id);
+          if (col && !col.querySelector(".cap")) col.querySelector(".pwrap").insertAdjacentHTML("afterend", capHTML(id, 0));
+        });
+        document.querySelectorAll(".cap[data-k]").forEach((w) => {
           const a = capOf(w.dataset.k);
           if (!a) return;
-          if (w.classList.contains("ann")) w.classList.toggle("off", !a.on);
+          w.classList.toggle("off", !a.on);
           w.querySelectorAll("[data-f]").forEach((f) => {
-            f.textContent = a[f.dataset.f];
+            if (f.textContent !== a[f.dataset.f]) f.textContent = a[f.dataset.f];
           });
         });
       }
       /* captions and the groups' text are part of the layout: put back by one commit, so ⌘Z brings them back */
       function resetAnn() {
-        commit(() => layout.resetText(), { redraw: ["layout"] });
-        fillAnn();
+        commit(() => layout.resetText(), { redraw: ["layout", "caps"] });
         toast("Annotations reset to the scanned copy");
       }
       function caretEnd(f) {
@@ -7450,6 +7525,8 @@
         const r = geo.rect(id, performance.now());
         return [Math.round((wx - r.x) / r.s), Math.round((wy - r.y) / r.s)];
       };
+      /* note id -> its element: the notes kind's own, so nothing outside it holds a note's DOM */
+      const noteEls = new Map();
       function buildNote(n) {
         const parent = n.frame ? colOf(n.frame) : notesEl;
         if (!parent) return null;
@@ -7457,6 +7534,7 @@
         const d = document.createElement("div");
         d.className = "note";
         d.dataset.nid = n.id;
+        noteEls.set(n.id, d);
         d.style.left = x + "px";
         d.style.top = y + "px";
         d.innerHTML = `<div class="txt" contenteditable="true" spellcheck="false">${esc(n.text)}</div><div class="who">${esc(n.who)} · ${n.at ? ago(n.at) : esc(n.t || "")}</div><button class="nx" type="button" aria-label="Delete this note" title="Delete (Delete key)"><svg aria-hidden="true"><use href="#i-x"/></svg></button>`;
@@ -7469,13 +7547,14 @@
         });
         d.querySelector(".nx").addEventListener("click", (e) => {
           e.stopPropagation();
-          annotations.remove("note", d);
+          annotations.remove("notes", n.id);
         });
         parent.appendChild(d);
         return d;
       }
       function refreshNotes() {
         document.querySelectorAll(".note").forEach((n) => n.remove());
+        noteEls.clear();
         layout.notes.forEach(buildNote);
       }
       /* A note's DOM is handled by hand around its commit, not by the "notes" redraw (which rebuilds every
@@ -7534,6 +7613,153 @@
       }
 
       /* ======================================================================
+   ANNOTATION KINDS
+   Notes, scanner findings, connectors and captions. Each is one object: the data half FlowScan.dataKinds gives it
+   (its field in the layout, the scan's items, how loading cleans them) with its view half laid over it (refresh, and
+   how it is found, grabbed, moved and deleted). The page declares one list, KINDS, and hands it to FlowLayout (what
+   is saved), FlowCommit (what is redrawn, in the order of the list) and FlowAnnotations (input). A kind finds its
+   own DOM by id; nothing else holds a node of it. A new kind is one more object in this list; the throwaway fifth
+   kind in tests/kinds.test.mjs shows the whole cost.
+   ====================================================================== */
+      const DATA = FlowScan.dataKinds(() => SCAN);
+      const kind = (name, view) => ({ ...DATA.find((k) => k.name === name), ...view, name });
+
+      /* notes: a card on a frame or on the canvas */
+      const noteOf = (id) => layout.notes.find((x) => x.id === id);
+      const noteKind = kind("notes", {
+        refresh: refreshNotes,
+        movable: true,
+        preventDefault: true,
+        owns: (t) => !!t.closest(".note"),
+        match(t, how) {
+          const d = t.closest(".note");
+          if (!d) return null;
+          if (how === "pointer") {
+            /* not on its delete button, and not while its text is being edited */
+            return t.closest(".nx") || document.activeElement === d.querySelector(".txt") ? null : d.dataset.nid;
+          }
+          return t === d ? d.dataset.nid : null; /* keys: only when the note itself has focus, not while typing in it */
+        },
+        origin(id) {
+          const d = noteEls.get(id);
+          return { x: parseFloat(d.style.left), y: parseFloat(d.style.top) };
+        },
+        lift(id) {
+          const d = noteEls.get(id);
+          d.classList.add("dragging");
+          d.style.zIndex = 30;
+        },
+        place(id, p) {
+          const d = noteEls.get(id);
+          d.style.left = p.x + "px";
+          d.style.top = p.y + "px";
+        },
+        save(id, p, how) {
+          const n = noteOf(id),
+            d = noteEls.get(id);
+          if (!n || !d) return;
+          if (!how.nudged) return rehomeData(n, d); /* a drop: it may land on another frame, or on empty canvas */
+          /* a nudge moves the note where it is: 8 px must not attach it to a frame or let go of one */
+          const at = [Math.round(p.x), Math.round(p.y)];
+          if (n.frame) n.pos = { ...(n.pos || {}), [DEV.id]: at };
+          else [n.x, n.y] = at;
+        },
+        settle(id, how) {
+          const d = noteEls.get(id);
+          if (!d) return;
+          d.classList.remove("dragging");
+          d.style.zIndex = "";
+          const n = noteOf(id);
+          if (n && how.moved && !how.nudged) rehomeDom(n, d);
+        },
+        tap(id) {
+          const t = noteEls.get(id).querySelector(".txt");
+          t.focus();
+          const r = document.createRange();
+          r.selectNodeContents(t);
+          r.collapse(false);
+          const s = getSelection();
+          s.removeAllRanges();
+          s.addRange(r);
+        },
+        erase(id) {
+          layout.notes = layout.notes.filter((n) => n.id !== id);
+        },
+        erased(id) {
+          const d = noteEls.get(id);
+          if (d) d.remove();
+          noteEls.delete(id);
+          toast("Note deleted. ⌘Z brings it back.");
+        },
+      });
+
+      /* scanner findings: a card tied to its frame by a leader. buildScan registers each card's handle in scanViews. */
+      const scanViews = new Map();
+      const scanKind = kind("scans", {
+        refresh: refreshScans,
+        movable: true,
+        owns: (t) => !!t.closest(".scan"),
+        match(t, how) {
+          const d = t.closest(".scan");
+          if (!d) return null;
+          if (how === "pointer") return t.closest(".hop,.sx") ? null : d.dataset.sid;
+          if (how === "nudge") return t === d ? d.dataset.sid : null;
+          return d.dataset.sid; /* delete: from anywhere inside the card */
+        },
+        origin: (id) => scanViews.get(id).at(),
+        lift(id) {
+          scanViews.get(id).el.classList.add("dragging");
+          document.body.classList.add("selecting");
+        },
+        place: (id, p) => scanViews.get(id).place(p.x, p.y),
+        save: (id, p) => scanViews.get(id).savePos(p),
+        settle(id, how) {
+          const v = scanViews.get(id);
+          if (!v) return;
+          v.el.classList.remove("dragging");
+          document.body.classList.remove("selecting");
+          if (how.cancelled) v.redrawLeader();
+          if (how.moved && !how.nudged) v.dragged(); /* the click that follows a drag is not a click on the card */
+        },
+        erase(id) {
+          layout.scans = layout.scans.filter((x) => x.id !== id);
+        },
+        erased(id) {
+          const v = scanViews.get(id);
+          if (v) v.erased();
+          scanViews.delete(id);
+          toast("Finding dismissed. ⌘Z brings it back.");
+        },
+      });
+
+      /* connectors do not move; they can be deleted, and a press on their chip is not a press on the canvas */
+      const linkKind = kind("conns", {
+        refresh: () => drawConns(),
+        redraw: ["conns"],
+        owns: (t) => !!t.closest(".echip"),
+        match(t, how) {
+          if (how !== "delete") return null;
+          const chip = t.closest(".echip");
+          return chip ? chip.dataset.id : selConn; /* a selected connector is deleted from anywhere */
+        },
+        erase(id) {
+          layout.conns = layout.conns.filter((x) => x.id !== id);
+          if (selConn === id) selConn = null;
+        },
+        erased: () => toast("Connector deleted. ⌘Z to undo."),
+      });
+
+      /* captions (a screen's title and description) are typed in place; typing, hiding and adding back are the text
+         editing below, shared with a group's own title and description (which are part of the group, not a kind).
+         The kind builds a frame's caption, refreshes them all, and is part of the ownership check, so a press on
+         one is never a press on the canvas behind it. It does not move and is not deleted: it is hidden. */
+      const captionKind = kind("caps", { refresh: refreshCaps, owns: (t) => !!t.closest("[data-f],.cx,.cadd") });
+
+      /* the order of this list is the order of the redraw: captions first, then the cards that sit on frames, then
+         the connectors, which are drawn from where the frames are */
+      const KINDS = [captionKind, scanKind, noteKind, linkKind];
+
+      /* ======================================================================
    LAYOUT MODEL
    A canvas holds free frames and groups. A group is a sequence of frames that either
    fans out into a flow (open) or stacks into a deck (closed). Membership is shared by
@@ -7546,132 +7772,20 @@
           setItem: (k, v) => localStorage.setItem(k, v),
         },
         hasScreen: (id) => !!SCREENS[id],
-        /* the scan's groups, links (drawn as connectors), findings and notes; the layout keeps the user's edits */
+        /* the scan's groups; the kinds bring their own scanned items, and the layout keeps the user's edits */
         defaults: () => ({
           groups: SCAN.groups,
           pos: Object.fromEntries(FlowDevice.ids().map((id) => [id, {}])),
-          conns: SCAN.links,
-          notes: NOTES,
-          scans: FINDINGS,
-          caps: SCAN.screens.map((x) => ({ id: x.id, ...x.caption })),
         }),
+        kinds: KINDS,
       });
       /* open or closed is view state: saved and redrawn, never an undo step */
       const VIEW_STATE = { undo: false, redraw: ["layout"] };
       /* every edit ends here: undo point, save, redraw, in one fixed order */
-      const commit = FlowCommit.create({
-        layout,
-        redraw: { world: buildWorld, layout: relayout, scans: refreshScans, notes: refreshNotes, conns: drawConns },
-      });
-
-      /* The annotation kinds. FlowAnnotations owns what they share (drag, arrow keys, delete, the ownership
-         check); each adapter below does what is its own. A new kind is one more adapter. */
-      const noteOf = (d) => layout.notes.find((x) => x.id === d.dataset.nid);
-      const noteKind = {
-        name: "note",
-        movable: true,
-        preventDefault: true,
-        owns: (t) => !!t.closest(".note"),
-        match(t, how) {
-          const d = t.closest(".note");
-          if (!d) return null;
-          if (how === "pointer") {
-            /* not on its delete button, and not while its text is being edited */
-            return t.closest(".nx") || document.activeElement === d.querySelector(".txt") ? null : d;
-          }
-          return t === d ? d : null; /* keys: only when the note itself has focus, not while typing in it */
-        },
-        origin: (d) => ({ x: parseFloat(d.style.left), y: parseFloat(d.style.top) }),
-        lift(d) {
-          d.classList.add("dragging");
-          d.style.zIndex = 30;
-        },
-        place(d, p) {
-          d.style.left = p.x + "px";
-          d.style.top = p.y + "px";
-        },
-        save(d, p, how) {
-          const n = noteOf(d);
-          if (!n) return;
-          if (!how.nudged) return rehomeData(n, d); /* a drop: it may land on another frame, or on empty canvas */
-          /* a nudge moves the note where it is: 8 px must not attach it to a frame or let go of one */
-          const at = [Math.round(p.x), Math.round(p.y)];
-          if (n.frame) n.pos = { ...(n.pos || {}), [DEV.id]: at };
-          else [n.x, n.y] = at;
-        },
-        settle(d, how) {
-          d.classList.remove("dragging");
-          d.style.zIndex = "";
-          const n = noteOf(d);
-          if (n && how.moved && !how.nudged) rehomeDom(n, d);
-        },
-        tap(d) {
-          const t = d.querySelector(".txt");
-          t.focus();
-          const r = document.createRange();
-          r.selectNodeContents(t);
-          r.collapse(false);
-          const s = getSelection();
-          s.removeAllRanges();
-          s.addRange(r);
-        },
-        erase(d) {
-          layout.notes = layout.notes.filter((n) => n.id !== d.dataset.nid);
-        },
-        erased(d) {
-          d.remove();
-          toast("Note deleted. ⌘Z brings it back.");
-        },
-      };
-      const scanKind = {
-        name: "scan",
-        movable: true,
-        owns: (t) => !!t.closest(".scan"),
-        match(t, how) {
-          const d = t.closest(".scan");
-          if (!d) return null;
-          if (how === "pointer") return t.closest(".hop,.sx") ? null : d;
-          if (how === "nudge") return t === d ? d : null;
-          return d; /* delete: from anywhere inside the card */
-        },
-        origin: (d) => d._scan.at(),
-        lift(d) {
-          d.classList.add("dragging");
-          document.body.classList.add("selecting");
-        },
-        place: (d, p) => d._scan.place(p.x, p.y),
-        save: (d, p) => d._scan.savePos(p),
-        settle(d, how) {
-          d.classList.remove("dragging");
-          document.body.classList.remove("selecting");
-          if (how.cancelled) d._scan.redrawLeader();
-          if (how.moved && !how.nudged) d._scan.dragged(); /* the click that follows a drag is not a click on the card */
-        },
-        erase: (d) => d._scan.erase(),
-        erased: (d) => d._scan.erased(),
-      };
-      /* connectors do not move; they take part in delete and in the ownership check */
-      const linkKind = {
-        name: "link",
-        redraw: ["conns"],
-        owns: (t) => !!t.closest(".echip"),
-        match(t, how) {
-          if (how !== "delete") return null;
-          const chip = t.closest(".echip");
-          if (chip) return chip.querySelector(".lb").isContentEditable ? null : { id: chip.dataset.id };
-          /* a selected connector is deleted from anywhere, unless the user is typing */
-          return selConn && !t.closest("input,select,[contenteditable]") ? { id: selConn } : null;
-        },
-        erase(item) {
-          layout.conns = layout.conns.filter((x) => x.id !== item.id);
-          if (selConn === item.id) selConn = null;
-        },
-        erased: () => toast("Connector deleted. ⌘Z to undo."),
-      };
-      /* captions (titles and descriptions) are typed in place and live in their own store: they only
-         take part in the ownership check, so a press on one is never a press on the canvas behind it */
-      const captionKind = { name: "caption", owns: (t) => !!t.closest("[data-f],.cx,.cadd") };
-      const annotations = FlowAnnotations.create({ commit, kinds: [noteKind, scanKind, linkKind, captionKind] });
+      const commit = FlowCommit.create({ layout, kinds: KINDS, redraw: { world: buildWorld, layout: relayout } });
+      /* the user is typing in this: Delete and the arrow keys are theirs, not an annotation's */
+      const typing = (t) => !!(t.closest && t.closest("input,select,[contenteditable]"));
+      const annotations = FlowAnnotations.create({ commit, kinds: KINDS, typing });
       const groupOf = (id) => layout.groupOf(id);
       const isFree = (id) => !groupOf(id);
       const colOf = (id) => document.querySelector(`.col[data-id="${cssStr(id)}"]`);
@@ -7877,7 +7991,7 @@
         drawConns();
         pump();
         /* now that frames are attached and sized, the finding cards' leaders can be drawn from real measurements */
-        document.querySelectorAll(".scan").forEach((d) => d._scan.redrawLeader());
+        scanViews.forEach((v) => v.redrawLeader());
       }
 
       /* ---------- scanner findings: a card tied to its frame by a leader; drag it, dismiss it ---------- */
@@ -7926,7 +8040,8 @@
         const live = () => layout.scans.find((x) => x.id === f.id);
         /* findings on one frame stand one under the other until they are moved */
         const nth = layout.scans.filter((x) => x.frame === f.frame).findIndex((x) => x.id === f.id);
-        const saved = f.pos && f.pos[DEV.id];
+        /* the place the user gave it on this device, or carried from the one they moved it on; none means the default stack */
+        const saved = FlowDevice.carried(f.pos, DEV.id);
         const [dx, dy] = [0, DEV.findY + Math.max(0, nth) * 132];
         let left = saved ? saved[0] : dx,
           top = saved ? saved[1] : dy + DEV.metrics.cap,
@@ -7940,6 +8055,7 @@
         col.appendChild(st);
         const d = document.createElement("div");
         d.className = "scan";
+        d.dataset.sid = f.id;
         d.tabIndex = 0;
         d.setAttribute("role", "group");
         d.setAttribute("aria-label", "Scanner finding. Arrow keys move it, Delete dismisses it.");
@@ -7977,30 +8093,27 @@
         d.addEventListener("mouseleave", () => hoverOk() && tie(false));
         d.addEventListener("focusin", () => tie(true));
         d.addEventListener("focusout", () => tie(false));
-        const dismiss = () => annotations.remove("scan", d);
+        const dismiss = () => annotations.remove("scans", f.id);
         /* the shared annotation drag, keys and delete drive the card through this handle (see scanKind) */
         let justDragged = false;
-        d._scan = {
+        scanViews.set(f.id, {
+          el: d,
           at: () => ({ x: left, y: top }),
           place: (x, y) => place(x, y, true),
           /* draw the leader for where the card is now, at its real size: after a cancelled drag, and after every
              layout (a card is built before its frame is attached to the page, so it measures 0 wide at first) */
           redrawLeader: () => place(left, top, moved),
           savePos,
-          erase: () => {
-            layout.scans = layout.scans.filter((x) => x.id !== f.id);
-          },
           erased: () => {
             tie(false);
             st.remove();
             d.remove();
-            toast("Finding dismissed. ⌘Z brings it back.");
           },
           dragged: () => {
             justDragged = true;
             setTimeout(() => (justDragged = false), 0);
           },
-        };
+        });
         d.addEventListener("click", (e) => {
           e.stopPropagation(); /* a click on the finding is not a click on the frame behind it */
           if (justDragged) return;
@@ -8012,6 +8125,7 @@
       }
       function refreshScans() {
         document.querySelectorAll(".col .scan, .col .stem").forEach((n) => n.remove());
+        scanViews.clear();
         layout.scans.forEach((f) => {
           const col = colOf(f.frame);
           if (col) buildScan(col, f);
@@ -8026,8 +8140,7 @@
         col.className = "col" + (many ? " hasstack" : "");
         col.dataset.id = id;
         col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}</div>
-    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>${capHTML(id, 0)}`;
-        layout.scans.filter((f) => f.frame === id).forEach((f) => buildScan(col, f));
+    <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>`;
         if (many)
           col.querySelector(".states").addEventListener("click", (e) => {
             e.stopPropagation();
@@ -8042,7 +8155,7 @@
       function buildWorld() {
         document.querySelectorAll(".lane,.col").forEach((e) => e.remove());
         ORDER.forEach(makeCol);
-        refreshNotes();
+        KINDS.forEach((k) => k.refresh());
         geo.reset();
         relayout();
       }
@@ -8810,7 +8923,7 @@
         return c;
       }
       function deleteConn(id) {
-        if (layout.conns.some((x) => x.id === id)) annotations.remove("link", { id });
+        if (layout.conns.some((x) => x.id === id)) annotations.remove("conns", id);
       }
       function selectConn(id) {
         setSel([], null);
@@ -8982,7 +9095,6 @@
    ====================================================================== */
       function undo() {
         const done = commit.undo(() => {
-          fillAnn(); /* captions are part of the layout now: the frames show what it brought back */
           selConn = null;
           setSel(
             [...selSet].filter((id) => SCREENS[id]),
@@ -9115,7 +9227,12 @@
               else delete item.pos[DEV.id];
               if (!Object.keys(item.pos).length && !(scanned && scanned.pos)) delete item.pos;
             };
-            layout.scans.forEach((f) => forget(f, FINDINGS.find((x) => x.id === f.id)));
+            /* a finding's place on one device is carried to the others, so putting it back lets go of them all */
+            layout.scans.forEach((f) => {
+              const scanned = FINDINGS.find((x) => x.id === f.id);
+              if (scanned && scanned.pos) f.pos = clone(scanned.pos);
+              else delete f.pos;
+            });
             layout.notes.forEach((n) => {
               const scanned = NOTES.find((x) => x.id === n.id);
               if (scanned && n.frame === scanned.frame) forget(n, scanned);

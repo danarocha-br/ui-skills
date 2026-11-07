@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FlowLayout, FlowScan, readScan } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const KEY = "flow-canvas.layout.v1";
@@ -22,7 +23,8 @@ const over = (scan, storage) =>
     key: KEY,
     storage,
     hasScreen: (id) => scan.screens.some((s) => s.id === id),
-    defaults: () => ({ groups: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} }, conns: scan.links, scans: scan.findings, notes: scan.notes }),
+    defaults: () => ({ groups: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} } }),
+    kinds: builtinKinds(() => ({ conns: scan.links, scans: scan.findings, notes: scan.notes })),
   });
 
 const SCREENS = ["s1", "s2", "s3", "s4"].map((id) => ({ id }));

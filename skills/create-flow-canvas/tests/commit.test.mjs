@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowLayout, FlowCommit } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const KEY = "flow-canvas.layout.v1";
 const DEFAULTS = {
@@ -34,10 +35,11 @@ function setup() {
     storage,
     hasScreen: (id) => /^s\d$/.test(id),
     defaults: () => DEFAULTS,
+    kinds: builtinKinds(DEFAULTS),
   });
-  const redraw = {};
-  for (const kind of ["layout", "scans", "notes", "conns", "world"]) redraw[kind] = () => calls.push("redraw:" + kind);
-  const commit = FlowCommit.create({ layout, redraw });
+  const redraw = { world: () => calls.push("redraw:world"), layout: () => calls.push("redraw:layout") };
+  const kinds = builtinKinds(DEFAULTS, { refresh: (name) => calls.push("redraw:" + name) });
+  const commit = FlowCommit.create({ layout, kinds, redraw });
   return { layout, commit, calls };
 }
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
@@ -73,10 +75,10 @@ test("the change is saved first, then the asked-for parts are redrawn in a fixed
   assert.deepEqual(calls, ["save", "redraw:layout", "redraw:scans", "redraw:notes", "redraw:conns"]);
 });
 
-test("redraw: 'all' redraws layout, scanner cards, notes and connectors; nothing asked means nothing redrawn", () => {
+test("redraw: 'all' redraws layout, captions, scanner cards, notes and connectors; nothing asked means nothing redrawn", () => {
   const { layout, commit, calls } = setup();
   commit(() => (layout.pos.mobile.s1 = { x: 1, y: 1 }), { redraw: "all" });
-  assert.deepEqual(calls, ["save", "redraw:layout", "redraw:scans", "redraw:notes", "redraw:conns"]);
+  assert.deepEqual(calls, ["save", "redraw:layout", "redraw:caps", "redraw:scans", "redraw:notes", "redraw:conns"]);
   calls.length = 0;
   commit(() => (layout.pos.mobile.s1 = { x: 2, y: 2 }));
   assert.deepEqual(calls, ["save"]);
@@ -115,7 +117,7 @@ test("undo restores (which saves), runs the page's own clean-up, then redraws ev
   commit(() => (layout.pos.mobile.s1 = { x: 1, y: 1 }));
   calls.length = 0;
   assert.equal(commit.undo(() => calls.push("clean-up")), true);
-  assert.deepEqual(calls, ["save", "clean-up", "redraw:layout", "redraw:scans", "redraw:notes", "redraw:conns"]);
+  assert.deepEqual(calls, ["save", "clean-up", "redraw:layout", "redraw:caps", "redraw:scans", "redraw:notes", "redraw:conns"]);
   eq(layout.pos.mobile, {});
 });
 
@@ -154,7 +156,7 @@ test("an unknown redraw name fails loudly before the change runs", () => {
 
 test("creating a commit without a redraw function for every kind fails loudly", () => {
   const { layout } = setup();
-  assert.throws(() => FlowCommit.create({ layout, redraw: { layout() {} } }), /missing redraw function for "world"/);
+  assert.throws(() => FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { layout() {} } }), /missing redraw function for "world"/);
 });
 
 test("a change that throws leaves nothing saved or marked, and the next commit works", () => {

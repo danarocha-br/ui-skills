@@ -131,3 +131,21 @@ test("a saved place that is not a pair of numbers is no place: it never reaches 
     assert.deepEqual(placeOn({ mobile: b, tablet: [111, 222] }, "desktop"), carry([111, 222], "tablet", "desktop"), `skipped for a good one: ${JSON.stringify(b)}`);
   }
 });
+
+/* ---------- a place that may not exist: findings ---------- */
+
+const carried = (...a) => plain(FlowDevice.carried(...a));
+
+test("carried: the place saved here, else the one carried from the first device that has one, else nothing", () => {
+  const saved = { tablet: [111, 222], desktop: [300, 200] };
+  assert.deepEqual(carried(saved, "tablet"), [111, 222], "its own place wins");
+  assert.deepEqual(carried(saved, "mobile"), carry([111, 222], "tablet", "mobile"), "the same carry placeOn does");
+  assert.equal(FlowDevice.carried(undefined, "mobile"), null, "no place anywhere is no place: the caller has its own default");
+  assert.equal(FlowDevice.carried({}, "mobile"), null);
+  assert.equal(FlowDevice.carried({ mobile: [1] }, "mobile"), null, "a saved place that is not a pair of numbers is no place");
+});
+
+test("placeOn is carried, or the resting spot when nothing is carried", () => {
+  assert.deepEqual(placeOn({ tablet: [10, 90] }, "desktop"), carried({ tablet: [10, 90] }, "desktop"));
+  assert.deepEqual(placeOn({}, "desktop"), restingSpot("desktop"));
+});

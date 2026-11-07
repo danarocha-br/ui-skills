@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FlowLayout, FlowCommit, readScan } from "./modules.mjs";
+import { FlowLayout, FlowCommit, FlowScan, readScan } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tiny = JSON.parse(fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8"));
@@ -53,15 +54,9 @@ const memory = (seed = {}) => {
 };
 const layoutFor = (raw, storage, over = {}) => {
   const scan = readScan(raw).scan;
-  const defaults = () => ({
-    groups: scan.groups,
-    pos: { mobile: {}, tablet: {}, desktop: {} },
-    conns: scan.links,
-    notes: scan.notes,
-    scans: scan.findings,
-    caps: scan.screens.map((s) => ({ id: s.id, ...s.caption })),
-  });
-  return FlowLayout.create({ key: KEY, storage, hasScreen: (id) => scan.screens.some((s) => s.id === id), defaults, ...over });
+  const defaults = () => ({ groups: scan.groups, pos: { mobile: {}, tablet: {}, desktop: {} } });
+  const kinds = FlowScan.dataKinds(() => scan);
+  return FlowLayout.create({ key: KEY, storage, hasScreen: (id) => scan.screens.some((s) => s.id === id), defaults, kinds, ...over });
 };
 const members = (layout) => Object.fromEntries(layout.groups.map((l) => [l.id, l.screens]));
 const cap = (layout, id) => layout.caps.find((c) => c.id === id);
@@ -191,7 +186,7 @@ test("captions are saved with the layout, as edits, under the one key", () => {
 test("a caption edit is an undo step like a group's text", () => {
   const storage = memory();
   const layout = layoutFor(v1(), storage);
-  const commit = FlowCommit.create({ layout, redraw: { world() {}, layout() {}, scans() {}, notes() {}, conns() {} } });
+  const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   const before = layout.snapshot();
   cap(layout, "home").title = "Changed";
   commit.since(before);

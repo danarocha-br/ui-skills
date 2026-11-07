@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowLayout, FlowCommit, FlowGesture } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const KEY = "flow-canvas.layout.v1";
 const DEFAULTS = () => ({
@@ -42,10 +43,11 @@ function setup({ pos = {} } = {}) {
       Object.assign(d.pos.mobile, pos);
       return d;
     },
+    kinds: builtinKinds(),
   });
-  const redraw = {};
-  for (const kind of ["layout", "scans", "notes", "conns", "world"]) redraw[kind] = () => log.push("redraw:" + kind);
-  const commit = FlowCommit.create({ layout, redraw });
+  const redraw = { world: () => log.push("redraw:world"), layout: () => log.push("redraw:layout") };
+  const kinds = builtinKinds({}, { refresh: (name) => log.push("redraw:" + name) });
+  const commit = FlowCommit.create({ layout, kinds, redraw });
   const shown = [];
   const geo = {
     box: (id) => BOX[id],

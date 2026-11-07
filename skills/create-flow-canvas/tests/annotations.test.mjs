@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowLayout, FlowCommit, FlowAnnotations } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const eq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 const DEFAULTS = {
@@ -21,35 +22,33 @@ function setup({ clock = () => 0, threshold } = {}) {
   const log = [];
   const data = {};
   const storage = { getItem: (k) => data[k] ?? null, setItem: (k, v) => void (data[k] = String(v)) };
-  const layout = FlowLayout.create({ key: "k", storage, hasScreen: () => true, defaults: () => DEFAULTS });
+  const layout = FlowLayout.create({ key: "k", storage, hasScreen: () => true, defaults: () => DEFAULTS, kinds: builtinKinds(DEFAULTS) });
   layout.pos.mobile.a = { x: 100, y: 100 };
   layout.pos.mobile.b = { x: 300, y: 300 };
   layout.save();
-  const redraw = {};
-  for (const kind of ["layout", "scans", "notes", "conns", "world"]) redraw[kind] = () => log.push("redraw:" + kind);
-  const commit = FlowCommit.create({ layout, redraw });
-  const items = {};
+  const redraw = { world: () => log.push("redraw:world"), layout: () => log.push("redraw:layout") };
+  const commit = FlowCommit.create({ layout, kinds: builtinKinds(DEFAULTS, { refresh: (name) => log.push("redraw:" + name) }), redraw });
   const dot = {
     name: "dot",
     movable: true,
     preventDefault: true,
     owns: (t) => !!t.dot,
-    match: (t, how) => (t.dot && !(how === "pointer" && t.editing) ? (items[t.dot] ||= { id: t.dot }) : null), /* same object for the same dot, as a DOM element would be */
-    origin: (item) => ({ ...layout.pos.mobile[item.id] }),
-    lift: (item) => log.push("lift:" + item.id),
-    place: (item, pos) => log.push(`place:${item.id}:${pos.x},${pos.y}`),
-    save: (item, pos, how) => {
-      layout.pos.mobile[item.id] = { x: pos.x, y: pos.y };
-      if (how.nudged) log.push("save:" + item.id + ":nudged");
+    match: (t, how) => (t.dot && !(how === "pointer" && t.editing) ? t.dot : null),
+    origin: (id) => ({ ...layout.pos.mobile[id] }),
+    lift: (id) => log.push("lift:" + id),
+    place: (id, pos) => log.push(`place:${id}:${pos.x},${pos.y}`),
+    save: (id, pos, how) => {
+      layout.pos.mobile[id] = { x: pos.x, y: pos.y };
+      if (how.nudged) log.push("save:" + id + ":nudged");
     },
-    settle: (item, how) => log.push(`settle:${item.id}:${how.moved ? "moved" : "still"}${how.cancelled ? ":cancelled" : ""}`),
-    tap: (item) => log.push("tap:" + item.id),
-    erase: (item) => delete layout.pos.mobile[item.id],
-    erased: (item) => log.push("erased:" + item.id),
+    settle: (id, how) => log.push(`settle:${id}:${how.moved ? "moved" : "still"}${how.cancelled ? ":cancelled" : ""}`),
+    tap: (id) => log.push("tap:" + id),
+    erase: (id) => delete layout.pos.mobile[id],
+    erased: (id) => log.push("erased:" + id),
     redraw: ["conns"],
   };
   const caption = { name: "caption", owns: (t) => !!t.caption }; /* only takes part in the check */
-  const link = { name: "link", movable: false, match: (t) => (t.link ? { id: t.link } : null), owns: (t) => !!t.link, erase: () => {} };
+  const link = { name: "link", movable: false, match: (t) => t.link || null, owns: (t) => !!t.link, erase: () => {} };
   const annotations = FlowAnnotations.create({ commit, kinds: [dot, caption, link], clock, threshold });
   return { layout, annotations, log, commit };
 }
@@ -171,12 +170,12 @@ test("a key on something that is not an annotation is left alone; a kind with no
   assert.equal(annotations.keyDown({ link: "c1" }, "Delete", {}), true);
 });
 
-test("remove(kind, item) is the same path for a × button; an unknown kind fails loudly", () => {
+test("remove(kind, id) is the same path for a × button; an unknown kind fails loudly", () => {
   const { layout, annotations, log } = setup();
-  annotations.remove("dot", { id: "a" });
+  annotations.remove("dot", "a");
   assert.equal(layout.pos.mobile.a, undefined);
   assert.deepEqual(log, ["redraw:conns", "erased:a"]);
-  assert.throws(() => annotations.remove("sticker", {}), /unknown annotation kind "sticker"/);
+  assert.throws(() => annotations.remove("sticker", "a"), /unknown annotation kind "sticker"/);
 });
 
 test("owns(target) is true for anything any kind recognises as its own, including kinds that only take part in this check", () => {

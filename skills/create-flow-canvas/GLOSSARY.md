@@ -23,8 +23,12 @@ In code the title is `title` and the description is `sub`, shown or hidden by `s
 _Avoid_: Heading, label, subtitle
 
 **Annotation**:
-Something laid over the frames rather than part of a screen: a note, a scanner finding, a connector, or a caption. Notes and scanner findings can be moved; connectors and captions are edited in place.
+Something laid over the frames rather than part of a screen: a note, a scanner finding, a connector, or a caption. Notes and scanner findings can be moved; connectors and captions are edited in place. Each is an **annotation kind**.
 _Avoid_: Overlay, marker, comment
+
+**Annotation kind**:
+One sort of annotation (notes, findings, connectors, captions), declared as one object that the layout, the commit and the annotation module all read. Its **data half** says what is saved (its field in the layout, the items the scan gives, how loading cleans them, which Reset brings it back); its **view half** says how it is drawn (`refresh`), found, grabbed, moved and deleted. Items are ids, and a kind keeps its own id-to-DOM registry, so nothing else holds a node of it. The page declares one list of kinds; the order of the list is the order they are redrawn in. Adding a kind is adding one object to that list; `tests/kinds.test.mjs` does it with a throwaway fifth kind. A kind the scan itself provides also needs its place in the scan's shape (`FlowScan.read` and `FlowScan.dataKinds`).
+_Avoid_: Layer, type, adapter (the object is the kind; "adapter" is the engineering word for its view half)
 
 **Scan**:
 What the scanner found in a product's code: its screens, their states, the groups and links between them, findings, notes and captions. The canvas shows a scan; it does not own it. The Loam canvas is one scan, the **sample**. Everything in it is text, shown as text and never as markup (a route may contain "<", "&" or "[id]"), except a screen's own render, which is markup by design.
@@ -47,7 +51,7 @@ A size the canvas can show every screen at (mobile, tablet, desktop). Each is de
 _Avoid_: Breakpoint, platform
 
 **Carry**:
-What a note does on a device it has no place on: it keeps the same relative spot on the frame's screen as on the device it was placed on. A carried place is worked out each time and is not saved, so it never overrides one the user chose. With no place on any device, a note takes the **resting spot** near the frame's right edge.
+What a note or a finding does on a device it has no place on: it keeps the same relative spot on the frame's screen as on the device it was placed on. A carried place is worked out each time and is not saved, so it never overrides one the user chose. A note with no place on any device takes the **resting spot** near the frame's right edge; a finding with none stays in its default stack under its frame, and Tidy lets go of a finding's moved places on every device.
 _Avoid_: Fallback, default position
 
 **Slide**:

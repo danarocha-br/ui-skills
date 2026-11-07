@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FlowLayout, FlowCommit } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const KEY = "flow-canvas.layout.v1";
 const SCREENS = new Set(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]);
@@ -25,7 +26,7 @@ const memory = (seed = {}) => {
   return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => void (data[k] = String(v)) };
 };
 const make = (storage = memory(), over = {}) =>
-  FlowLayout.create({ key: KEY, storage, hasScreen: (id) => SCREENS.has(id), defaults: () => DEFAULTS, ...over });
+  FlowLayout.create({ key: KEY, storage, hasScreen: (id) => SCREENS.has(id), defaults: () => DEFAULTS, kinds: builtinKinds(() => DEFAULTS), ...over });
 /* the module runs in its own vm context, so compare through JSON rather than by prototype */
 const eq = (actual, expected, message) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, message);
 const groupById = (layout, id) => layout.groups.find((l) => l.id === id);
@@ -79,7 +80,7 @@ test("title, description and its visibility are saved with the layout and come b
 
 test("the snapshot carries the text: rename, then undo through the commit seam puts the old name back", () => {
   const layout = make();
-  const commit = FlowCommit.create({ layout, redraw: { world() {}, layout() {}, scans() {}, notes() {}, conns() {} } });
+  const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   const g = commit(() => addGroup(layout, ["s9"]));
   commit(() => {
     groupById(layout, g.id).title = "Billing";
@@ -98,7 +99,7 @@ test("the snapshot carries the text: rename, then undo through the commit seam p
 
 test("undoing a group's creation leaves no name behind, and a later group with that id starts blank", () => {
   const layout = make();
-  const commit = FlowCommit.create({ layout, redraw: { world() {}, layout() {}, scans() {}, notes() {}, conns() {} } });
+  const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   commit(() => addGroup(layout, ["s9"]));
   commit(() => {
     groupById(layout, "g4").title = "Billing";
@@ -111,7 +112,7 @@ test("undoing a group's creation leaves no name behind, and a later group with t
 
 test("a group that leaves the layout (as a dissolved one does) takes its name with it, and undo brings both back", () => {
   const layout = make();
-  const commit = FlowCommit.create({ layout, redraw: { world() {}, layout() {}, scans() {}, notes() {}, conns() {} } });
+  const commit = FlowCommit.create({ layout, kinds: builtinKinds(), redraw: { world() {}, layout() {} } });
   commit(() => {
     groupById(layout, "g3").title = "Upgrade: pay";
   });

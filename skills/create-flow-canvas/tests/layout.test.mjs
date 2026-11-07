@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FlowLayout } from "./modules.mjs";
+import { builtinKinds } from "./kinds.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,6 +45,7 @@ const make = (storage = memory(), over = {}) =>
     storage,
     hasScreen: (id) => SCREENS.has(id),
     defaults: () => DEFAULTS,
+    kinds: builtinKinds(() => DEFAULTS),
     ...over,
   });
 /* the module runs in its own vm context, so compare through JSON rather than by prototype */
@@ -210,7 +212,7 @@ test("snapshot leaves out page-only group fields and the counters", () => {
   const layout = make();
   Object.assign(layout.groups[0], { x: 5, top: 6, pinned: true, el: { not: "serialisable" } });
   const s = plain(layout);
-  eq(Object.keys(s), ["lanes", "pos", "conns", "scans", "notes", "caps"]);
+  eq(Object.keys(s).sort(), ["caps", "conns", "lanes", "notes", "pos", "scans"]);
   eq(s.lanes.edits, {}, "nothing the page keeps on a group is an edit");
   assert.ok(!layout.snapshot().includes("serialisable"));
 });
