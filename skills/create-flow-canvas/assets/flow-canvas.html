@@ -7116,6 +7116,102 @@
       })();
     </script>
 
+    <script id="selection-module">
+      /* ======================================================================
+         SELECTION MODULE
+         What is selected, kept in one place: the frames, which of them is the primary one (the frame the toolbar, the
+         inspector, the arrow keys and "01/09" are about), and the selected connector. A connector and frames are never
+         selected together: choosing frames lets go of the connector, selecting a connector lets go of the frames.
+         (Deselecting frames, by itself, leaves a selected connector alone.) No DOM, no panel, no product knowledge.
+         The page listens and paints; FlowSelection.follows tells the panel.
+
+         Interface
+           const sel = FlowSelection.create()
+           sel.set(ids, primary?)  select exactly these frames. The primary is `primary` when it is one of them, else the
+                                   last. No frames, no primary. Selecting frames lets go of a connector.
+           sel.toggle(id)          shift-click: add the frame and make it the primary, or take it out (the primary then
+                                   is the last that is left)
+           sel.selectConn(id)      select a connector; no frame is selected then
+           sel.clearConn()
+           sel.prune(exists)       keep only the frames for which exists(id) is true (an undo that brought back a layout
+                                   without them); the primary falls back to the last that is left
+           sel.state() -> { ids, primary, conn }   copies: change them and nothing happens
+           sel.ids()  sel.primary()  sel.conn()  sel.has(id)  sel.count()
+           sel.on(listener) -> off listener(state, change) after every change, never for a call that changed nothing.
+                                   change: { frames, primary, conn }, each true when that part changed.
+           FlowSelection.follows(sel, panel) -> off
+                                   the panel (FlowPanel) follows the primary frame, however the selection changes: a
+                                   click, a marquee, a shift-click, select all, the start of a drag, deselecting. The
+                                   panel itself only follows while it is showing Inspect.
+         ====================================================================== */
+      var FlowSelection = (function () {
+        function create() {
+          let ids = [],
+            primary = null,
+            conn = null;
+          const listeners = new Set();
+          const state = () => ({ ids: [...ids], primary, conn });
+          /* run a change, then tell the listeners if it was one */
+          function run(fn) {
+            const before = { ids: ids.join("\u0000"), primary, conn };
+            fn();
+            const change = { frames: before.ids !== ids.join("\u0000"), primary: before.primary !== primary, conn: before.conn !== conn };
+            if (!change.frames && !change.primary && !change.conn) return false;
+            listeners.forEach((l) => l(state(), change));
+            return true;
+          }
+          const put = (list, want) => {
+            ids = [...new Set(list)];
+            primary = ids.length ? (ids.includes(want) ? want : ids[ids.length - 1]) : null;
+          };
+          const api = {
+            set(list, want) {
+              return run(() => {
+                put(list, want);
+                if (ids.length) conn = null;
+              });
+            },
+            toggle(id) {
+              return run(() => {
+                if (ids.includes(id)) put(ids.filter((x) => x !== id));
+                else put([...ids, id], id);
+                if (ids.length) conn = null;
+              });
+            },
+            selectConn(id) {
+              return run(() => {
+                put([]);
+                conn = id;
+              });
+            },
+            clearConn() {
+              return run(() => {
+                conn = null;
+              });
+            },
+            prune(exists) {
+              return run(() => put(ids.filter(exists), primary));
+            },
+            state,
+            ids: () => [...ids],
+            primary: () => primary,
+            conn: () => conn,
+            has: (id) => ids.includes(id),
+            count: () => ids.length,
+            on(listener) {
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+          };
+          return api;
+        }
+        function follows(sel, panel) {
+          return sel.on((st) => panel.follow(st.primary));
+        }
+        return { create, follows };
+      })();
+    </script>
+
     <script id="gesture-module">
       /* ======================================================================
          GESTURE MODULE
@@ -8177,11 +8273,11 @@
         match(t, how) {
           if (how !== "delete") return null;
           const chip = t.closest(".echip");
-          return chip ? chip.dataset.id : selConn; /* a selected connector is deleted from anywhere */
+          return chip ? chip.dataset.id : selection.conn(); /* a selected connector is deleted from anywhere */
         },
         erase(id) {
           layout.remove("conns", id);
-          if (selConn === id) selConn = null;
+          if (selection.conn() === id) selection.clearConn();
         },
         erased: () => toast("Connector deleted. ⌘Z to undo."),
       });
@@ -8572,7 +8668,7 @@
         if (open) {
           if (opts.fly !== false) fly(fitRect(groupRect(L), 40));
         } else {
-          if ([...selSet].some((i) => L.screens.includes(i))) select(null);
+          if (selection.ids().some((i) => L.screens.includes(i))) select(null);
           if (playing && playGroup === id) stopPlay();
           if (opts.fly !== false) fly(fitRect(geo.bounds(), 60, 1.1));
         }
@@ -8684,47 +8780,45 @@
       /* ======================================================================
    SELECTION, TOOLBAR, PANEL
    ====================================================================== */
-      let selected = null,
-        selSet = new Set();
+      /* what is selected is FlowSelection's; the page paints it (reflectSel) and the panel follows it */
+      const selection = FlowSelection.create();
       const seltb = $("#seltb");
       function markActive() {
+        const primary = selection.primary(),
+          conn = selection.conn();
         document
           .querySelectorAll(".conn[data-to],.echip[data-to]")
-          .forEach((el) =>
-            el.classList.toggle("active", el.dataset.to === selected),
-          );
+          .forEach((el) => el.classList.toggle("active", el.dataset.to === primary));
         document
           .querySelectorAll(".conn,.echip")
-          .forEach((el) =>
-            el.classList.toggle("sel", !!selConn && el.dataset.id === selConn),
-          );
+          .forEach((el) => el.classList.toggle("sel", !!conn && el.dataset.id === conn));
       }
       function reflectSel() {
+        const { ids, primary } = selection.state();
         ORDER.forEach((s) => {
           const c = colOf(s);
-          if (c) c.classList.toggle("sel", selSet.has(s));
+          if (c) c.classList.toggle("sel", selection.has(s));
         });
         markActive();
-        const i = selected ? ORDER.indexOf(selected) + 1 : 0;
+        const i = primary ? ORDER.indexOf(primary) + 1 : 0;
         $("#pnum").textContent =
           String(i).padStart(2, "0") +
           "/" +
           String(ORDER.length).padStart(2, "0");
-        seltb.classList.toggle("show", selSet.size > 0);
-        seltb.classList.toggle("multi", selSet.size > 1);
-        seltb.querySelector(".cnt").textContent = selSet.size + " selected";
-        seltb.querySelector('[data-a="ungroup"]').hidden = ![...selSet].some(
+        seltb.classList.toggle("show", ids.length > 0);
+        seltb.classList.toggle("multi", ids.length > 1);
+        seltb.querySelector(".cnt").textContent = ids.length + " selected";
+        seltb.querySelector('[data-a="ungroup"]').hidden = !ids.some(
           (id) => groupOf(id),
         );
         updateSelBox();
       }
+      /* every change to the selection repaints it, and the panel follows the primary frame, however it changed */
+      selection.on(reflectSel);
+      FlowSelection.follows(selection, panel);
+      /* select exactly these frames. Repainted even when nothing changed: a rebuilt world has fresh elements to mark. */
       function setSel(ids, primary) {
-        if (ids.length) selConn = null;
-        selSet = new Set(ids);
-        selected =
-          primary !== undefined ? primary : ids[ids.length - 1] || null;
-        reflectSel();
-        if (!selected) panel.follow(null);
+        if (!selection.set(ids, primary)) reflectSel();
       }
       function select(id, focus) {
         if (id) {
@@ -8733,7 +8827,6 @@
         }
         setSel(id ? [id] : [], id || null);
         if (focus && id) focusScreen(id);
-        if (id) panel.follow(id);
       }
       function go(from, to) {
         const hop = layout.conns.find((c) => c.from === from && c.to === to);
@@ -8751,9 +8844,9 @@
       }
       seltb.addEventListener("click", (e) => {
         const a = e.target.closest("button")?.dataset.a;
-        if (!a || !selSet.size) return;
+        if (!a || !selection.count()) return;
         e.stopPropagation();
-        const id = selected || [...selSet][0],
+        const id = selection.primary() || selection.ids()[0],
           L = groupOf(id);
         if (a === "focus") focusScreen(id);
         if (a === "inspect") panel.open("inspect", id);
@@ -8823,7 +8916,7 @@
             else document.activeElement.blur();
           }
           panelEl.inert = true;
-          if (selected) focusScreen(selected);
+          if (selection.primary()) focusScreen(selection.primary());
           return;
         }
         if (ch.opened) panelReturn = document.activeElement;
@@ -8836,7 +8929,7 @@
           refreshSweepUI();
         }
         if (ch.opened) {
-          if (selected) focusScreen(selected);
+          if (selection.primary()) focusScreen(selection.primary());
           /* a keyboard user who opens the inspector lands in it; closing hands focus back */
           if (st.mode === "inspect")
             setTimeout(() => {
@@ -8887,7 +8980,7 @@
         return `<ul class="uses" aria-label="Screens that use ${esc(sw.component)}">${sw.uses
           .map((x) => {
             const S = SCREENS[x];
-            return `<li><button data-uid="${esc(x)}"${x === selected ? ' aria-current="true"' : ""}><span class="un">${esc(S.name)}</span><span class="ur">${esc(S.route)}</span></button></li>`;
+            return `<li><button data-uid="${esc(x)}"${x === selection.primary() ? ' aria-current="true"' : ""}><span class="un">${esc(S.name)}</span><span class="ur">${esc(S.route)}</span></button></li>`;
           })
           .join("")}</ul>`;
       }
@@ -9003,7 +9096,7 @@
         });
         pbody.querySelectorAll(".st[data-st]").forEach((b) =>
           b.addEventListener("click", () => {
-            if (selected !== id) select(id);
+            if (selection.primary() !== id) select(id);
             setState(id, +b.dataset.st);
             repaintPanel();
           }),
@@ -9148,8 +9241,7 @@
    A connector belongs to two frames, not to a group. It leaves the side that faces the other
    frame, bends around whatever is between them, and follows both ends while they move.
    ====================================================================== */
-      let selConn = null,
-        connDrag = null;
+      let connDrag = null;
       const connEls = new Map();
       function worldM() {
         return new DOMMatrixReadOnly(getComputedStyle(world).transform);
@@ -9279,9 +9371,7 @@
         if (layout.conns.some((x) => x.id === id)) annotations.remove("conns", id);
       }
       function selectConn(id) {
-        setSel([], null);
-        selConn = id;
-        markActive();
+        selection.selectConn(id);
         toast(
           "Connector selected. Delete removes it, double-click its label to rename.",
         );
@@ -9299,7 +9389,7 @@
       }
       function connectSel() {
         const ids = FlowGeometry.readingOrder(
-          [...selSet].filter((i) => geo.place(i) && !geo.place(i).deck),
+          selection.ids().filter((i) => geo.place(i) && !geo.place(i).deck),
           geo.place,
         );
         if (ids.length < 2) {
@@ -9330,7 +9420,7 @@
         moved = false;
         connDrag = { from: id, side: port.dataset.side, tgt: null, el: null };
         document.body.classList.add("connecting");
-        if (!selSet.has(id)) setSel([id], id);
+        if (!selection.has(id)) setSel([id], id);
       }
       function updateConnDrag(e) {
         moved = true;
@@ -9445,11 +9535,9 @@
    ====================================================================== */
       function undo() {
         const done = commit.undo(() => {
-          selConn = null;
-          setSel(
-            [...selSet].filter((id) => SCREENS[id]),
-            selected,
-          );
+          selection.clearConn();
+          selection.prune((id) => !!SCREENS[id]);
+          reflectSel(); /* the layout may have been drawn again: its frames are new elements */
         });
         toast(done ? "Undone" : "Nothing to undo");
       }
@@ -9493,10 +9581,10 @@
         toast(`Ungrouped “${name}”. Frames stay on the canvas. ⌘Z to undo.`);
       }
       function groupSel() {
-        if (selSet.size) groupFrames([...selSet]);
+        if (selection.count()) groupFrames(selection.ids());
       }
       function removeSel() {
-        removeFromGroup([...selSet]);
+        removeFromGroup(selection.ids());
       }
       /* put the view back in order without touching what the flows are: group membership and order,
          connectors, names, annotations and every note's text stay; only positions are reset on this device (a finding's
@@ -9514,7 +9602,7 @@
         commit(
           () => {
             layout.reset();
-            selConn = null;
+            selection.clearConn();
             setSel([]);
           },
           { redraw: ["world"] },
@@ -9585,7 +9673,7 @@
       world.insertBefore(selbox, notesEl);
       function updateSelBox() {
         const m = DEV.metrics;
-        const ids = [...selSet].filter(
+        const ids = selection.ids().filter(
           (id) => geo.place(id) && !geo.place(id).deck && colOf(id),
         );
         if (ids.length < 2) {
@@ -9671,10 +9759,10 @@
         }
         const id = press.id;
         const ids =
-          selSet.has(id) && selSet.size > 1
-            ? [...selSet].filter((x) => geo.place(x) && !geo.place(x).deck)
+          selection.has(id) && selection.count() > 1
+            ? selection.ids().filter((x) => geo.place(x) && !geo.place(x).deck)
             : [id];
-        if (!selSet.has(id) || selSet.size <= 1) setSel([id], id);
+        if (!selection.has(id) || selection.count() <= 1) setSel([id], id);
         gesture.begin({ kind: "frame", ids, pid: id, pointer });
       }
       function updateDrag(e) {
@@ -9744,9 +9832,9 @@
         document.body.classList.remove("selecting");
         if (!m || !m.el) return;
         m.el.remove();
-        if (selSet.size > 1)
+        if (selection.count() > 1)
           toast(
-            selSet.size +
+            selection.count() +
               " selected. ⌘G groups them, ⌘⇧G takes them out of their groups.",
           );
       }
@@ -9814,7 +9902,7 @@
           sx: e.clientX,
           sy: e.clientY,
           el: null,
-          base: e.shiftKey ? [...selSet] : [],
+          base: e.shiftKey ? selection.ids() : [],
           last: null,
         };
       });
@@ -9955,13 +10043,10 @@
         if (col) {
           const id = col.dataset.id;
           if (e.shiftKey) {
-            const s = new Set(selSet);
-            if (s.has(id)) s.delete(id);
-            else s.add(id);
-            setSel([...s], s.has(id) ? id : [...s].pop() || null);
+            selection.toggle(id);
             return;
           }
-          if (!(selSet.size > 1 && selSet.has(id)) && selected !== id)
+          if (!(selection.count() > 1 && selection.has(id)) && selection.primary() !== id)
             select(id, false);
         }
         const hit = FrameDom.hit(e);
@@ -10090,7 +10175,7 @@
         createNote(f ? { frame: f, local: localFrom(f, wx, wy) } : { world: [Math.round(wx), Math.round(wy)] });
       }
       const step = (d) => {
-        const i = selected ? ORDER.indexOf(selected) : -1;
+        const i = selection.primary() ? ORDER.indexOf(selection.primary()) : -1;
         stopPlay();
         select(ORDER[clamp(i + d, 0, ORDER.length - 1)], true);
       };
@@ -10170,9 +10255,8 @@
             endConnDrag(true);
             return;
           }
-          if (selConn) {
-            selConn = null;
-            markActive();
+          if (selection.conn()) {
+            selection.clearConn();
             return;
           }
           if (gesture.active() || annotations.dragging()) {
@@ -10185,11 +10269,11 @@
           closeMenus();
           stopPlay();
           if (panel.state().open) panel.close();
-          else if (selSet.size) select(null);
+          else if (selection.count()) select(null);
           return;
         }
         if (typing) return;
-        if (e.key === "c" && selSet.size > 1) {
+        if (e.key === "c" && selection.count() > 1) {
           connectSel();
           return;
         }
@@ -10211,9 +10295,9 @@
           step(-1);
           e.preventDefault();
         }
-        if (e.key === "f" && selected) focusScreen(selected);
+        if (e.key === "f" && selection.primary()) focusScreen(selection.primary());
         if (e.key === "i") {
-          panel.open("inspect", selected);
+          panel.open("inspect", selection.primary());
         }
         if (e.key === "n") {
           e.preventDefault();
@@ -10243,7 +10327,7 @@
         /* the panel may have turned into a sheet or back: keep what is selected in the room that is left */
         clearTimeout(resizeT);
         resizeT = setTimeout(() => {
-          if (panel.state().open && selected) focusScreen(selected);
+          if (panel.state().open && selection.primary()) focusScreen(selection.primary());
         }, 120);
       });
 
@@ -10269,7 +10353,7 @@
         const L = layout.groups.filter((l) => l.screens.length);
         if (!L.length) return;
         const open = !L.every((l) => l.open);
-        if (!open && [...selSet].some((i) => groupOf(i))) select(null);
+        if (!open && selection.ids().some((i) => groupOf(i))) select(null);
         commit(() => layout.setOpen(L.map((l) => l.id), open));
         fly(fitRect(geo.bounds(), 40, 1.1));
       }
@@ -10283,8 +10367,8 @@
         switching = true;
         stopPlay();
         closeMenus();
-        const sel = [...selSet],
-          prim = selected;
+        const sel = selection.ids(),
+          prim = selection.primary();
         world.style.transition = "opacity .18s";
         world.style.opacity = 0;
         await sleep(200);
