@@ -7212,6 +7212,236 @@
       })();
     </script>
 
+    <script id="pointer-module">
+      /* ======================================================================
+         POINTER MODULE
+         Decides what a press, a move and a release mean on the canvas: pan, drag a frame or a group, draw a marquee,
+         draw a connector from an edge dot, drag a note or a finding card, or nothing. The page used to hold this as
+         seven flags (pan, moved, press, mq, connDrag, handMode, spaceDown) read by four handlers; here it is one mode
+         and the rules for moving between modes, in one place. Everything it makes happen is done by the page, through
+         the host. It knows no DOM: the page says what was pressed (a "hit") and where, in screen pixels.
+
+         Interface
+           const pointer = FlowPointer.create(host)     host: the page's side (see below); it must have every function
+           pointer.down({ button, x, y, shift, hit }) -> { prevent }
+               button  0 primary, 1 middle (pans, in any tool); any other is ignored.
+               hit     what the press landed on, only for the primary button (the page works it out, in this order):
+                         { kind: "annotation", prevent }  a note, a card, a chip, a caption: its own press (an annotation
+                                                         drag may have begun: the host says so, see annotationDragging)
+                         { kind: "port", id, side }      an edge dot: draws a connector from frame `id`
+                         { kind: "grip", group }         a group's grip: drags the group
+                         { kind: "deck", group }         a closed group's deck: drags the group
+                         { kind: "frame", id }           a frame: drags it (and what is selected with it)
+                         { kind: "chrome" }              a header, a button, a text field: nothing starts
+                         { kind: "canvas" }              empty canvas: a marquee, or a pan with the hand tool or Space
+               -> prevent: true when the page should call preventDefault on the event.
+           pointer.move({ x, y })    pointer.up()    pointer.cancel()    (the pointercancel event: calls off everything)
+           pointer.cancelConnect() -> bool   Escape while a connector is being drawn: calls it off; false if none was
+           pointer.cancelDrag() -> bool      Escape while a frame, a group or an annotation is being dragged: calls it
+                                             off; false if nothing was being dragged
+           pointer.consumeMoved() -> bool    the click that follows a drag is not a click: true once if the pointer
+                                             travelled since the press, then forgets
+           pointer.setHand(on)  pointer.space(down)  pointer.blur()   the hand tool (H, V) and Space held; a window that
+                                             loses focus lets Space go
+           pointer.state() -> { mode, moved, hand, space }   mode: idle | press | pan | marquee | connect
+
+           host (what the page does; all required)
+             stopPlay()                      a press stops the flow that is playing
+             hand(on)                        the hand tool is on (set, or Space held): show it
+             camera() -> { x, y }  moveCamera(x, y)  panStarted()  panEnded()
+             gestureActive() -> bool         a frame or group drag is under way (FlowGesture)
+             beginDrag(press, at) -> bool    press { kind: "frame", id } | { kind: "group", group }; at { x, y }: where it
+                                             was pressed. False when there is nothing to drag (the press is dropped).
+             moveDrag(pt)  endDrag()  cancelDrag()
+             annotationDragging() -> bool    an annotation is being dragged (FlowAnnotations)
+             moveAnnotation(pt)  endAnnotation()  cancelAnnotation()
+             startMarquee(at, additive)  moveMarquee(pt)  endMarquee()  cancelMarquee()   additive: shift was held
+             startConnect(hit)  moveConnect(pt)  endConnect(cancelled)
+
+           Rules: a press on a frame or group does not drag until the pointer is more than 5px away; a pan does not start
+           until 4px; a marquee follows from the first move. While a connector is drawn every move is its; otherwise
+           while an annotation is dragged every move is the annotation's; otherwise a drag, a marquee, a pan, in that order.
+           A release ends what is live (a drag, an annotation drag, a marquee, a pan); a connector's release ends only
+           the connector. A press that started nothing leaves nothing to end.
+         ====================================================================== */
+      var FlowPointer = (function () {
+        const HOST = [
+          "stopPlay", "hand", "camera", "moveCamera", "panStarted", "panEnded",
+          "gestureActive", "beginDrag", "moveDrag", "endDrag", "cancelDrag",
+          "annotationDragging", "moveAnnotation", "endAnnotation", "cancelAnnotation",
+          "startMarquee", "moveMarquee", "endMarquee", "cancelMarquee",
+          "startConnect", "moveConnect", "endConnect",
+        ];
+        const PRESS_SLOP = 5,
+          PAN_SLOP = 4;
+
+        function create(host) {
+          const missing = HOST.filter((k) => !host || typeof host[k] !== "function");
+          if (missing.length) throw new Error("FlowPointer: the host has no " + missing.join(", "));
+          let mode = "idle",
+            moved = false,
+            press = null /* what a press on a frame or group is about: { kind, id | group } */,
+            from = null /* where the press was, in screen pixels */,
+            cam0 = null /* the camera when a pan began */,
+            hand = false,
+            space = false;
+          const reset = () => {
+            mode = "idle";
+            press = from = cam0 = null;
+          };
+          const showHand = () => host.hand(hand || space);
+          const dist = (pt) => Math.hypot(pt.x - from.x, pt.y - from.y);
+
+          function down({ button, x, y, shift, hit }) {
+            if (button === 1) {
+              host.stopPlay();
+              moved = false;
+              mode = "pan";
+              from = { x, y };
+              cam0 = { ...host.camera() };
+              return { prevent: true };
+            }
+            if (button !== 0) return { prevent: false };
+            if (!hit) throw new Error("FlowPointer.down: a primary-button press needs a hit");
+            switch (hit.kind) {
+              case "annotation":
+                return { prevent: !!hit.prevent };
+              case "chrome":
+                return { prevent: false };
+              case "port":
+                host.stopPlay();
+                moved = false;
+                reset();
+                mode = "connect";
+                host.startConnect(hit);
+                return { prevent: true };
+              case "grip":
+              case "deck":
+              case "frame":
+                host.stopPlay();
+                moved = false;
+                reset();
+                mode = "press";
+                from = { x, y };
+                press = hit.kind === "frame" ? { kind: "frame", id: hit.id } : { kind: "group", group: hit.group };
+                return { prevent: hit.kind === "grip" };
+              case "canvas":
+                host.stopPlay();
+                moved = false;
+                reset();
+                from = { x, y };
+                if (hand || space) {
+                  mode = "pan";
+                  cam0 = { ...host.camera() };
+                } else {
+                  mode = "marquee";
+                  host.startMarquee({ x, y }, !!shift);
+                }
+                return { prevent: false };
+              default:
+                throw new Error('FlowPointer.down: no kind of hit "' + hit.kind + '"');
+            }
+          }
+
+          function move(pt) {
+            if (mode === "connect") {
+              moved = true;
+              host.moveConnect(pt);
+              return;
+            }
+            if (host.annotationDragging()) {
+              host.moveAnnotation(pt);
+              return;
+            }
+            if (mode === "press" && !host.gestureActive() && dist(pt) > PRESS_SLOP) {
+              moved = true;
+              if (!host.beginDrag(press, from)) reset();
+            }
+            if (host.gestureActive()) {
+              host.moveDrag(pt);
+              return;
+            }
+            if (mode === "marquee") {
+              moved = true;
+              host.moveMarquee(pt);
+              return;
+            }
+            if (mode !== "pan") return;
+            if (!moved && dist(pt) > PAN_SLOP) {
+              moved = true;
+              host.panStarted();
+            }
+            if (moved) host.moveCamera(cam0.x + pt.x - from.x, cam0.y + pt.y - from.y);
+          }
+
+          function up() {
+            if (mode === "connect") {
+              reset();
+              host.endConnect(false);
+              return;
+            }
+            const was = mode;
+            reset();
+            if (host.annotationDragging()) host.endAnnotation();
+            if (host.gestureActive()) host.endDrag();
+            if (was === "marquee") host.endMarquee();
+            if (was === "pan") host.panEnded();
+          }
+
+          /* the pointercancel event: the pointer is taken off whatever it was doing. Nothing was written. */
+          function cancel() {
+            const was = mode;
+            reset();
+            if (host.annotationDragging()) host.cancelAnnotation();
+            if (host.gestureActive()) host.cancelDrag();
+            if (was === "connect") host.endConnect(true);
+            if (was === "marquee") host.cancelMarquee();
+            if (was === "pan") host.panEnded();
+          }
+
+          return {
+            down,
+            move,
+            up,
+            cancel,
+            cancelConnect() {
+              if (mode !== "connect") return false;
+              reset();
+              host.endConnect(true);
+              return true;
+            },
+            cancelDrag() {
+              if (!host.gestureActive() && !host.annotationDragging()) return false;
+              if (mode === "press") reset();
+              host.cancelAnnotation();
+              host.cancelDrag();
+              return true;
+            },
+            consumeMoved() {
+              const was = moved;
+              moved = false;
+              return was;
+            },
+            setHand(on) {
+              hand = !!on;
+              showHand();
+            },
+            space(isDown) {
+              if (space === !!isDown) return;
+              space = !!isDown;
+              showHand();
+            },
+            blur() {
+              space = false;
+              showHand();
+            },
+            state: () => ({ mode, moved, hand, space }),
+          };
+        }
+        return { create };
+      })();
+    </script>
+
     <script id="gesture-module">
       /* ======================================================================
          GESTURE MODULE
@@ -9413,19 +9643,14 @@
         );
       }
       /* drag from an edge dot to another frame */
-      function startConnDrag(e, port) {
-        const id = port.closest(".col").dataset.id;
-        e.preventDefault();
-        stopPlay();
-        moved = false;
-        connDrag = { from: id, side: port.dataset.side, tgt: null, el: null };
+      function startConnect({ id, side }) {
+        connDrag = { from: id, side, tgt: null, el: null };
         document.body.classList.add("connecting");
         if (!selection.has(id)) setSel([id], id);
       }
-      function updateConnDrag(e) {
-        moved = true;
+      function updateConnDrag(pt) {
         const now = performance.now(),
-          w = toWorld(e.clientX, e.clientY),
+          w = toWorld(pt.x, pt.y),
           a = geo.screenRect(connDrag.from, now);
         if (!a) return;
         const tgt = geo.frameAt(w, now, { margin: 10, skip: connDrag.from });
@@ -9652,15 +9877,10 @@
       }
 
       /* ---------- dragging ---------- */
-      let pan = null,
-        moved = false,
-        press = null,
-        mq = null,
-        handMode = false,
-        spaceDown = false;
+      /* what a press and a drag mean is FlowPointer's (below); the page draws the marquee it asks for */
+      let mq = null;
       function setHand(on) {
-        handMode = on;
-        stage.classList.toggle("hand", on || spaceDown);
+        pointer.setHand(on);
         toast(
           on
             ? "Hand tool: drag to pan. V returns to select."
@@ -9744,18 +9964,15 @@
         document.querySelectorAll(".col.dragging,.col.merge").forEach((c) => c.classList.remove("dragging", "merge"));
         groupEls.forEach((el) => el.classList.remove("drop"));
       }
-      function beginDrag() {
-        moved = true;
+      /* a press on a frame or group has travelled far enough: take hold of it. False when there is nothing to drag. */
+      function beginDrag(press, from) {
         stage.classList.remove("fly");
         hideHint();
-        const pointer = toWorld(press.sx, press.sy);
+        const at = toWorld(from.x, from.y);
         if (press.kind === "group") {
-          if (!press.group) {
-            press = null;
-            return;
-          }
-          gesture.begin({ kind: "group", id: press.group.id, pointer });
-          return;
+          if (!press.group) return false;
+          gesture.begin({ kind: "group", id: press.group.id, pointer: at });
+          return true;
         }
         const id = press.id;
         const ids =
@@ -9763,10 +9980,8 @@
             ? selection.ids().filter((x) => geo.place(x) && !geo.place(x).deck)
             : [id];
         if (!selection.has(id) || selection.count() <= 1) setSel([id], id);
-        gesture.begin({ kind: "frame", ids, pid: id, pointer });
-      }
-      function updateDrag(e) {
-        gesture.move(toWorld(e.clientX, e.clientY));
+        gesture.begin({ kind: "frame", ids, pid: id, pointer: at });
+        return true;
       }
       function endDrag() {
         const r = gesture.end();
@@ -9776,13 +9991,6 @@
           const where = layout.groups.find((l) => l.id === r.group);
           toast((r.moved ? `Moved into “${groupName(where)}”` : "Reordered") + ". ⌘Z to undo.");
         } else if (r.kind === "loose" && r.moved) toast("Taken out of its group. ⌘Z to undo.");
-      }
-      /* Escape and pointercancel: the pointer is taken off whatever it was dragging. Nothing was written, so there is
-         nothing to put back; what is left of the press does nothing. */
-      function cancelDrag() {
-        annotations.cancel();
-        gesture.cancel();
-        press = null;
       }
       function marqueeHits(r) {
         const a = toWorld(r.x, r.y),
@@ -9794,12 +10002,14 @@
           return q.x + q.w > a.x && q.x < b.x && q.y + q.h > a.y && q.y < b.y;
         });
       }
-      function updateMarquee(e) {
+      function startMarquee(at, additive) {
+        mq = { sx: at.x, sy: at.y, el: null, base: additive ? selection.ids() : [], last: null };
+      }
+      function updateMarquee(pt) {
         if (!mq.el) {
           mq.el = document.createElement("div");
           mq.el.className = "marquee";
           document.body.appendChild(mq.el);
-          moved = true;
           hideHint();
           document.body.classList.add("selecting");
           getSelection().removeAllRanges();
@@ -9807,10 +10017,10 @@
             document.activeElement.blur &&
             document.activeElement.blur();
         }
-        const x = Math.min(e.clientX, mq.sx),
-          y = Math.min(e.clientY, mq.sy),
-          w = Math.abs(e.clientX - mq.sx),
-          h = Math.abs(e.clientY - mq.sy);
+        const x = Math.min(pt.x, mq.sx),
+          y = Math.min(pt.y, mq.sy),
+          w = Math.abs(pt.x - mq.sx),
+          h = Math.abs(pt.y - mq.sy);
         Object.assign(mq.el.style, {
           left: x + "px",
           top: y + "px",
@@ -9826,6 +10036,13 @@
           setSel(next, next[next.length - 1] || null);
         }
       }
+      /* the pointer was taken away mid-marquee (pointercancel): what was selected so far stays, the box goes */
+      function cancelMarquee() {
+        const m = mq;
+        mq = null;
+        document.body.classList.remove("selecting");
+        if (m && m.el) m.el.remove();
+      }
       function endMarquee() {
         const m = mq;
         mq = null;
@@ -9839,138 +10056,79 @@
           );
       }
 
-      stage.addEventListener("pointerdown", (e) => {
-        if (e.button === 1) {
-          e.preventDefault();
-          stopPlay();
-          moved = false;
-          pan = { sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y };
-          return;
-        }
-        if (e.button !== 0) return;
-        const grabbed = annotations.down(e.target, { x: e.clientX, y: e.clientY });
-        if (grabbed) {
-          if (grabbed.prevent) e.preventDefault();
-          return;
-        }
+      /* what a press landed on, in the order that matters: the annotations get the first look (a press on one may begin its
+         drag), then the edge dot, the group's grip, a frame or a deck, then anything that is not the canvas */
+      function hitOf(e) {
+        const t = e.target;
+        const grabbed = annotations.down(t, { x: e.clientX, y: e.clientY });
+        if (grabbed) return { kind: "annotation", prevent: !!grabbed.prevent };
         /* a press on any part of an annotation (a note's button, a connector chip, a caption) is not a press on the canvas */
-        if (annotations.owns(e.target)) return;
-        const port = e.target.closest(".port");
-        if (port) {
-          startConnDrag(e, port);
-          return;
-        }
-        const grip = e.target.closest(".grip");
-        if (grip) {
-          const L = layout.groups.find((l) => l.id === grip.closest(".lane").id);
-          e.preventDefault();
-          stopPlay();
-          moved = false;
-          press = { kind: "group", group: L, sx: e.clientX, sy: e.clientY };
-          return;
-        }
-        const col = e.target.closest(".col");
-        if (
-          col &&
-          !e.target.closest(".states,button,[contenteditable]")
-        ) {
-          stopPlay();
-          moved = false;
-          press = col.classList.contains("deck")
-            ? {
-                kind: "group",
-                group: groupOf(col.dataset.id),
-                sx: e.clientX,
-                sy: e.clientY,
-              }
-            : {
-                kind: "frame",
-                id: col.dataset.id,
-                sx: e.clientX,
-                sy: e.clientY,
-              };
-          return;
-        }
-        if (e.target.closest(".ghead,button,[contenteditable]")) return;
-        stopPlay();
-        moved = false;
-        if (handMode || spaceDown) {
-          pan = { sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y };
-          return;
-        }
-        mq = {
-          sx: e.clientX,
-          sy: e.clientY,
-          el: null,
-          base: e.shiftKey ? selection.ids() : [],
-          last: null,
-        };
-      });
-      addEventListener("pointermove", (e) => {
-        if (connDrag) {
-          updateConnDrag(e);
-          return;
-        }
-        if (annotations.dragging()) {
-          annotations.move({ x: e.clientX, y: e.clientY }, cam.k);
-          return;
-        }
-        if (
-          press &&
-          !gesture.active() &&
-          Math.hypot(e.clientX - press.sx, e.clientY - press.sy) > 5
-        )
-          beginDrag();
-        if (gesture.active()) {
-          updateDrag(e);
-          return;
-        }
-        if (mq) {
-          updateMarquee(e);
-          return;
-        }
-        if (!pan) return;
-        const dx = e.clientX - pan.sx,
-          dy = e.clientY - pan.sy;
-        if (!moved && Math.hypot(dx, dy) > 4) {
-          moved = true;
+        if (annotations.owns(t)) return { kind: "annotation", prevent: false };
+        const port = t.closest(".port");
+        if (port) return { kind: "port", id: port.closest(".col").dataset.id, side: port.dataset.side };
+        const grip = t.closest(".grip");
+        if (grip) return { kind: "grip", group: layout.groups.find((l) => l.id === grip.closest(".lane").id) };
+        const col = t.closest(".col");
+        if (col && !t.closest(".states,button,[contenteditable]"))
+          return col.classList.contains("deck")
+            ? { kind: "deck", group: groupOf(col.dataset.id) }
+            : { kind: "frame", id: col.dataset.id };
+        if (t.closest(".ghead,button,[contenteditable]")) return { kind: "chrome" };
+        return { kind: "canvas" };
+      }
+      /* FlowPointer decides; these are the things it asks the page to do */
+      const pointer = FlowPointer.create({
+        stopPlay,
+        hand: (on) => stage.classList.toggle("hand", on),
+        camera: () => cam,
+        moveCamera: (x, y) => {
+          cam.x = x;
+          cam.y = y;
+          apply();
+        },
+        panStarted: () => {
           stage.classList.add("panning");
           hideHint();
           stage.classList.remove("fly");
-        }
-        if (moved) {
-          cam.x = pan.cx + dx;
-          cam.y = pan.cy + dy;
-          apply();
-        }
+        },
+        panEnded: () => stage.classList.remove("panning"),
+        gestureActive: () => gesture.active(),
+        beginDrag,
+        moveDrag: (pt) => gesture.move(toWorld(pt.x, pt.y)),
+        endDrag,
+        cancelDrag: () => gesture.cancel(),
+        annotationDragging: () => annotations.dragging(),
+        moveAnnotation: (pt) => annotations.move(pt, cam.k),
+        endAnnotation: () => annotations.up(),
+        cancelAnnotation: () => annotations.cancel(),
+        startMarquee,
+        moveMarquee: updateMarquee,
+        endMarquee,
+        cancelMarquee,
+        startConnect,
+        moveConnect: updateConnDrag,
+        endConnect: endConnDrag,
       });
-      addEventListener("pointerup", () => {
-        if (connDrag) {
-          endConnDrag(false);
-          press = null;
-          return;
-        }
-        annotations.up();
-        endDrag();
-        if (mq) endMarquee();
-        press = null;
-        pan = null;
-        stage.classList.remove("panning");
+      stage.addEventListener("pointerdown", (e) => {
+        const { prevent } = pointer.down({
+          button: e.button,
+          x: e.clientX,
+          y: e.clientY,
+          shift: e.shiftKey,
+          hit: e.button === 0 ? hitOf(e) : null,
+        });
+        if (prevent) e.preventDefault();
       });
-      addEventListener("pointercancel", () => {
-        cancelDrag();
-        if (connDrag) endConnDrag(true);
-        press = null;
-        pan = null;
-        mq = null;
-      });
+      addEventListener("pointermove", (e) => pointer.move({ x: e.clientX, y: e.clientY }));
+      addEventListener("pointerup", () => pointer.up());
+      addEventListener("pointercancel", () => pointer.cancel());
+      /* the click that follows a drag is not a click on what it ended over */
       stage.addEventListener(
         "click",
         (e) => {
-          if (moved) {
+          if (pointer.consumeMoved()) {
             e.stopPropagation();
             e.preventDefault();
-            moved = false;
           }
         },
         true,
@@ -10244,24 +10402,17 @@
           )
         ) {
           e.preventDefault();
-          if (!spaceDown) {
-            spaceDown = true;
-            stage.classList.add("hand");
-          }
+          pointer.space(true);
           return;
         }
         if (e.key === "Escape") {
-          if (connDrag) {
-            endConnDrag(true);
-            return;
-          }
+          if (pointer.cancelConnect()) return;
           if (selection.conn()) {
             selection.clearConn();
             return;
           }
-          if (gesture.active() || annotations.dragging()) {
+          if (pointer.cancelDrag()) {
             e.preventDefault();
-            cancelDrag();
             return;
           }
           if (panel.clearSweep()) return;
@@ -10312,15 +10463,9 @@
         }
       });
       addEventListener("keyup", (e) => {
-        if (e.code === "Space") {
-          spaceDown = false;
-          stage.classList.toggle("hand", handMode);
-        }
+        if (e.code === "Space") pointer.space(false);
       });
-      addEventListener("blur", () => {
-        spaceDown = false;
-        stage.classList.toggle("hand", handMode);
-      });
+      addEventListener("blur", () => pointer.blur());
       let resizeT;
       addEventListener("resize", () => {
         updateBars();
