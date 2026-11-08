@@ -95,3 +95,10 @@ test("moving to a group appends the frame, removes an emptied source, and ignore
   assert.equal(keyboard.join("delta","flow"),true);
   assert.deepEqual(plain(layout.groups.map(g=>[g.id,g.screens])),[["flow",["alpha","beta","gamma","delta"]]]);
 });
+
+test("a frame name says when the screen is approximate or could not be rendered, so it is not only a badge", () => {
+  assert.equal(FlowKeyboard.frameName({ name: "Account", route: "/account", approximate: true }),
+    "Account. Route /account. State Default. Approximate: part of it was stubbed. Loose frame. Not selected.");
+  assert.equal(FlowKeyboard.frameName({ name: "Account", route: "/account", unrendered: true }),
+    "Account. Route /account. State Default. Could not be rendered. Loose frame. Not selected.");
+});

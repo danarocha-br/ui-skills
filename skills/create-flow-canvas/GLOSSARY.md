@@ -55,6 +55,17 @@ _Avoid_: Page, artboard
 A screen as drawn on the canvas: the device screen with its caption under it. It is in a group, or **loose** (in no group). In a closed group a frame is drawn small, in the deck. Its wrapper is a keyboard Tab stop with a group role and a name that describes the screen, route, shown state, membership and selection, even when no screen document is mounted. Keyboard focus selects it and brings it into view; Left/Right move between wrappers, Enter enters the screen and Shift+F10 opens Frame actions.
 _Avoid_: Card, tile, artboard
 
+**Approximate**:
+A screen flag (`approximate: true` in the scan) meaning part of the screen was stubbed when it was rendered. The frame shows an "Approximate" badge beside its route, and Inspect says so in a line above Source. It is the scanner's statement, never inferred by the engine.
+_Avoid_: Mock, fake, partial
+
+**Unrendered**:
+A screen the scanner could not render (`unrendered: "reason"` in the scan). Where it has no render for a device, the scan module fills one in: a placeholder that says the screen could not be rendered and gives the reason, as text. A render the scan does supply wins, and Inspect shows the reason either way.
+_Avoid_: Empty frame, broken screen
+
+**Screen root**:
+The `.flow-root` element a generated scan writes each render into, carrying the captured classes, background, colour and font. The product's `:root` rules are re-declared on it, and the strip a frame has beyond its scaled screen takes the root's background when it is painted, and the body's otherwise. (Not the frame's **wrapper**, the Tab stop around a frame.)
+
 **Place**:
 Where a frame is meant to be. A frame in a group takes its slot in the row or the deck; a loose frame is where the user put it on this device, or, when they have not, in the next free spot below the groups. A place is worked out from the layout each time and is not saved, apart from the positions the user chose.
 _Avoid_: Slot (that is one place in a row), coordinates

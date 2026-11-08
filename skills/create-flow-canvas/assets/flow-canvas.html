@@ -609,6 +609,17 @@
         text-overflow: ellipsis;
         min-width: 0;
       }
+      .approx {
+        flex: none;
+        align-self: center;
+        font: 500 11px var(--sans);
+        color: #8a5a00;
+        background: rgba(255, 184, 0, 0.16);
+        border: 1px dashed rgba(138, 90, 0, 0.55);
+        border-radius: 99px;
+        padding: 1px 8px;
+        white-space: nowrap;
+      }
       .live {
         margin-left: auto;
         display: flex;
@@ -2293,6 +2304,17 @@
         color: var(--ink);
         text-decoration: underline dashed rgba(21, 25, 25, 0.4);
         text-underline-offset: 3px;
+      }
+      .iflag {
+        font: 400 13.5px/19px var(--sans);
+        color: #5c3d00;
+        background: rgba(255, 184, 0, 0.12);
+        border-left: 3px solid rgba(138, 90, 0, 0.6);
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 12px;
+        max-width: 44ch;
+        text-wrap: pretty;
       }
       .inote {
         font: 400 14px/21px var(--sans);
@@ -5216,6 +5238,8 @@
              icons?: "<defs>...</defs>",                   product SVG symbols, mounted in the scan's own sprite
              components: { Name: cssSelector },             where each component shows up in a screen's HTML
              screens:  [{ id, name, route, file, components: [Name], note,
+                          approximate?: true,                  part of the render was stubbed: badge on the frame, a line in Inspect
+                          unrendered?: "reason",               it could not render: a placeholder says why, where a render is missing
                           states: [{ name, reachable, html? }],   html: a state's own render, per device
                           caption: { title, body, on },
                           html: { mobile, tablet, desktop } }],   the screen's render; data-go="<id>" marks a
@@ -5281,6 +5305,7 @@
         const clone = (o) => (o === undefined ? undefined : JSON.parse(JSON.stringify(o)));
         const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
         const str = (v, d = "") => (typeof v === "string" ? v : d);
+        const escapeText = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
         const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
         const validId = (id) => {
           if (typeof id !== "string" || !id || id !== id.trim() || /[\x00-\x1f\x7f]/.test(id) ||
@@ -5346,9 +5371,17 @@
                 .filter((st) => isObj(st) && typeof st.name === "string")
                 .map((st) => Object.assign({ name: st.name, reachable: st.reachable !== false }, isObj(st.html) ? { html: perDev(st.html) } : {})),
               note: str(s.note),
+              approximate: s.approximate === true,
+              unrendered: str(s.unrendered).trim(),
               caption: { title: str(cap.title), body: str(cap.body), on: cap.on === true },
               html: perDev(s.html),
             });
+          });
+          /* a screen that could not render gets a placeholder where a render is missing, saying why */
+          screens.forEach((s) => {
+            if (!s.unrendered) return;
+            const markup = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This screen could not be rendered</strong><span>${escapeText(s.unrendered)}</span></div>`;
+            devices.forEach((d) => { if (!s.html[d]) s.html[d] = markup; });
           });
           const known = (id) => ids.has(id);
 
@@ -8228,9 +8261,10 @@
     <script id="keyboard-module">
       /* Browser-free frame names and keyboard arrangement rules. The page owns focus, commits and feedback. */
       var FlowKeyboard = (() => {
-        function frameName({ name, route, state = "Default", group, index, total, open, selected = false }) {
+        function frameName({ name, route, state = "Default", group, index, total, open, selected = false, approximate = false, unrendered = false }) {
           const membership = group ? `${group}, frame ${index + 1} of ${total}, ${open ? "open" : "closed"}` : "Loose frame";
-          return `${name}. Route ${route}. State ${state}. ${membership}. ${selected ? "Selected" : "Not selected"}.`;
+          const caveat = (approximate ? " Approximate: part of it was stubbed." : "") + (unrendered ? " Could not be rendered." : "");
+          return `${name}. Route ${route}. State ${state}.${caveat} ${membership}. ${selected ? "Selected" : "Not selected"}.`;
         }
         function create({ layout, geo, device, frames }) {
           function reorder(id, delta) {
@@ -8447,7 +8481,11 @@
           /* the strip a card has beyond the scaled screen is the screen's own colour */
           frame.addEventListener("load", () => {
             if (!frame.isConnected || !frame.contentDocument?.body) return;
-            ph.style.background = frame.contentWindow.getComputedStyle(frame.contentDocument.body).backgroundColor;
+            const view = frame.contentWindow, body = frame.contentDocument.body;
+            /* a product's colour often sits on the root its screen is written into, not on body: the root wins when it is painted */
+            const root = body.querySelector(":scope > .flow-root");
+            const wrapped = root && view.getComputedStyle(root).backgroundColor;
+            ph.style.background = wrapped && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(wrapped) ? wrapped : view.getComputedStyle(body).backgroundColor;
           }, { once: true });
           frame.srcdoc = screenDocument(markup, device, snapshot);
           ph.appendChild(frame);
@@ -9509,7 +9547,7 @@
         colOf(id)?.setAttribute("aria-label", FlowKeyboard.frameName({
           name: screen.name, route: screen.route, state: screen.states[FrameDom.stateIndex(id)]?.name || "Default",
           group: group && groupName(group), index: group?.screens.indexOf(id), total: group?.screens.length,
-          open: group?.open, selected: selection.has(id),
+          open: group?.open, selected: selection.has(id), approximate: screen.approximate, unrendered: !!screen.unrendered,
         }));
       }
       let returningFrameFocus = false;
@@ -9556,7 +9594,7 @@
           else if (command.action === "actions") openFrameActions(id);
           else editFrame(id, command);
         });
-        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}<button class="frame-actions" title="Frame actions (Shift+F10)" aria-label="Frame actions" aria-haspopup="dialog" aria-controls="frameActions" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"/></svg></button></div>
+        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${s.approximate ? '<span class="approx" title="Part of this screen was stubbed, so it only approximates the real one">Approximate</span>' : ""}${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}<button class="frame-actions" title="Frame actions (Shift+F10)" aria-label="Frame actions" aria-haspopup="dialog" aria-controls="frameActions" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"/></svg></button></div>
     <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>`;
         col.querySelector(".frame-actions").addEventListener("click", (e) => { e.stopPropagation(); select(id, false); openFrameActions(id); });
         if (many)
@@ -10105,6 +10143,7 @@
               .join("")}</ul>`;
         pbody.innerHTML = `<div class="ip${still ? " still" : ""}">
     <header class="ihead" style="--n:0"><code class="r">${esc(s.route)}</code><p class="icap">${L ? esc(groupName(L)) : "Free frame"} · ${DEV.vp} · ${DEV.label}</p></header>
+    ${s.approximate ? '<p class="iflag" style="--n:0"><b>Approximate.</b> Part of this screen was stubbed, so it only approximates what the product shows.</p>' : ""}${s.unrendered ? `<p class="iflag" style="--n:0"><b>Could not be rendered.</b> ${esc(s.unrendered)}</p>` : ""}
     <section style="--n:1"><h3>Source</h3><div class="srcrow"><div class="crumbs">${file.map((p, i) => `<span class="${i === file.length - 1 ? "last" : ""}">${esc(p)}</span>`).join('<i aria-hidden="true">›</i>')}</div><button class="copy" aria-label="Copy path" title="Copy path"><svg class="ic-copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ic-done" aria-hidden="true"><use href="#i-check"/></svg></button></div><button class="open"><svg aria-hidden="true"><use href="#i-code"/></svg>Open in code</button></section>
     <section style="--n:2"><h3>Components<em>${s.components.length}</em></h3><div class="chipsrow">${chips}</div><p class="ihint" id="ipHint" aria-live="polite"></p><div id="ipUses"></div></section>
     <section style="--n:3"><h3>States<em>${s.states.length}</em></h3><p class="sfact">${s.states.length} found${nOnly ? `. <b>${nOnly} only reachable in code.</b>` : ", all reachable from the UI."}${many ? " Tap one to see it on the screen." : ""}</p>${states}</section>
