@@ -308,11 +308,28 @@ test('unmounting preserves product taps, field values, scroll and the shown stat
   const stage=doc.querySelector('#stage');
   stage.dispatchEvent(new win.WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:12000,deltaY:0}));
   await until(()=>!doc.querySelector('.col[data-id="screen-1"] iframe'),'screen did not unmount');
+  /* a spotlight drawn the moment a resumed screen has loaded (a finding does this) must outlive the scroll
+     event that restoring the offset makes the browser fire; only the person scrolling clears it */
+  const spot=doc.createElement('div');spot.className='spot';
+  const ph=doc.querySelector('.col[data-id="screen-1"] .phone');
+  new win.MutationObserver((_,watch)=>{
+    const f=ph.querySelector('iframe');
+    if(!f)return;
+    watch.disconnect();
+    f.addEventListener('load',()=>{ if(f.contentDocument.querySelector('#taps')) ph.appendChild(spot); });
+  }).observe(ph,{childList:true});
   doc.querySelector('.col[data-id="screen-1"] .label').click();
   frame=await screen(doc,'screen-1');
+  assert(spot.isConnected,'a spotlight drawn as a resumed document loads survives its restored scroll');
   equal(frame.contentDocument.querySelector('#taps').textContent,'1','product reaction survives unmount');
   equal(frame.contentDocument.querySelector('input').value,'kept across unmount','field value survives unmount');
   equal(frame.contentDocument.body.scrollTop,scroll,'scroll survives unmount');
+  await nextFrame();await nextFrame();
+  assert(spot.isConnected,'restoring the scroll offset does not clear a spotlight');
+  frame.contentDocument.body.scrollTop=scroll-40;
+  await nextFrame();
+  assert(!spot.isConnected,'the person scrolling still clears it');
+  frame.contentDocument.body.scrollTop=scroll;
   doc.querySelector('.col[data-id="screen-1"] .states').click();
   frame=await screen(doc,'screen-1');
   equal(frame.contentDocument.querySelector('h1').textContent,'Offline','state switches to its own render');

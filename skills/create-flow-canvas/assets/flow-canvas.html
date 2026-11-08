@@ -7994,8 +7994,9 @@
     </script>
 
     <script id="mounts-module">
-      /* Browser-free mounting policy. Boxes are in world pixels; the viewport is the visible canvas
-         in world pixels and scale converts the 300 CSS-pixel margin to world pixels. No DOM or scan knowledge.
+      /* Browser-free mounting policy. Boxes are in world pixels; "viewport" here is the visible part of the canvas
+         in world pixels (not a device's Viewport), and scale converts the 300 CSS-pixel margin to world pixels.
+         No DOM or scan knowledge.
          The page supplies geometry and applies the returned ids; selected/read screens are always retained. */
       var FlowMounts = (function () {
         "use strict";
@@ -8034,15 +8035,19 @@
            frames.stateIndex(id)        the state a screen shows (0 until set); kept across devices, not saved
            frames.shownStates(id)       the states that have a render of their own, plus the first
            frames.switchable(id)        more than one state can be shown
-           frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it in
-                                        a frame, then calls render)
-           frames.render(id)            mounts the render for the shown state on this device. The whole of it:
-                                        what was tapped inside the screen is gone, because a screen is its render.
+           frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it
+                                        in a frame; the screen document is mounted into it by retain)
+           frames.render(id)            mounts the render for the shown state on this device, fresh: what was tapped
+                                        inside the screen is gone, as it is after setState. The page does not call it
+                                        (it mounts through retain, which resumes a parked render); a host or a test
+                                        that wants one screen mounted from scratch does.
                                         A screen that is not known -> false; otherwise a promise that settles when the
                                         mount has (or has been replaced). The page need not wait: ready() does
-           frames.retain(ids, { reset? }) keeps only these documents mounted, resuming parked content on this device.
-                                        Other documents are serialized and removed; reset discards parked renders (device switch).
-           frames.ready(id?)            waits for the latest mount of one screen, or all mounted screens; no node returned
+           frames.retain(ids, { reset? }) keeps only these screen documents mounted, resuming a parked render (taps,
+                                        field values, scroll) when the device and state are unchanged. The others are
+                                        serialized and removed; reset discards parked renders (a device switch)
+           frames.ready(id?)            waits for the latest mount of one screen, or of all mounted screens; no node
+                                        returned. A screen that is not mounted has nothing to wait for: ask retain for it first
            frames.setState(id, i)       shows state i, if it can be shown -> true; otherwise nothing happens -> false
            frames.count(id, c)          how many instances of component c are on the screen now (a number)
            frames.spotlight(id, c)      dims the screen except around c, with its name; clears the last one first
@@ -8059,12 +8064,14 @@
                                         release removes a preview document, keeping its serialized snapshot cached
 
          Host adapter (what a host answers)
-           hostHTML(id, { device, state }) -> markup      mount(id, markup, state) -> void | Promise (ready)
+           hostHTML(id, { device, state }) -> markup      mount(id, markup, state, { resume? }) -> void | Promise (ready)
+                                                          resume: show a parked render of this device and state, if there is one
            root(id) -> the screen's root (only the module and product behaviour may use it)
            count(id, selector) -> n (only what is shown)  rects(id, selector) -> { w, h, rects: [{x,y,w,h}] } | null
            drawSpot(id, { svg, label: { text, left, top } })   clearSpot()
            hit(event) -> { id, x, y, target } | null      ripple(id, x, y)              goOf(target) -> id | null
-           matches(target, selector) -> boolean           copyInto(id, container) -> whether a cached snapshot was available
+           matches(target, selector) -> boolean           copyInto(id, container, { release? }) -> whether a cached snapshot
+                                                          was available (release: remove the preview, always true)
            unmount(id) serializes then removes a document  reset() discards parked snapshots
          ====================================================================== */
       var FlowFrameDom = (function () {
@@ -8173,7 +8180,7 @@
             },
             interactive: (hit) =>
               !!hit && host.matches(hit.target, ["button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
-            copyInto: (id, container, options) => options ? host.copyInto(id, container, options) : host.copyInto(id, container),
+            copyInto: (id, container, options) => host.copyInto(id, container, options),
           };
         }
         return { create };
@@ -8286,11 +8293,18 @@
           snapshots.set(id, snapshot);
           return snapshot;
         }
-        function restoreScroll(root, snapshot) {
+        /* Restoring an offset makes the browser fire a scroll event a frame later. That event is the restore, not
+           the person scrolling, so the record remembers what was restored and the scroll listener lets it pass:
+           otherwise it would wipe a spotlight drawn the moment the screen finished mounting. */
+        function restoreScroll(record, root, snapshot) {
           if (!snapshot) return;
           const nodes = [root, ...root.querySelectorAll("*")];
+          record.restored = record.restored || new Map();
           snapshot.scroll.forEach(([i, top, left]) => {
-            if (nodes[i]) { nodes[i].scrollTop = top; nodes[i].scrollLeft = left; }
+            if (!nodes[i]) return;
+            nodes[i].scrollTop = top;
+            nodes[i].scrollLeft = left;
+            record.restored.set(nodes[i], [nodes[i].scrollTop, nodes[i].scrollLeft]);
           });
         }
         const bridged = new WeakMap();
@@ -8373,7 +8387,15 @@
           }));
           const changed = () => { const record = documents.get(id); if (record) record.dirty = true; };
           ["input", "change"].forEach((type) => doc.addEventListener(type, changed));
-          doc.addEventListener("scroll", () => { changed(); host.clearSpot(); }, true);
+          doc.addEventListener("scroll", (e) => {
+            const restored = documents.get(id)?.restored, want = restored?.get(e.target);
+            if (want) {
+              restored.delete(e.target);
+              if (e.target.scrollTop === want[0] && e.target.scrollLeft === want[1]) return;
+            }
+            changed();
+            host.clearSpot();
+          }, true);
         }
         /* what of a component is on the screen to be seen: the instances that take room, and not the spotlight itself */
         const shown = (root, selector) => [...root.querySelectorAll(selector)].filter((el) =>
@@ -8412,10 +8434,10 @@
                 record.loaded = true;
                 record.observer = new MutationObserver(() => { record.dirty = true; });
                 record.observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-                restoreScroll(root, snapshot);
+                restoreScroll(record, root, snapshot);
                 await frame.contentDocument.fonts.ready;
                 if (documents.get(id) !== record) return finish();
-                restoreScroll(root, snapshot);
+                restoreScroll(record, root, snapshot);
                 settle();
               };
               frame.addEventListener("load", loaded);
@@ -9686,11 +9708,7 @@
         panelEl.setAttribute("aria-label", st.label);
         if (!st.open) {
           if (!ch.closed) return;
-          panelPaint++;
-          panelRead?.abort();
-          searchVisit++;
-          stopSearchReads();
-          releasePreviews();
+          cancelPanelReads();
           FrameDom.clearSpot();
           paintSweep(null);
           scheduleMounts();
@@ -9914,6 +9932,14 @@
         searchAbort?.abort();
         searchObserver?.disconnect();
         clearTimeout(searchTimer);
+      }
+      /* the panel is closing or the world is being rebuilt: nothing it was waiting for is wanted any more */
+      function cancelPanelReads() {
+        panelPaint++;
+        panelRead?.abort();
+        searchVisit++;
+        stopSearchReads();
+        releasePreviews();
       }
       function releasePreviews() {
         pbody.querySelectorAll(".tile").forEach((t) =>
@@ -11146,11 +11172,7 @@
         await afterTransition(world, "opacity", TIMING.fade);
         document.body.classList.add("boot");
         mountsPaused = true;
-        panelPaint++;
-        panelRead?.abort();
-        searchVisit++;
-        stopSearchReads();
-        releasePreviews();
+        cancelPanelReads();
         applyDevice(id);
         buildWorld();
         setSel(sel, prim);
