@@ -248,6 +248,22 @@ test("css url() images are inlined within budget and replaced by none beyond it"
   assert.equal(report.dropped.images.length, 1);
 });
 
+test("a dropped image becomes a value that is valid for the property it was in", async () => {
+  const c = baseCapture();
+  c.screens[0].captures.default.desktop.sheets = [{ key: "k", href: "http://h/a.css", rules: [
+    { s: ".bg", t: ".bg{background:url(x.png) no-repeat}", u: true },
+    { s: ".mk", t: ".mk{-webkit-mask:url(x.png) center/contain no-repeat;mask-image:url(x.png)}", u: true },
+    { s: ".ct", t: '.ct::before{content:url(x.png) "a"}', u: true },
+  ] }];
+  const { html } = await run(c, baseFlows(), { fetchBytes: async () => null });
+  const css = html.match(/<style id="flow-scan-styles" media="not all">([\s\S]*?)<\/style>/)[1];
+  assert.match(css, /\.bg\{background:none no-repeat\}/);
+  assert.doesNotMatch(css, /(mask[\w-]*|content):[^;}]*\bnone\b/);
+  assert.match(css, /-webkit-mask:url\(data:image\/gif;base64,[A-Za-z0-9+/=]+\) center\/contain no-repeat/);
+  assert.match(css, /mask-image:url\(data:image\/gif;base64,/);
+  assert.match(css, /content:url\(data:image\/gif;base64,[A-Za-z0-9+/=]+\) "a"/);
+});
+
 test("the scan JSON is safe in a script tag and survives it", async () => {
   const c = baseCapture();
   c.screens[0].captures.default.desktop.html = '<p>a </script><!-- b</p><p>  "q" \\ 😀</p>';

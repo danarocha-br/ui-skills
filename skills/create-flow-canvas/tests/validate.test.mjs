@@ -125,3 +125,11 @@ test("the inert styles check does not depend on attribute order", async () => {
   const html = (await good()).replace('<style id="flow-scan-styles" media="not all">', "<style media='not all' id=\"flow-scan-styles\">");
   assert.deepEqual([...validate(html).errors], []);
 });
+
+test("a canvas module that never finishes loading fails with a timeout message instead of hanging", async () => {
+  const html = (await good()).replace(/(<script id="scan-module">)/, "$1while(true){}\n");
+  const t0 = Date.now();
+  const e = errorsOf(html, { scriptTimeoutMs: 200 });
+  assert.match(e, /did not finish loading within 200 ?ms/);
+  assert.ok(Date.now() - t0 < 5000);
+});

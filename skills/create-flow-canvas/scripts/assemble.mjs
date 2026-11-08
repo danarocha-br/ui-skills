@@ -227,15 +227,22 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     const fmt = /\.woff2(\?|#|$)/i.test(abs) || pick[2] === "woff2" ? ["font/woff2", "woff2"] : /\.woff(\?|#|$)/i.test(abs) ? ["font/woff", "woff"] : /\.otf/i.test(abs) ? ["font/otf", "opentype"] : ["font/ttf", "truetype"];
     return t.replace(/src\s*:[^;}]+/, `src: url(data:${fmt[0]};base64,${f.bytes.toString("base64")}) format("${fmt[1]}")`);
   }
+  /* "none" is valid for background-image, but not inside mask or content values, so a dropped image there becomes a
+     transparent 1px gif: the same "nothing shows" and a value every property accepts */
+  const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
+  const placeholderAt = (t, at) => {
+    const prop = (t.slice(0, at).match(/([\w-]+)\s*:[^:;{}]*$/) || [])[1] || "";
+    return /^(-webkit-)?mask|^content$/i.test(prop) ? BLANK : "none";
+  };
   async function images(t, base) {
     let out = t;
     for (const m of [...t.matchAll(/url\(\s*(["']?)(?!data:|#)([^"')]+)\1\s*\)/g)]) {
       let abs;
-      try { abs = new URL(m[2], base).href; } catch { dropped.images.push({ url: m[2], reason: "the URL could not be resolved" }); out = out.replace(m[0], "none"); continue; }
+      try { abs = new URL(m[2], base).href; } catch { dropped.images.push({ url: m[2], reason: "the URL could not be resolved" }); out = out.replace(m[0], placeholderAt(t, m.index)); continue; }
       const f = await get(abs);
       const type = f && (f.type.split(";")[0].trim() || MIME[abs.split(/[?#]/)[0].split(".").pop().toLowerCase()] || "application/octet-stream");
       const why = !f ? "could not be fetched" : f.bytes.length > B.imageBytes ? `larger than the image budget (${f.bytes.length} > ${B.imageBytes} bytes)` : used.imageBytes + f.bytes.length > B.imageTotalBytes ? `the images' total budget (${B.imageTotalBytes} bytes) is used up` : "";
-      if (why) { dropped.images.push({ url: abs, reason: why }); out = out.replace(m[0], "none"); continue; }
+      if (why) { dropped.images.push({ url: abs, reason: why }); out = out.replace(m[0], placeholderAt(t, m.index)); continue; }
       used.imageBytes += f.bytes.length;
       used.images++;
       out = out.replace(m[0], () => `url(data:${type};base64,${f.bytes.toString("base64")})`);

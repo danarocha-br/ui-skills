@@ -23,7 +23,7 @@ const blockOf = (html, id, tag) => {
   return m ? m[1] : null;
 };
 
-export function validate(html, { budgets = {} } = {}) {
+export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
   const B = { ...DEFAULT_BUDGETS, ...budgets };
   const errors = [], warnings = [];
   const stats = { screens: 0, links: 0, findings: 0, bytes: Buffer.byteLength(html) };
@@ -45,9 +45,13 @@ export function validate(html, { budgets = {} } = {}) {
     for (const id of ["device-module", "scan-module"]) {
       const code = blockOf(html, id, "script");
       if (code === null) throw new Error(`there is no <script id="${id}"> block`);
-      vm.runInNewContext(code, sandbox);
+      vm.runInNewContext(code, sandbox, { timeout: scriptTimeoutMs });
     }
-  } catch (e) { errors.push(`The canvas's own modules could not be loaded: ${e.message}`); return { errors, warnings, stats }; }
+  } catch (e) {
+    errors.push(e && e.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
+      ? `The canvas's own modules did not finish loading within ${scriptTimeoutMs} ms (a script is stuck in a loop), so the page would hang.`
+      : `The canvas's own modules could not be loaded: ${e.message}`);
+    return { errors, warnings, stats }; }
   const devices = sandbox.FlowDevice.ids();
   const { scan, problems } = sandbox.FlowScan.read(rawScan, { devices });
   if (!scan) errors.push(`The scan was rejected by the page's own reader, so it would open empty: ${[...problems].join("; ")}`);
