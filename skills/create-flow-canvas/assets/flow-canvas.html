@@ -8261,9 +8261,10 @@
     <script id="keyboard-module">
       /* Browser-free frame names and keyboard arrangement rules. The page owns focus, commits and feedback. */
       var FlowKeyboard = (() => {
-        function frameName({ name, route, state = "Default", group, index, total, open, selected = false }) {
+        function frameName({ name, route, state = "Default", group, index, total, open, selected = false, approximate = false, unrendered = false }) {
           const membership = group ? `${group}, frame ${index + 1} of ${total}, ${open ? "open" : "closed"}` : "Loose frame";
-          return `${name}. Route ${route}. State ${state}. ${membership}. ${selected ? "Selected" : "Not selected"}.`;
+          const caveat = (approximate ? " Approximate: part of it was stubbed." : "") + (unrendered ? " Could not be rendered." : "");
+          return `${name}. Route ${route}. State ${state}.${caveat} ${membership}. ${selected ? "Selected" : "Not selected"}.`;
         }
         function create({ layout, geo, device, frames }) {
           function reorder(id, delta) {
@@ -8481,9 +8482,9 @@
           frame.addEventListener("load", () => {
             if (!frame.isConnected || !frame.contentDocument?.body) return;
             const view = frame.contentWindow, body = frame.contentDocument.body;
-            /* a product's colour often sits on the wrapper its screen is written into, not on body: the wrapper wins when it is painted */
-            const wrapper = body.querySelector(":scope > .flow-root");
-            const wrapped = wrapper && view.getComputedStyle(wrapper).backgroundColor;
+            /* a product's colour often sits on the root its screen is written into, not on body: the root wins when it is painted */
+            const root = body.querySelector(":scope > .flow-root");
+            const wrapped = root && view.getComputedStyle(root).backgroundColor;
             ph.style.background = wrapped && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(wrapped) ? wrapped : view.getComputedStyle(body).backgroundColor;
           }, { once: true });
           frame.srcdoc = screenDocument(markup, device, snapshot);
@@ -9546,7 +9547,7 @@
         colOf(id)?.setAttribute("aria-label", FlowKeyboard.frameName({
           name: screen.name, route: screen.route, state: screen.states[FrameDom.stateIndex(id)]?.name || "Default",
           group: group && groupName(group), index: group?.screens.indexOf(id), total: group?.screens.length,
-          open: group?.open, selected: selection.has(id),
+          open: group?.open, selected: selection.has(id), approximate: screen.approximate, unrendered: !!screen.unrendered,
         }));
       }
       let returningFrameFocus = false;

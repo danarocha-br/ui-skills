@@ -312,3 +312,76 @@ test("a behaviour script is written into its block and cannot close it", async (
   assert.ok(!b.includes("</script"));
   assert.equal((await run()).html.match(/<script id="flow-scan-behaviour">([\s\S]*?)<\/script>/)[1].trim(), "");
 });
+
+/* ---------- review findings ---------- */
+
+test("a link that only a later state has still gets its connector, so its button is never dead", async () => {
+  const c = baseCapture();
+  c.screens[1].captures["other state"].desktop.html = '<a data-flow-href="/">Back</a>';
+  c.screens[1].captures["other state"].desktop.links = [{ href: "/", text: "Back" }];
+  const scan = scanOf((await run(c)).html);
+  assert.ok(scan.links.some((l) => l.from === "items-id" && l.to === "home" && l.label === "Back"));
+  assert.match(scan.screens[1].states[1].html.desktop, /data-go="home"/);
+});
+
+test("ids keep non-Latin labels apart instead of collapsing them to one slug", async () => {
+  const c = baseCapture();
+  c.screens[0].captures.default.desktop.links = [{ href: "/items/1", text: "Entrar" }, { href: "/items/1", text: "Выйти" }, { href: "/items/1", text: "ログイン" }];
+  const ids = scanOf((await run(c)).html).links.map((l) => l.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.includes("home>items-id:выйти") && ids.includes("home>items-id:ログイン"));
+});
+
+test("a base unicode-range such as U+0020-007F is kept, and a skipped subset is recorded rather than silent", async () => {
+  const c = fontCapture([
+    face("Fam", 'url(base.woff2) format("woff2")', "unicode-range: U+0020-007F;"),
+    face("Fam", 'url(ext.woff2) format("woff2")', "unicode-range: U+0100-02AF;"),
+  ]);
+  const { html, report } = await run(c, baseFlows(), { fetchBytes: async () => bytes(10) });
+  assert.equal((html.match(/@font-face/g) || []).length, 1);
+  assert.deepEqual(report.dropped.fonts.map((d) => [d.family, d.reason.includes("unicode-range")]), [["Fam", true]]);
+});
+
+test("a finding's id is always the generated one, even if flows.json supplies another", async () => {
+  const f = baseFlows();
+  f.findings = [{ id: "mine", kind: "reused-component", screen: "home", component: "X", evidence: "e" }];
+  const scan = scanOf((await run(baseCapture(), f)).html);
+  assert.ok(scan.findings.some((x) => x.id === "reused-component:home"));
+  assert.ok(!scan.findings.some((x) => x.id === "mine"));
+});
+
+test("a capture with no html for a device does not crash the assembly", async () => {
+  const c = baseCapture();
+  delete c.screens[1].captures.default.tablet.html;
+  const scan = scanOf((await run(c)).html);
+  assert.match(scan.screens[1].html.tablet, /flow-root/);
+});
+
+test("a screen in two groups is refused", async () => {
+  const f = baseFlows();
+  f.groups.push({ id: "again", title: "Again", screens: ["home"] });
+  await rejects(() => run(baseCapture(), f), /home[\s\S]*two groups|two groups[\s\S]*home/);
+});
+
+test("when two captures share a path, the first screen in flows.json owns it", async () => {
+  const c = baseCapture();
+  c.screens.push(screen("dup", "/items/other", "/items/1", { default: cap() }));
+  const f = baseFlows();
+  f.screens.push({ id: "dup", name: "Dup", file: "d.tsx" });
+  const scan = scanOf((await run(c, f)).html);
+  assert.ok(scan.links.every((l) => l.to !== "items-other"));
+});
+
+test("a raw sheet keeps its other rules beside its fonts, rebases its urls, and says what it did", async () => {
+  const c = baseCapture();
+  c.screens[0].captures.default.desktop.html = '<p class="used">x</p>';
+  c.screens[0].captures.default.desktop.families = ["Fam"];
+  c.screens[0].captures.default.desktop.sheets = [{ key: "r", href: "http://h/d/r.css", raw: true, rules: [] }];
+  const body = '@font-face{font-family:"Fam";src:url(f.woff2) format("woff2")}.used{background:url(i.png)}.unused-class{color:red}';
+  const fetchBytes = async (u) => (u.endsWith("r.css") ? { bytes: Buffer.from(body), type: "text/css" } : u.endsWith("f.woff2") ? bytes(10) : bytes(10, "image/png"));
+  const { html, report } = await run(c, baseFlows(), { fetchBytes });
+  const css = html.match(/<style id="flow-scan-styles" media="not all">([\s\S]*?)<\/style>/)[1];
+  assert.match(css, /data:font\/woff2/);
+  assert.match(css, /\.used\{background:url\(data:image\/png/);
+  assert.equal(report.rawSheets[0].kept, true);
+});

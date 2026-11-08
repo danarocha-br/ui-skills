@@ -34,6 +34,8 @@ export const DEFAULT_BUDGETS = {
   fileBytes: 12e6, /* the finished canvas (validate.mjs enforces it) */
 };
 
+const unreachableOf = (flow) => list(flow.unreachable).filter((u) => isObj(u) && text(u.name).trim());
+
 export class AssembleError extends Error {
   constructor(problems) {
     super("The canvas was not assembled:\n- " + problems.join("\n- "));
@@ -45,12 +47,14 @@ export class AssembleError extends Error {
 const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
 const text = (v) => (typeof v === "string" ? v : "");
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const slug = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+const list = (v) => (Array.isArray(v) ? v : []);
 
 /* a scan screen id from a route pattern: "/" is home, "/items/[id]" is items-id, "(404)" is 404 */
 export function slugRoute(route) {
-  const r = String(route).replace(/\[+\.{0,3}([^\]]+)\]+/g, "$1");
-  return r.replace(/^\/+|\/+$/g, "") ? slug(r) || "screen" : r.trim() === "/" ? "home" : slug(r) || "screen";
+  const inner = String(route).replace(/\[+\.{0,3}([^\]]+)\]+/g, "$1");
+  if (!inner.replace(/^\/+|\/+$/g, "")) return inner.trim() === "/" ? "home" : slug(inner) || "screen";
+  return slug(inner) || "screen";
 }
 
 /* ids that may collide: the first in sorted order keeps the bare id, the rest are id~2, id~3, ... */
@@ -171,6 +175,11 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     groupIds.add(id);
     return { g, id };
   });
+  const groupOf = new Map();
+  groupList.forEach(({ g }) => list(g.screens).forEach((ref) => {
+    if (groupOf.has(ref) && groupOf.get(ref) !== g) problems.push(`screen "${ref}" is in two groups ("${groupOf.get(ref).title}" and "${g.title}"): a screen is in one group`);
+    else groupOf.set(ref, g);
+  }));
   for (const id of groupIds) if ([...screenIds.values()].includes(id)) problems.push(`group id "${id}" is also a screen id: give the group an "id" of its own`);
   if (problems.length) throw new AssembleError(problems);
 
@@ -200,12 +209,13 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     const fam = (t.match(/font-family:\s*["']?([^;"']+)/) || [])[1]?.trim();
     if (!fam || !families.has(fam.toLowerCase())) return null;
     const range = (t.match(/unicode-range:\s*([^;}]+)/) || [])[1];
-    if (range && !/U\+0(000)?-|U\+0\b/i.test(range)) return null; /* a subset that is not the base: the base carries the common glyphs */
     const urls = [...t.matchAll(/url\(["']?([^"')]+)["']?\)\s*(?:format\(["']?([\w-]+))?/g)];
     const pick = urls.find((m) => m[2] === "woff2") || urls[0];
     if (!pick) return t;
     if (pick[1].startsWith("data:")) return t;
     const drop = (reason) => { dropped.fonts.push({ family: fam, url: pick[1], reason }); return null; };
+    /* a set with a unicode-range is kept only when it is the base (it starts at U+0): the base carries the common glyphs */
+    if (range && !range.split(",").some((r) => { const m = r.trim().match(/^U\+([0-9A-F?]+)/i); return m && parseInt(m[1].replace(/\?/g, "0"), 16) <= 0x20; })) return drop("a unicode-range subset, not the base family");
     let abs;
     try { abs = new URL(pick[1], base).href; } catch { return drop("the font URL could not be resolved"); }
     const f = await get(abs);
@@ -252,18 +262,16 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   let css = "";
   const rawSheets = [];
   for (const sh of sheets.values()) {
-    if (sh.raw) { /* the capture could not read this sheet's rules: take its text and keep what the markup uses */
+    if (sh.raw) { /* the capture could not read this sheet's rules: take its text, keep its fonts, and the rest when the markup uses its classes */
       const f = await get(sh.href);
       if (!f) { rawSheets.push({ href: sh.href, kept: false, reason: "could not be fetched" }); continue; }
-      const body = f.bytes.toString("utf8");
-      if (/@font-face/.test(body)) {
-        for (const m of body.matchAll(/@font-face\s*{[^}]*}/g)) { const x = await face(m[0], sh.href); if (x) css += x + "\n"; }
-        rawSheets.push({ href: sh.href, kept: true, reason: "font faces only" });
-        continue;
-      }
+      let body = f.bytes.toString("utf8");
+      let fonts = "";
+      body = body.replace(/@font-face\s*{[^}]*}/g, (m) => { fonts += m + "\n"; return ""; });
+      for (const m of fonts.matchAll(/@font-face\s*{[^}]*}/g)) { const x = await face(m[0], sh.href); if (x) css += x + "\n"; }
       const hit = [...body.matchAll(/\.([a-zA-Z_][\w-]*)/g)].some((m) => classesUsed.has(m[1]));
-      rawSheets.push({ href: sh.href, kept: hit, reason: hit ? "the markup uses its classes" : "the markup uses none of its classes" });
-      if (hit) css += rootToo(body) + "\n";
+      if (hit) css += (/url\(/.test(body) ? await images(body, sh.href) : body) + "\n";
+      rawSheets.push({ href: sh.href, kept: hit || !!fonts, reason: hit ? "the markup uses its classes; :root rules in it are not re-declared on .flow-root" : fonts ? "font faces only: the markup uses none of its other classes" : "the markup uses none of its classes" });
       continue;
     }
     css += await emit(sh.rules, sh.href);
@@ -274,7 +282,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   const targets = new Map(); /* a path the capture can follow -> the scan screen it leads to */
   for (const e of entries) {
     const sid = idOf(e.key);
-    if (e.cap && hrefPath(e.cap.url)) targets.set(hrefPath(e.cap.url), sid);
+    if (e.cap && hrefPath(e.cap.url) && !targets.has(hrefPath(e.cap.url))) targets.set(hrefPath(e.cap.url), sid); /* the first screen in flows.json owns a shared path */
   }
   for (const e of entries) if (/^\/[^[(]*$/.test(e.route) && !targets.has(hrefPath(e.route))) targets.set(hrefPath(e.route), idOf(e.key));
   const targetOf = (href, selfId) => {
@@ -282,10 +290,10 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     return to && to !== selfId ? to : null;
   };
   const compNames = new Set();
-  const namesIn = (html) => [...html.matchAll(/data-flow-c="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/).filter(Boolean));
+  const namesIn = (html) => [...String(html ?? "").matchAll(/data-flow-c="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/).filter(Boolean));
   const htmlImages = new Set();
   const render = (c, selfId) => {
-    const inner = c.html.replace(/(\s?)data-flow-href="([^"]*)"/g, (m, sp, v) => {
+    const inner = String(c.html ?? "").replace(/(\s?)data-flow-href="([^"]*)"/g, (m, sp, v) => {
       const to = targetOf(v.replace(/&amp;/g, "&"), selfId);
       return to ? `${sp}data-go="${esc(to)}"` : "";
     });
@@ -299,7 +307,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   const screens = [], candidates = [];
   for (const e of entries) {
     const id = idOf(e.key), f = e.flow;
-    const unreachable = (Array.isArray(f.unreachable) ? f.unreachable : []).filter((u) => isObj(u) && text(u.name).trim());
+    const unreachable = unreachableOf(f);
     const unreachNames = new Set(unreachable.map((u) => u.name));
     const names = e.cap ? Object.keys(e.cap.captures || {}) : [];
     const comps = new Set();
@@ -316,7 +324,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
       caption: isObj(f.caption) ? { title: text(f.caption.title), body: text(f.caption.body), on: f.caption.on !== false } : { title: f.name, body: e.route, on: true },
       html: first,
     });
-    if (e.cap && names.length) for (const c of Object.values(e.cap.captures[names[0]])) for (const l of c.links || []) {
+    if (e.cap) for (const n of names) for (const c of Object.values(e.cap.captures[n])) for (const l of c.links || []) {
       const to = targetOf(l.href, id);
       if (to) candidates.push({ from: id, to, label: text(l.text), href: l.href, base: `${id}>${to}:${slug(text(l.text)) || "link"}`, key: `${l.href}\u0000${text(l.text)}` });
     }
@@ -338,7 +346,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   /* ---------- 5. findings ---------- */
   const raw = [];
   for (const e of entries) {
-    const id = idOf(e.key), un = (Array.isArray(e.flow.unreachable) ? e.flow.unreachable : []).filter((u) => isObj(u) && text(u.name).trim());
+    const id = idOf(e.key), un = unreachableOf(e.flow);
     if (un.length) raw.push({ kind: "unreachable-states", frame: id, target: "", source: text(un[0].source) || e.flow.file,
       evidence: un.map((u) => text(u.evidence) || `${u.name}: nothing in the UI leads to it`).join("; ") });
     if (e.cap) {
@@ -357,7 +365,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   const fids = assignIds(raw, (f) => `${f.kind}:${f.frame}${f.target ? ":" + (slug(f.target) || "target") : ""}`, (f) => JSON.stringify(f));
   const findings = raw.map((f) => {
     const { target, ...rest } = f;
-    return { id: fids.get(f), ...rest, ...(target ? { target } : {}) };
+    return { ...rest, id: fids.get(f), ...(target ? { target } : {}) };
   });
 
   /* ---------- 6. groups ---------- */

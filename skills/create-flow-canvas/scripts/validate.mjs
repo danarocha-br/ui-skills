@@ -19,7 +19,7 @@ import { pathToFileURL } from "node:url";
 import { DEFAULT_BUDGETS } from "./assemble.mjs";
 
 const blockOf = (html, id, tag) => {
-  const m = html.match(new RegExp(`<${tag}\\b[^>]*\\bid="${id}"[^>]*>([\\s\\S]*?)</${tag}>`));
+  const m = html.match(new RegExp(`<${tag}\\b(?:[^>]*\\s)?id=["']${id}["'][^>]*>([\\s\\S]*?)</${tag}>`));
   return m ? m[1] : null;
 };
 
@@ -31,7 +31,7 @@ export function validate(html, { budgets = {} } = {}) {
   if (rawScan === null) return { errors: ["This is not a flow canvas: there is no <script id=\"flow-scan\"> block."], warnings, stats };
 
   if (blockOf(html, "flow-scan-styles", "style") === null) errors.push('The product styles block (<style id="flow-scan-styles">) is missing.');
-  else if (!/<style id="flow-scan-styles" media="not all">/.test(html)) errors.push('The product styles lost media="not all", so they would restyle the canvas itself.');
+  else if (!/<style\b(?=[^>]*\sid=["']flow-scan-styles["'])(?=[^>]*\smedia=["']not all["'])[^>]*>/.test(html)) errors.push('The product styles lost media="not all", so they would restyle the canvas itself.');
   if (blockOf(html, "flow-scan-behaviour", "script") === null) errors.push('The product behaviour block (<script id="flow-scan-behaviour">) is missing.');
   /* a raw "</script" cannot be seen from here (it ends the block, so the JSON comes up short); "<!--" can */
   if (rawScan.includes("<!--")) errors.push('The scan contains a raw "<!--", which a script tag treats specially: write it as "<\\u0021--".');
@@ -97,7 +97,9 @@ export function validate(html, { budgets = {} } = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const argv = process.argv.slice(2);
   const i = argv.indexOf("--max-bytes");
-  const budgets = i >= 0 ? { fileBytes: Number(argv[i + 1]) } : {};
+  const limit = i >= 0 ? Number(argv[i + 1]) : undefined;
+  if (i >= 0 && !(limit > 0)) { console.error(`error: --max-bytes needs a positive number of bytes, got "${argv[i + 1] ?? ""}"`); process.exit(1); }
+  const budgets = i >= 0 ? { fileBytes: limit } : {};
   const file = argv.find((a, k) => !a.startsWith("--") && argv[k - 1] !== "--max-bytes") || path.join(".flow-canvas", "flow-canvas.html");
   let html;
   try { html = fs.readFileSync(file, "utf8"); } catch (e) { console.error(`Cannot read ${file}: ${e.message}`); process.exit(1); }

@@ -64,7 +64,7 @@ A screen the scanner could not render (`unrendered: "reason"` in the scan). Wher
 _Avoid_: Empty frame, broken screen
 
 **Screen root**:
-The `.flow-root` wrapper a generated scan writes each render into, carrying the captured classes, background, colour and font. The product's `:root` rules are re-declared on it, and the strip a frame has beyond its scaled screen takes the root's background when it is painted, and the body's otherwise.
+The `.flow-root` element a generated scan writes each render into, carrying the captured classes, background, colour and font. The product's `:root` rules are re-declared on it, and the strip a frame has beyond its scaled screen takes the root's background when it is painted, and the body's otherwise. (Not the frame's **wrapper**, the Tab stop around a frame.)
 
 **Place**:
 Where a frame is meant to be. A frame in a group takes its slot in the row or the deck; a loose frame is where the user put it on this device, or, when they have not, in the next free spot below the groups. A place is worked out from the layout each time and is not saved, apart from the positions the user chose.

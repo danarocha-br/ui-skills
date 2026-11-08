@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { assemble } from "../scripts/assemble.mjs";
 import { validate } from "../scripts/validate.mjs";
@@ -99,4 +100,28 @@ test("a raw <!-- in the scan is an error, and a raw </script that ends the block
 
 test("a file that is not a flow canvas says so", () => {
   assert.match(errorsOf("<html></html>"), /not a flow canvas|flow-scan/);
+});
+
+test("a size limit that is not a number is refused, not silently ignored", async () => {
+  const { stdout } = { stdout: "" };
+  const { spawnSync } = await import("node:child_process");
+  const file = path.join(os.tmpdir(), `flow-validate-${process.pid}.html`);
+  fs.writeFileSync(file, await good());
+  try {
+    const r = spawnSync(process.execPath, [path.join(here, "../scripts/validate.mjs"), file, "--max-bytes"], { encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /max-bytes/);
+  } finally { fs.rmSync(file, { force: true }); }
+  void stdout;
+});
+
+test("an id attribute that merely ends in the block's id is not the block", async () => {
+  const html = (await good()).replace("<body", '<body data-id="flow-scan"').replace('<script type="application/json" id="flow-scan">', '<script type="application/json" id="flow-scan" >');
+  assert.deepEqual([...validate(html).errors], []);
+  assert.match(errorsOf((await good()).replace('<script id="flow-scan-behaviour">', '<script data-id="flow-scan-behaviour" id="x">')), /behaviour/);
+});
+
+test("the inert styles check does not depend on attribute order", async () => {
+  const html = (await good()).replace('<style id="flow-scan-styles" media="not all">', "<style media='not all' id=\"flow-scan-styles\">");
+  assert.deepEqual([...validate(html).errors], []);
 });
