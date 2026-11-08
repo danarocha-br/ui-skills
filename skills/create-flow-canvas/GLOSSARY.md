@@ -162,3 +162,14 @@ _Avoid_: Find usages, highlight, filter
 **Instances and uses**:
 Two counts that answer two questions. The **instances** of a component are how many of it are on a screen in the state shown now (counted from the frame itself, so "—" when a state does not show it). Its **uses** are the screens the scan says use it ("used on 3 of 9 screens"). A screen can use a component it does not show in the current state, so the two need not agree.
 _Avoid_: Count (alone)
+
+**Capture**:
+One screen, in one state, on one device, taken from the running throwaway copy by `scripts/capture.mjs`: its DOM, the CSS rules in use, and a **reference**. It is not the layout's snapshot.
+_Avoid_: Snapshot (that is the layout's, and Search's inert copy)
+
+**Scenarios**:
+The project-owned `.flow-canvas/scenarios.json`: which screens to capture and, for each, which states, with the cookies and steps that reach them.
+
+**Reference**:
+The screenshot of the running copy taken for a capture. **Fidelity** is how closely the canvas's render matches it, pixel by pixel. A match says the render is true to the copy, not that the copy's mock was right; a capture's **signals** are what look for that.
+_Avoid_: Baseline, golden
