@@ -328,7 +328,7 @@ test("outside the live screen host the page names nothing that is inside a scree
 });
 
 test("the page uses FrameDom only through its interface, which hands out no node", () => {
-  const allowed = new Set(["hostHTML", "render", "retain", "ready", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto", "focus"]);
+  const allowed = new Set(["hostHTML", "render", "retain", "ready", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto", "focus", "setTabbable"]);
   const used = new Set([...strip(pageScript).matchAll(/\bFrameDom\.(\w+)/g)].map((m) => m[1]));
   assert.ok(used.has("retain") && used.has("tap"), "the check sees the page's own calls");
   assert.deepEqual([...used].filter((m) => !allowed.has(m)), []);
@@ -353,6 +353,15 @@ test('retain mounts only requested screens once and releases documents that leav
   current.device='desktop';
   frames.retain(['form']);
   assert.equal(host.calls.at(-1)[2],'<d-form>','a retained screen updates on device change');
+});
+
+test('whether Tab may enter a screen is the host\'s to apply; unknown screens are ignored', () => {
+  const { frames, host } = make();
+  const calls = [];
+  host.setTabbable = (id, on) => calls.push([id, on]);
+  frames.setTabbable('list', false);
+  frames.setTabbable('unknown', false);
+  assert.deepEqual(calls, [['list', false]]);
 });
 
 test('entering a known screen delegates focus without returning product nodes; unknown screens are ignored', () => {
