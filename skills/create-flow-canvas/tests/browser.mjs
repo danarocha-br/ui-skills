@@ -617,7 +617,7 @@ test('Enter skips effectively disabled controls and can reach native summaries a
   await until(()=>product.contentDocument.activeElement.isContentEditable,'Enter did not reach editable text');
 });
 
-test('keyboard entry after a prior pointer focus selects the screen again and reveals closed frame controls', async () => {
+test('keyboard entry after a prior pointer focus selects the screen again and a closed group stays closed', async () => {
   const {doc,win}=await canvas();
   const product=await screen(doc), field=product.contentDocument.querySelector('input');
   press(product,field,'pointerdown',100,100); field.focus(); press(product,field,'pointerup',100,100);
@@ -628,9 +628,68 @@ test('keyboard entry after a prior pointer focus selects the screen again and re
   field.focus();
   assert(doc.querySelector('.col[data-id="entry"]').classList.contains('sel'),'keyboard entry is not suppressed by an old pointer event');
   const disclosure=doc.querySelector('.chev'); disclosure.click();
-  const action=doc.querySelector('.col[data-id="entry"] .frame-actions');
-  key({contentWindow:win},disclosure,'keydown','Tab','Tab'); action.focus();
-  equal(disclosure.getAttribute('aria-expanded'),'true','reverse traversal into hidden controls reveals the group');
+  await until(()=>disclosure.getAttribute('aria-expanded')==='false','group did not close');
+  const col=doc.querySelector('.col[data-id="entry"]'), action=col.querySelector('.frame-actions');
+  equal(col.tabIndex,-1,'a closed group\'s frame is not a Tab stop');
+  equal(action.tabIndex,-1,'its invisible controls are not Tab stops');
+  action.focus();
+  equal(disclosure.getAttribute('aria-expanded'),'false','focus does not write the layout: the group stays closed');
+});
+
+test('Shift does not turn the global shortcuts off, and a chord still does', async () => {
+  const {doc,win}=await canvas(), w={contentWindow:win};
+  const camera=()=>doc.querySelector('#world').style.transform, before=camera();
+  key(w,doc.body,'keydown','+','Equal',{shiftKey:true});
+  await until(()=>camera()!==before,'Shift+plus did not zoom in');
+  await new Promise(resolve=>setTimeout(resolve,500));
+  const zoomed=camera();
+  key(w,doc.body,'keydown','=','Equal',{ctrlKey:true});
+  await new Promise(resolve=>setTimeout(resolve,500));
+  equal(camera(),zoomed,'Control+= belongs to the browser, not to canvas zoom');
+  key(w,doc.body,'keydown','/','Slash',{shiftKey:true});
+  await until(()=>doc.querySelector('#q'),'a shifted slash did not open Search');
+});
+
+test('Escape inside a screen closes an open panel first, and leaves a key the product took alone', async () => {
+  const {doc,win}=await canvas();
+  const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
+  key({contentWindow:win},frame,'keydown','i','KeyI');
+  await until(()=>doc.querySelector('#panel').classList.contains('open'),'Inspect did not open');
+  const product=await screen(doc), input=product.contentDocument.querySelector('input');
+  input.focus();
+  key(product,input,'keydown','Escape','Escape');
+  assert(!doc.querySelector('#panel').classList.contains('open'),'the first Escape closes the panel');
+  assert(doc.activeElement!==frame,'the first Escape does not also leave the screen');
+  input.addEventListener('keydown',(e)=>{ if (e.key==='Escape') e.preventDefault(); });
+  key(product,input,'keydown','Escape','Escape');
+  assert(doc.activeElement!==frame,'an Escape the product handled is not the canvas\'s');
+});
+
+test('Frame actions stay open across moves, say what happened, and keep focus inside', async () => {
+  const {doc,win}=await canvas(), w={contentWindow:win};
+  const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
+  key(w,frame,'keydown','F10','F10',{shiftKey:true});
+  const dialog=doc.querySelector('#frameActions');
+  assert(dialog.open,'keyboard opens frame actions');
+  dialog.querySelector('[data-frame-action="later"]').click();
+  assert(dialog.open,'a move leaves the dialog open');
+  assert(doc.querySelector('#frameActionStatus').textContent.length>0,'the move is announced in the dialog');
+  assert(dialog.contains(doc.activeElement),'focus stays inside the dialog');
+  dialog.close();
+});
+
+test('names follow a group rename, the chevron and Play keep one state each, and Ungroup leaves focus on a frame', async () => {
+  const {doc}=await canvas();
+  const title=doc.querySelector('.gtitle'), chev=doc.querySelector('.chev');
+  title.textContent='Renamed flow'; title.dispatchEvent(new doc.defaultView.Event('input',{bubbles:true}));
+  assert(chev.getAttribute('aria-label').includes('Renamed flow'),'the chevron follows the rename');
+  assert(doc.querySelector('.col[data-id="entry"]').getAttribute('aria-label').includes('Renamed flow'),'frame names follow the rename');
+  assert(!/^(Open|Close)/.test(chev.getAttribute('aria-label')),'the disclosure name does not flip with its state');
+  assert(!doc.querySelector('.fplay').hasAttribute('aria-pressed'),'Play is an action, not a toggle');
+  doc.querySelector('.fmore').click();
+  const ungroup=doc.querySelector('#mGroup [data-ga="ungroup"]');
+  ungroup.click();
+  await until(()=>doc.activeElement?.closest?.('.col'),'focus did not land on a frame after Ungroup');
 });
 
 test('explicit keyboard navigation stops automatic Play and single-screen manual Play focuses Stop', async () => {

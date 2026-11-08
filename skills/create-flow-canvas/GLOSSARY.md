@@ -84,7 +84,7 @@ The frames the user has selected (a click, shift-click, a marquee, select all), 
 _Avoid_: Focus alone (use **keyboard focus** for the input position; the **Focus** action moves the camera), active
 
 **Keyboard focus**:
-Where keyboard input goes: a frame wrapper, a screen's own control, a menu or the panel. It is separate from the camera's Focus action. The wrapper exists independently of a screen document; entering a screen waits for its document, and Escape follows the canvas's existing cancellation/closing chain before returning keyboard focus to the wrapper when the panel is closed. Native Tab moves into and out of mounted screens.
+Where keyboard input goes: a frame wrapper, a screen's own control, a menu or the panel. It is separate from the camera's Focus action. The wrapper exists independently of a screen document; entering a screen waits for its document, and Escape follows the canvas's existing cancellation/closing chain before returning keyboard focus to the wrapper when the panel is closed. Native Tab is left to the browser; moving into and out of mounted screens has not been exercised in a real browser (see `KEYBOARD.md`). Keyboard focus selects a frame but never writes the layout: a frame in a closed group is not a Tab stop, so a group opens only when it is asked to.
 _Avoid_: Selection (the selected frames are kept by `FlowSelection`)
 
 **Press**:

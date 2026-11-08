@@ -37,16 +37,16 @@ Every frame wrapper is a Tab stop with `role="group"`. Its accessible name inclu
 
 | Key on a focused frame | Action |
 | --- | --- |
-| Tab / Shift+Tab | Native traversal through frames, their controls and mounted screens |
+| Tab / Shift+Tab | Native traversal through frames, their controls and mounted screens (a closed group's frames are not stops: its chevron is) |
 | Left / Right | Focus and select the previous / next frame in scan order |
 | Enter | Mount if necessary, wait, then enter the screen's first available control (or its body) |
 | Escape inside a screen | Follow the existing canvas Escape chain, then return focus to the wrapper when the panel is closed |
 | Alt+Shift+Left / Right | Move one slot earlier / later in its group; never wrap |
 | Shift+arrow | Move a loose frame by 10 world pixels on the shown device |
 | Control/Command+Shift+G | Existing take-out shortcut for selected frames |
-| Shift+F10 | Frame actions: reorder, take out, move, choose a group or choose a connector destination |
+| Shift+F10 or the Menu key | Frame actions: reorder, take out, move, choose a group or choose a connector destination |
 
-A frame also has a native Frame actions button. The dialog returns focus to that frame. The existing `i`, `n`, `l`, `a`, `m`, `t`, `d`, `c`, device/view keys, Control/Command+G, Control/Command+K and Space-pan remain in place. Native text entry and activation stay inside a screen; Tab traversal is left to the browser. Keyboard focus in a screen keeps its document mounted. Add, Canvas, Views and group options are ARIA menus with arrow/Home/End navigation, Escape and focus return. Group chevrons and Inspect/Search toggles expose `aria-expanded`; panel toggles control the complementary panel, so they do not claim to open an ARIA popup.
+A frame also has a native Frame actions button. The dialog returns focus to that frame without moving the camera; its move buttons keep it open and report each result in a status line. Shift does not turn the global shortcuts off (`+` and `/` need it on many layouts); Control, Command and Alt do, except AltGr. The existing `i`, `n`, `l`, `a`, `m`, `t`, `d`, `c`, device/view keys, Control/Command+G, Control/Command+K and Space-pan remain in place. Native text entry and activation stay inside a screen; Tab traversal is left to the browser. Keyboard focus in a screen keeps its document mounted. Add, Canvas, Views and group options are ARIA menus with arrow/Home/End navigation, Escape and focus return. Group chevrons and Inspect/Search toggles expose `aria-expanded`; panel toggles control the complementary panel, so they do not claim to open an ARIA popup.
 
 `FlowPlayback` (`<script id="playback-module">`, browser-free) owns Play's sequence. With reduced motion Play selects the first screen and offers Next screen and Stop playback; it never starts an automatic timer. Turning reduced motion on during Play cancels its pending automatic advance and makes the visit manual; turning it off does not restart that visit's timer. Start Play again for automatic playback. The connector token is skipped under reduced motion (and an in-flight token stops on the next animation frame). Menu pop runs only with no motion preference. Token durations and menu duration are named in `TIMING`, alongside the existing Play dwell; slides, ripple and spotlight retain their existing gates.
 

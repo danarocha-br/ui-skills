@@ -11,8 +11,8 @@ import { html, block } from "./modules.mjs";
 const page = (() => {
   const m = html.match(/^\s*<script>\n([\s\S]*?)<\/script>/m);
   assert.ok(m, "the page's script block is not found");
-  /* the arrange module writes to the layout for the page, so it is held to the same rule */
-  return (m[1] + "\n" + block("arrange-module")).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* the arrange and keyboard modules write to the layout for the page, so they are held to the same rule */
+  return (m[1] + "\n" + block("arrange-module") + "\n" + block("keyboard-module")).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 })();
 const FIELDS = "groups|pos|caps|scans|notes|conns";
 const lines = (re) =>

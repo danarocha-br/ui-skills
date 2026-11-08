@@ -1,6 +1,6 @@
 # Keyboard and reduced-motion support
 
-Base: `a39dc52` (523 passing Node tests). Review source: architecture review 3, B6 accessibility bullets and B5 ownership context.
+Status log and manual checklist for the keyboard and reduced-motion work (the behaviour itself is described in `SKILL.md`). Base: `a39dc52`. It answers the accessibility bullets (B6) of the third architecture review, which is kept outside the repository.
 
 ## Gap verification
 
@@ -34,7 +34,7 @@ Keyboard-only manual checklist (pending):
 2. Reach and activate a group chevron twice. Open Add, Canvas, Views and group options; use arrows, Home/End, Tab and Escape. Check expanded states and focus return.
 3. Reorder a middle frame both ways and at both boundaries; take it out with Control/Command+Shift+G; nudge it; move it back with the group picker. Undo each edit once.
 4. Choose a connector destination in Frame actions, create it and undo. Recheck pointer drag/reorder/take-out/edge-dot drawing.
-5. Enter a mounted screen. Tab past its final control and backward before its first control. Check for traps, type text, activate native controls, open Search with Control/Command+K and return with Escape. Recheck Space-pan and canvas shortcuts outside text entry.
+5. Enter a mounted screen. Tab past its final control and backward before its first control. Check for traps, type text, activate native controls, open Search with Control/Command+K and return with Escape. Recheck Space-pan and canvas shortcuts outside text entry, including `+` (Shift+`=`), `-`, `/` and `=`.
 6. Open Inspect and Search by keyboard and close each with Escape. Verify focus return and expanded states.
 7. With the actual OS/browser reduced-motion setting off, run automatic Play. With it on, verify no advance, use Next screen, stop at the last screen, and check menu pop/tokens. Enable the preference mid-Play; verify no pending advance fires.
 8. Listen to frame names/state/selection and action toasts with a real screen reader. Otherwise inspect the accessibility tree for groups, controls, popup states and live status.
@@ -54,8 +54,7 @@ Self-review also moved action announcements after the modal closes (the page sta
 
 ## Automated evidence
 
-- Baseline on Node 22.22.2: 523 tests passed.
-- Final on Node 22.22.2: 532 tests passed, zero failures, skips or cancellations. This includes the existing engine-purity, layout-write/ownership, geometry and timing guards. The FrameDom public-interface guard still rejects every undeclared method and now declares its tested boolean focus operation.
+- Node 22.22.2: all tests pass with zero failures, skips or cancellations (run the command above for the current count). This includes the existing engine-purity, layout-write/ownership, geometry and timing guards. The FrameDom public-interface guard still rejects every undeclared method and now declares its tested boolean focus operation.
 - All 19 executable HTML script blocks compile; `tests/browser.mjs` passes Node's syntax check.
 - Browser harness: 24 cases registered (16 existing plus 8 added), **not run**. This is a count of cases, not a pass count.
 - The saved layout schema and persistence modules were not changed. Existing pointer handlers remain in place, but real pointer regression checks are pending with the other browser work.

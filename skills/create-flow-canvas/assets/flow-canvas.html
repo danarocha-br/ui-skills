@@ -4434,9 +4434,9 @@
           >to scanned copy</span
         >
       </button>
-      <button class="mi" data-a="info" style="cursor: default">
-        <svg><use href="#i-screen" /></svg><b id="productName" style="font-weight: inherit"></b><span id="productFacts"></span>
-      </button>
+      <div class="mi" role="presentation" data-a="info" style="cursor: default">
+        <svg aria-hidden="true"><use href="#i-screen" /></svg><b id="productName" style="font-weight: inherit"></b><span id="productFacts"></span>
+      </div>
     </div>
     <div class="ui menu" id="mViews"></div>
     <div class="ui menu" id="mGroup"></div>
@@ -4514,6 +4514,7 @@
     <dialog id="frameActions" aria-labelledby="frameActionTitle">
       <h2 id="frameActionTitle">Frame actions</h2>
       <p>Changes can be undone with Control or Command+Z.</p>
+      <p id="frameActionStatus" role="status" aria-live="polite"></p>
       <div class="action-row"><button data-frame-action="earlier">Move earlier</button><button data-frame-action="later">Move later</button></div>
       <button data-frame-action="takeOut">Take out of group</button>
       <fieldset><legend>Move loose frame</legend>
@@ -8500,13 +8501,17 @@
             /* Text entry and native activation stay in the screen. Escape and Search still reach canvas chrome. */
             if (editing && !search && e.key !== "Escape" && !(type === "keyup" && e.code === "Space")) return;
             if (e.target.closest?.(ACTIVATE) && ["Space", "Enter"].includes(e.code) && !pointer.state().space) return;
+            /* The product's own Escape (a dialog or popover it has open, or a handler that took it) is not the canvas's */
+            if (type === "keydown" && e.key === "Escape" && (e.defaultPrevented || e.target.closest?.("dialog[open],[popover]:popover-open"))) return;
+            const panelWasOpen = type === "keydown" && e.key === "Escape" && panel.state().open;
             const event = new KeyboardEvent(type, { bubbles: true, cancelable: true,
               key: e.key, code: e.code, repeat: e.repeat, ctrlKey: e.ctrlKey, metaKey: e.metaKey,
               altKey: e.altKey, shiftKey: e.shiftKey });
             if (!ph.dispatchEvent(event)) e.preventDefault();
             if (type === "keydown" && e.key === "Escape") {
               e.preventDefault();
-              if (!panel.state().open) focusFrame(id, { select: false });
+              /* the canvas's Escape already ran above and may have closed the panel: decide on what was open before it */
+              if (!panelWasOpen) focusFrame(id, { select: false });
               else if (editing) e.target.blur();
             }
           }));
@@ -8845,7 +8850,10 @@
         const w = f.closest("[data-k]");
         if (!w) return;
         /* each key goes through the layout; the undo step is recorded when the field is left (below) */
-        if (groupById(w.dataset.k)) commit.typing.change(() => layout.setGroupText(w.dataset.k, { [f.dataset.f]: f.textContent }));
+        if (groupById(w.dataset.k)) {
+          commit.typing.change(() => layout.setGroupText(w.dataset.k, { [f.dataset.f]: f.textContent }));
+          labelGroup(groupById(w.dataset.k));
+        }
         else if (capOf(w.dataset.k)) commit.typing.change(() => layout.edit("caps", w.dataset.k, { [f.dataset.f]: f.textContent }));
       });
       /* one undo step per visit to a group's, a frame's or a note's text, not one per keystroke */
@@ -9321,6 +9329,13 @@
         put(".gsub", L.sub);
         el.querySelector(".gsubw").classList.toggle("off", !L.subOn);
       }
+      /* the names assistive technology hears for a group and its frames follow the group's own name, as it is typed.
+         The chevron is a disclosure: its name is the group's, and aria-expanded says open or closed. */
+      function labelGroup(L) {
+        const chev = groupEls.get(L.id)?.querySelector(".chev");
+        if (chev) { chev.setAttribute("aria-label", groupName(L)); chev.setAttribute("aria-expanded", String(L.open)); }
+        L.screens.forEach(updateFrameName);
+      }
       function syncGroups() {
         const shown = gesture.view().groups;
         const ids = new Set(shown.map((g) => g.id));
@@ -9343,7 +9358,7 @@
           el.style.height = box.h + "px";
           el.classList.toggle("open", L.open);
           el.querySelector(".chev").setAttribute("aria-expanded", String(L.open));
-          el.querySelector(".chev").setAttribute("aria-label", (L.open ? "Close " : "Open ") + groupName(L));
+          labelGroup(L);
           el.querySelector(".fmore").setAttribute("aria-haspopup", "menu");
           el.querySelector(".fmore").setAttribute("aria-controls", "mGroup");
           el.querySelector(".fmore").setAttribute("aria-expanded", String(menus.group.classList.contains("open") && menuOwner === el.querySelector(".fmore")));
@@ -9484,6 +9499,13 @@
       /* frames */
       function updateFrameName(id) {
         const group = groupOf(id), screen = SCREENS[id];
+        /* a closed group's frames are a stack: its chevron is the stop, and opening it is a choice, not a side effect of Tab */
+        const col = colOf(id), stacked = !!group && !group.open;
+        if (col) {
+          col.tabIndex = stacked ? -1 : 0;
+          /* the label's buttons are invisible on a deck: out of the Tab order with it, so Tab never lands on what is not shown */
+          col.querySelectorAll(".label button").forEach((b) => { b.tabIndex = stacked ? -1 : 0; });
+        }
         colOf(id)?.setAttribute("aria-label", FlowKeyboard.frameName({
           name: screen.name, route: screen.route, state: screen.states[FrameDom.stateIndex(id)]?.name || "Default",
           group: group && groupName(group), index: group?.screens.indexOf(id), total: group?.screens.length,
@@ -9515,7 +9537,9 @@
         col.setAttribute("aria-keyshortcuts", "Enter Shift+F10 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
         col.addEventListener("focusin", (e) => {
           if (returningFrameFocus || inputWasPointer || pointer.state().mode !== "idle") return;
-          if (e.target === col || selection.primary() !== id || groupOf(id)?.open === false) select(id, true);
+          /* Focus selects; it never writes the layout. A frame in a closed group is not a tab stop (see updateFrameName),
+             and if one is focused anyway its group stays closed. */
+          if (e.target === col || selection.primary() !== id) select(id, true, { open: false });
         });
         col.addEventListener("screenfocus", () => { select(id, false); });
         col.addEventListener("keydown", (e) => {
@@ -9525,9 +9549,10 @@
           e.preventDefault(); e.stopPropagation();
           if (command.action === "focus") {
             stopPlay();
-            const index = ORDER.indexOf(id), next = ORDER[clamp(index + command.delta, 0, ORDER.length - 1)];
+            const reachable = ORDER.filter((x) => x === id || colOf(x)?.tabIndex === 0);
+            const index = reachable.indexOf(id), next = reachable[clamp(index + command.delta, 0, reachable.length - 1)];
             focusFrame(next);
-          } else if (command.action === "enter") enterScreen(id);
+          } else if (command.action === "enter") enterScreen(id).catch(() => toast("This screen could not be opened."));
           else if (command.action === "actions") openFrameActions(id);
           else editFrame(id, command);
         });
@@ -9825,8 +9850,8 @@
       function setSel(ids, primary) {
         if (!selection.set(ids, primary)) reflectSel();
       }
-      function select(id, focus) {
-        if (id) {
+      function select(id, focus, { open = true } = {}) {
+        if (id && open) {
           const L = groupOf(id);
           if (L && !L.open) setGroup(L.id, true, { fly: false });
         }
@@ -10293,7 +10318,7 @@
         document.querySelectorAll(".fplay").forEach((button) => {
           const on = playing && button.closest(".lane").dataset.groupId === playGroup;
           button.classList.toggle("on", on);
-          button.setAttribute("aria-pressed", String(on));
+          /* an action whose name changes (Play, Stop), not a toggle: one of the two, never both */
           button.setAttribute("aria-label", on ? "Stop playback" : "Play flow");
           button.querySelector("use").setAttribute("href", on ? "#i-stop" : "#i-play");
           button.querySelector("span").textContent = on ? "Stop" : "Play flow";
@@ -10301,7 +10326,7 @@
         const controls = $("#playControls"), hadFocus = controls.contains(document.activeElement);
         controls.hidden = !(playing && st.manual);
         $("#playNext").disabled = !st.canNext;
-        if (controls.hidden && hadFocus) focusFrame(selection.primary());
+        if (controls.hidden && hadFocus) focusFrame(selection.primary(), { select: false });
       }
       function showPlayScreen(previous) {
         const st = playback.state();
@@ -10713,6 +10738,13 @@
         stopPlay();
         closeMenus();
         actionFrame = id;
+        $("#frameActionStatus").textContent = "";
+        fillFrameActions(id);
+        colOf(id)?.querySelector(".frame-actions").setAttribute("aria-expanded", "true");
+        frameActions.showModal();
+      }
+      /* what the dialog offers for this frame as it is now: it stays open across moves, so this runs after each */
+      function fillFrameActions(id) {
         const group = groupOf(id), index = group?.screens.indexOf(id);
         $("#frameActionTitle").textContent = "Frame actions: " + SCREENS[id].name;
         frameActions.querySelector('[data-frame-action="earlier"]').disabled = !group || index === 0;
@@ -10725,15 +10757,13 @@
         const destinations = ORDER.filter(to => to !== id && !connBetween(id, to));
         frameActions.querySelector('[name="destination"]').innerHTML = destinations.map(to => `<option value="${esc(to)}">${esc(SCREENS[to].name)} · ${esc(SCREENS[to].route)}</option>`).join("");
         frameActions.querySelector('[data-frame-action="connect"]').disabled = !destinations.length;
-        colOf(id)?.querySelector(".frame-actions").setAttribute("aria-expanded", "true");
-        frameActions.showModal();
       }
       frameActions.addEventListener("close", () => {
         const message = actionMessage;
         actionMessage = null;
         if (actionFrame) {
           colOf(actionFrame)?.querySelector(".frame-actions").setAttribute("aria-expanded", "false");
-          focusFrame(actionFrame);
+          focusFrame(actionFrame, { select: false }); /* closing a dialog returns focus; it does not move the camera */
         }
         actionFrame = null;
         if (message) toast(message); /* the status region is no longer inert after the modal closes */
@@ -10741,10 +10771,18 @@
       frameActions.addEventListener("click", (e) => {
         const action = e.target.closest("[data-frame-action]")?.dataset.frameAction, id = actionFrame;
         if (!action || !id) return;
-        if (action === "earlier" || action === "later") editFrame(id, { action: "reorder", delta: action === "earlier" ? -1 : 1 });
-        if (action === "takeOut") removeFromGroup([id]);
+        /* moves repeat, so the dialog stays open and says what happened; the other actions finish and close it */
         const direction = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" }[action];
-        if (direction) editFrame(id, FlowKeyboard.command({ key: direction, shiftKey: true }));
+        if (action === "earlier" || action === "later" || direction) {
+          if (direction) editFrame(id, FlowKeyboard.command({ key: direction, shiftKey: true }));
+          else editFrame(id, { action: "reorder", delta: action === "earlier" ? -1 : 1 });
+          fillFrameActions(id);
+          /* a button that has just been disabled (the first frame cannot move earlier) must not take the focus with it */
+          if (!frameActions.contains(document.activeElement) || document.activeElement.disabled)
+            frameActions.querySelector(".action-row button:not(:disabled), fieldset:not(:disabled) button")?.focus();
+          return;
+        }
+        if (action === "takeOut") removeFromGroup([id]);
         if (action === "join") {
           const groupId = frameActions.querySelector('[name="group"]').value;
           const changed = commit(() => keyboard.join(id, groupId));
@@ -10816,7 +10854,12 @@
               if (a === "rename") focusTitle(L.id);
               if (a === "toggle") setGroup(L.id, !L.open);
               if (a === "play") play(L.screens);
-              if (a === "ungroup") dissolveGroup(L);
+              if (a === "ungroup") {
+                /* the header that opened this menu goes with the group: focus moves to its first frame instead of the body */
+                const first = L.screens[0];
+                dissolveGroup(L);
+                if (first) focusFrame(first, { select: false });
+              }
             }),
         );
       }
@@ -11344,7 +11387,7 @@
       };
       let tt;
       function toast(m) {
-        if (frameActions.open) { actionMessage = m; return; }
+        if (frameActions.open) { actionMessage = m; $("#frameActionStatus").textContent = m; return; }
         const t = $("#toast");
         t.textContent = m;
         t.classList.add("show");
@@ -11423,7 +11466,10 @@
           else if (selection.count()) select(null);
           return;
         }
-        if (typing || mod || e.altKey || e.shiftKey) return;
+        /* Shift is not a chord: "+" and "/" need it on many layouts, and a shifted letter is a different key anyway.
+           A frame's Shift+arrow and Alt+Shift+arrow are the frame's own (they stop here). AltGr reports Ctrl+Alt on Windows. */
+        const chord = (mod || e.altKey) && !e.getModifierState?.("AltGraph");
+        if (typing || chord) return;
         if (e.key === "c" && selection.count() > 1) {
           connectSel();
           return;
