@@ -2494,7 +2494,7 @@
         transform: translate(-50%, 0);
       }
     </style>
-    <style id="flow-scan-styles">
+    <style id="flow-scan-styles" media="not all">
       @import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
       :where(.phone, .phone *) {
         box-sizing: border-box;
@@ -4005,7 +4005,6 @@
     </style>
   </head>
   <body>
-    <svg id="scan-icons" width="0" height="0" style="position: absolute" aria-hidden="true"></svg>
     <svg width="0" height="0" style="position: absolute">
       <defs>
         <symbol
@@ -4470,8 +4469,8 @@
     </div>
 
     <div class="ui pill" id="hint">
-      Scroll or drag to move · pinch to zoom · drag the canvas to select · hold
-      Space to pan · drag a frame’s edge dot to connect it
+      Scroll to move · Ctrl/⌘ + scroll to zoom · drag the canvas to select ·
+      hold Space to pan · drag a frame’s edge dot to connect it
     </div>
     <div class="sbar h"><i></i></div>
     <div class="sbar v"><i></i></div>
@@ -5082,7 +5081,7 @@
          Interface
            FlowDevice.ids()                 -> ["mobile", "tablet", "desktop"], in the order the switcher shows them
            FlowDevice.describe(id)          -> a frozen description; an unknown id throws, naming the ones there are
-             { id, label, vp, key, icon, title, cls, findY,
+             { id, label, vp, viewport: { width, height }, key, icon, title, cls, findY,
                metrics   colW phH cap body collH deckS deckW peekX peekY closedW edge   (what FlowGeometry arranges with)
                cssVars   { "--cw": "270px", … }                                          (what the stylesheet reads) }
            FlowDevice.idForKey(key)         -> the id a keyboard key reaches, or null
@@ -5101,13 +5100,13 @@
            thumbnail's width; cap*: the caption's insets; edge: where connectors leave a frame; body: the
            frame's height below its head; findY: where a finding sits below its frame's caption */
         const TABLE = [
-          { id: "mobile", label: "Mobile", vp: "390 × 844", key: "m", icon: "i-phone", cls: "dm",
+          { id: "mobile", label: "Mobile", viewport: [390, 844], key: "m", icon: "i-phone", cls: "dm",
             top: 28, cw: 270, ch: 585, cr: 38, ds: 0.4, deckW: 108, peekX: 10, peekY: 8, edge: 509, body: 744,
             cap: 170, capT: 19, capB: 12.5, capL: 4, collH: 290, closedW: 440, tw: 150, findY: 662 },
-          { id: "tablet", label: "Tablet", vp: "768 × 1024", key: "t", icon: "i-tablet", cls: "dw dt",
+          { id: "tablet", label: "Tablet", viewport: [768, 1024], key: "t", icon: "i-tablet", cls: "dw dt",
             top: 28, cw: 400, ch: 560, cr: 26, ds: 0.4, deckW: 160, peekX: 12, peekY: 9, edge: 480, body: 724,
             cap: 150, capT: 22, capB: 13.5, capL: 3, collH: 300, closedW: 580, tw: 190, findY: 640 },
-          { id: "desktop", label: "Desktop", vp: "1200 × 772", key: "d", icon: "i-desktop", cls: "dw dd",
+          { id: "desktop", label: "Desktop", viewport: [1200, 772], key: "d", icon: "i-desktop", cls: "dw dd",
             top: 28, cw: 600, ch: 420, cr: 14, ds: 0.38, deckW: 228, peekX: 12, peekY: 9, edge: 205, body: 584,
             cap: 140, capT: 26, capB: 15, capL: 2, collH: 240, closedW: 700, tw: 220, findY: 500 },
         ];
@@ -5116,7 +5115,8 @@
           return Object.freeze({
             id: d.id,
             label: d.label,
-            vp: d.vp,
+            vp: d.viewport.join(" × "),
+            viewport: Object.freeze({ width: d.viewport[0], height: d.viewport[1] }),
             key: d.key,
             icon: d.icon,
             title: `${d.label} (${d.key.toUpperCase()})`,
@@ -7998,9 +7998,9 @@
          Nothing else holds a node of a screen: the page, the panel and the scanner cards name a screen by its
          id and get back plain values (a number, a state, where a tap leads).
 
-         The module is logic. Where a screen actually lives (a light-DOM element today, a shadow root some day)
-         is a host adapter's business, so a test stands a fake host in and needs no browser. The page's one
-         live host is marked in the page script ("live screen host").
+         The module is logic. The live host mounts each screen in its own iframe, owns local assets and
+         bridges events into canvas coordinates. Module tests use a fake host; tests/browser.html exercises
+         the live host's document isolation and interactions. The adapter is marked "live screen host" below.
 
          Interface
            FlowFrameDom.create({ screens, components, device, host, behaviour, report }) -> frames   (the page calls it FrameDom)
@@ -8016,6 +8016,7 @@
                                         a frame, then calls render)
            frames.render(id)            mounts the render for the shown state on this device. The whole of it:
                                         what was tapped inside the screen is gone, because a screen is its render
+           frames.ready(id?)            waits for the latest mount of one screen, or all mounted screens; no node returned
            frames.setState(id, i)       shows state i, if it can be shown -> true; otherwise nothing happens -> false
            frames.count(id, c)          how many instances of component c are on the screen now (a number)
            frames.spotlight(id, c)      dims the screen except around c, with its name; clears the last one first
@@ -8026,12 +8027,13 @@
            frames.tap(hit)              the ripple, then the product's reaction -> { go }, the screen id a link in the
                                         target led to (read before the reaction runs), or null. The page decides
                                         whether it can follow
-           frames.interactive(hit)      the target is a link or something the product reacts to
+           frames.interactive(hit)      the target is a native control, a link or something the product reacts to
            frames.copyInto(id, container)   a copy of the screen, drawn into a container, without what the canvas
                                         lays over a live one
 
          Host adapter (what a host answers)
-           hostHTML(id, { device, state }) -> markup      mount(id, markup, state)       root(id) -> the screen's root
+           hostHTML(id, { device, state }) -> markup      mount(id, markup, state) -> void | Promise (ready)
+           root(id) -> the screen's root (only the module and product behaviour may use it)
            count(id, selector) -> n (only what is shown)  rects(id, selector) -> { w, h, rects: [{x,y,w,h}] } | null
            drawSpot(id, { svg, label: { text, left, top } })   clearSpot()
            hit(event) -> { id, x, y, target } | null      ripple(id, x, y)              goOf(target) -> id | null
@@ -8043,6 +8045,7 @@
         function create({ screens, components = {}, device, host, behaviour = null, report = () => {} }) {
           /* the state each switchable screen shows: view state, kept across device switches */
           const stateOf = {};
+          const pending = new Map();
           const known = (id) => Object.prototype.hasOwnProperty.call(screens, id);
           const shownStates = (id) =>
             known(id) ? screens[id].states.map((st, i) => (i === 0 || st.html ? i : -1)).filter((i) => i >= 0) : [];
@@ -8055,8 +8058,19 @@
 
           /* a screen is shown by mounting its whole render, never by patching what is there */
           const show = (id) => {
-            host.mount(id, markup(id), stateIndex(id));
+            const load = Promise.resolve(host.mount(id, markup(id), stateIndex(id))).catch(report);
+            pending.set(id, load);
+            return load;
           };
+          async function ready(id) {
+            let loads;
+            do {
+              loads = id === undefined ? [...pending.values()] : [pending.get(id)];
+              await Promise.all(loads);
+            } while (id === undefined
+              ? loads.length !== pending.size || loads.some((load, i) => load !== [...pending.values()][i])
+              : loads[0] !== pending.get(id));
+          }
 
           function spotlight(id, c) {
             host.clearSpot();
@@ -8089,6 +8103,7 @@
             switchable: (id) => shownStates(id).length > 1,
             hostHTML: (id) => host.hostHTML(id, { device: device(), state: stateIndex(id) }),
             render: (id) => known(id) && show(id),
+            ready,
             setState(id, i) {
               if (!shownStates(id).includes(i)) return false;
               stateOf[id] = i;
@@ -8114,7 +8129,7 @@
               return { go };
             },
             interactive: (hit) =>
-              !!hit && host.matches(hit.target, ["[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
+              !!hit && host.matches(hit.target, ["button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
             copyInto: (id, container) => host.copyInto(id, container),
           };
         }
@@ -8173,7 +8188,6 @@
         throw new Error("flow-scan: " + READ.problems[0]);
       }
       const SCAN = READ.scan;
-      document.getElementById("scan-icons").innerHTML = SCAN.icons;
       const SCREENS = Object.fromEntries(SCAN.screens.map((s) => [s.id, s]));
       const ORDER = SCAN.screens.map((s) => s.id);
       const DEFAULT_GROUPS = SCAN.groups;
@@ -8182,40 +8196,131 @@
       const andList = (a) =>
         a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1];
       /* ---------- live screen host: begin ---------- */
-      /* FrameDom (FlowFrameDom, above) owns a screen's own DOM. This block is its host: the only place in the page
-         that knows a screen is a ".phone" element in the page's own DOM, how that element is made and found,
-         how an event from inside one is read, what is laid over it (ripple, spotlight) and how a copy is drawn.
-         To mount screens in a shadow root instead, change this block (and where the product styles apply) and
-         nothing else. Nothing outside it holds a node of a screen. */
+      /* FrameDom's live host is the only page code that holds product nodes. A .phone wrapper belongs to
+         canvas chrome; its iframe has a real device viewport, local styles and SVG symbols. The parent runs
+         only the scan's FlowScanBehaviour, not scripts in the render. Events target the wrapper in the parent
+         and carry an opaque product hit separately, so product names cannot invoke chrome handlers. Mounts
+         resolve on load/fonts (superseded loads resolve too); Search gets an inert snapshot, not a cloned iframe. */
       const FrameDom = (() => {
         const phoneOf = (id) => document.getElementById("p-" + id);
+        const documents = new Map();
+        const bridged = new WeakMap();
+        const rootOf = (id) => documents.get(id)?.frame.contentDocument?.body || null;
+        const productStyles = document.getElementById("flow-scan-styles").textContent;
+        function screenDocument(markup, device, snapshot = false) {
+          return `<!doctype html><html><head><meta charset="utf-8"><base href="${esc(document.baseURI)}">
+            <style>html{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+              body{width:100%;height:100%;margin:0;position:relative;display:flex;flex-direction:column;
+                font-size:12px;overflow:auto;overscroll-behavior:contain}</style>
+            <style>${productStyles}</style></head>${snapshot ? markup : `<body class="phone ${device.cls}">
+            <svg width="0" height="0" style="position:absolute" aria-hidden="true">${SCAN.icons}</svg>${markup}</body>`}</html>`;
+        }
+        function makeDocument(ph, markup, device, title, snapshot = false) {
+          const frame = document.createElement("iframe");
+          frame.className = "screen-document";
+          frame.title = title;
+          frame.setAttribute("sandbox", "allow-same-origin");
+          const { width, height } = device.viewport;
+          Object.assign(frame.style, {
+            position: "absolute", left: "0", top: "0", border: "0", width: width + "px", height: height + "px",
+            transformOrigin: "0 0", transform: `scale(${ph.offsetWidth / width},${ph.offsetHeight / height})`,
+          });
+          frame.srcdoc = screenDocument(markup, device, snapshot);
+          ph.appendChild(frame);
+          return frame;
+        }
+        /* The parent event targets chrome, never a product node. Only hit() opens the opaque target again. */
+        function bridge(id, ph, frame) {
+          const doc = frame.contentDocument;
+          const forward = (e, EventType) => {
+            const r = frame.getBoundingClientRect();
+            const x = e.clientX * ph.offsetWidth / frame.offsetWidth,
+              y = e.clientY * ph.offsetHeight / frame.offsetHeight;
+            const event = new EventType(e.type, {
+              bubbles: true, cancelable: true, clientX: r.left + e.clientX * r.width / frame.offsetWidth,
+              clientY: r.top + e.clientY * r.height / frame.offsetHeight,
+              button: e.button, buttons: e.buttons, detail: e.detail,
+              pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary,
+              deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode,
+              ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey,
+            });
+            bridged.set(event, { id, x, y, target: e.target });
+            if (!ph.dispatchEvent(event)) e.preventDefault();
+          };
+          ["click", "dblclick"].forEach((type) => doc.addEventListener(type, (e) => {
+            if (e.target.closest("a[data-go]")) e.preventDefault();
+            forward(e, MouseEvent);
+          }));
+          ["pointerdown", "pointermove", "pointerup", "pointercancel"].forEach((type) => doc.addEventListener(type, (e) => {
+            forward(e, PointerEvent);
+            if (type === "pointerdown" && pointer.state().mode !== "idle") {
+              e.preventDefault();
+              /* Keep a background drag alive when it leaves this document. Native controls keep native capture. */
+              try { doc.documentElement.setPointerCapture(e.pointerId); } catch (_) { /* synthetic test pointer */ }
+            }
+          }));
+          doc.addEventListener("lostpointercapture", () => {
+            if (pointer.state().mode !== "idle") ph.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true }));
+          });
+          doc.addEventListener("wheel", (e) => {
+            if (e.ctrlKey || e.metaKey) forward(e, WheelEvent);
+          }, { passive: false });
+          ["keydown", "keyup"].forEach((type) => doc.addEventListener(type, (e) => {
+            const editing = e.target.closest?.("input,select,textarea,[contenteditable]");
+            const search = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k";
+            /* Text entry and native activation stay in the screen. Escape and Search still reach canvas chrome. */
+            if (editing && !search && e.key !== "Escape" && !(type === "keyup" && e.code === "Space")) return;
+            if (e.target.closest?.("button,summary,a[href]") && ["Space", "Enter"].includes(e.code) && !pointer.state().space) return;
+            const event = new KeyboardEvent(type, { bubbles: true, cancelable: true,
+              key: e.key, code: e.code, repeat: e.repeat, ctrlKey: e.ctrlKey, metaKey: e.metaKey,
+              altKey: e.altKey, shiftKey: e.shiftKey });
+            if (!ph.dispatchEvent(event)) e.preventDefault();
+            if (editing && e.key === "Escape") e.target.blur();
+          }));
+          doc.addEventListener("scroll", () => host.clearSpot(), true);
+        }
         /* what of a component is on the screen to be seen: the instances that take room, and not the spotlight itself */
-        const shown = (ph, selector) => [...ph.querySelectorAll(selector)].filter((el) => el.offsetWidth > 0 && !el.closest(".spot"));
+        const shown = (root, selector) => [...root.querySelectorAll(selector)].filter((el) =>
+          [...el.getClientRects()].some((r) => r.width > 0 && r.height > 0) && root.ownerDocument.defaultView.getComputedStyle(el).visibility !== "hidden");
         const host = {
           hostHTML: (id, { device, state }) => `<div class="phone ${device.cls}" id="p-${esc(id)}" data-state="${esc(state)}"></div>`,
           mount(id, markup, state) {
             const ph = phoneOf(id);
             if (!ph) return;
-            ph.innerHTML = markup;
+            documents.get(id)?.dispose();
+            ph.replaceChildren();
             ph.dataset.state = state;
+            ph.setAttribute("aria-busy", "true");
+            const frame = makeDocument(ph, markup, DEV, SCREENS[id].name);
+            return new Promise((resolve) => {
+              const record = { frame, dispose: resolve };
+              documents.set(id, record);
+              frame.addEventListener("load", async () => {
+                if (documents.get(id) !== record || !ph.isConnected) return resolve();
+                bridge(id, ph, frame);
+                await frame.contentDocument.fonts.ready;
+                if (documents.get(id) === record) ph.setAttribute("aria-busy", "false");
+                resolve();
+              }, { once: true });
+            });
           },
-          root: phoneOf,
+          root: rootOf,
           count: (id, selector) => {
-            const ph = phoneOf(id);
+            const ph = rootOf(id);
             return ph ? shown(ph, selector).length : 0;
           },
           rects(id, selector) {
-            const ph = phoneOf(id);
-            if (!ph) return null;
-            const pr = ph.getBoundingClientRect(),
-              sc = pr.width / ph.offsetWidth;
+            const ph = phoneOf(id), root = rootOf(id), frame = documents.get(id)?.frame;
+            if (!ph || !root || !frame) return null;
+            const w = ph.offsetWidth, h = ph.offsetHeight,
+              sx = w / frame.offsetWidth, sy = h / frame.offsetHeight;
             return {
-              w: ph.offsetWidth,
-              h: ph.offsetHeight,
-              rects: shown(ph, selector).map((el) => {
+              w, h,
+              rects: shown(root, selector).map((el) => {
                 const r = el.getBoundingClientRect();
-                return { x: (r.left - pr.left) / sc, y: (r.top - pr.top) / sc, w: r.width / sc, h: r.height / sc };
-              }),
+                const x = Math.max(0, r.left * sx), y = Math.max(0, r.top * sy);
+                return { x, y, w: Math.min(w, r.right * sx) - x, h: Math.min(h, r.bottom * sy) - y };
+              }).filter((r) => r.w > 0 && r.h > 0),
             };
           },
           drawSpot(id, { svg, label }) {
@@ -8239,11 +8344,7 @@
           },
           /* an event from inside a screen: which, where on it (in its own pixels, whatever the zoom), and what was hit */
           hit(e) {
-            const ph = e.target.closest && e.target.closest(".phone"),
-              col = ph && ph.closest(".col");
-            if (!ph || !col) return null;
-            const r = ph.getBoundingClientRect();
-            return { id: col.dataset.id, x: (e.clientX - r.left) / cam.k, y: (e.clientY - r.top) / cam.k, target: e.target };
+            return bridged.get(e) || null;
           },
           ripple(id, x, y) {
             const ph = phoneOf(id);
@@ -8262,11 +8363,25 @@
           matches: (target, selector) => !!target.closest(selector),
           /* a copy of a screen to draw somewhere else (a search tile), without what the canvas lays over a live one */
           copyInto(id, container) {
-            const clone = phoneOf(id).cloneNode(true);
-            clone.removeAttribute("id");
-            clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
-            clone.querySelectorAll(".ripple,.spot,.spotlbl").forEach((n) => n.remove());
-            container.appendChild(clone);
+            const root = rootOf(id);
+            if (!root) return;
+            const clone = root.cloneNode(true);
+            const source = [...root.querySelectorAll("input,textarea,option")];
+            clone.querySelectorAll("input,textarea,option").forEach((el, i) => {
+              if (el.tagName === "INPUT") {
+                el.setAttribute("value", source[i].value);
+                el.toggleAttribute("checked", source[i].checked);
+              } else if (el.tagName === "TEXTAREA") el.textContent = source[i].value;
+              else el.toggleAttribute("selected", source[i].selected);
+            });
+            clone.inert = true;
+            const ph = document.createElement("div");
+            ph.className = "phone " + DEV.cls;
+            container.appendChild(ph);
+            const frame = makeDocument(ph, clone.outerHTML, DEV, SCREENS[id].name + " preview", true);
+            frame.tabIndex = -1;
+            frame.inert = true;
+            frame.style.pointerEvents = "none";
           },
         };
         return FlowFrameDom.create({
@@ -9553,7 +9668,6 @@
           b.addEventListener("click", () => {
             if (selection.primary() !== id) select(id);
             setState(id, +b.dataset.st);
-            repaintPanel();
           }),
         );
         pbody.querySelector(".open").onclick = () =>
@@ -9641,9 +9755,9 @@
             t = document.createElement("div");
           t.className = "tile";
           t.innerHTML = `<div class="th"></div><b>${esc(s.name)}</b><small>${esc(s.route)}</small>`;
+          res.appendChild(t);
           FrameDom.copyInto(id, t.querySelector(".th"));
           t.onclick = () => select(id, true);
-          res.appendChild(t);
         });
       }
 
@@ -10281,6 +10395,8 @@
          press on one begins its drag (annotations.down), then the edge dot, the group's grip, a frame or a deck, then anything that is not the canvas */
       function classifyPress(e) {
         const t = e.target;
+        if (pointer.state().hand || pointer.state().space) return { kind: "canvas" };
+        if (FrameDom.interactive(FrameDom.hit(e))) return { kind: "chrome" };
         const grabbed = annotations.down(t, { x: e.clientX, y: e.clientY });
         if (grabbed) return { kind: "annotation", prevent: !!grabbed.prevent };
         /* a press on any part of an annotation (a note's button, a connector chip, a caption) is not a press on the canvas */
@@ -10338,7 +10454,7 @@
           shift: e.shiftKey,
           hit: e.button === 0 ? classifyPress(e) : null,
         });
-        if (prevent) e.preventDefault();
+        if (prevent || pointer.state().mode === "pan") e.preventDefault();
       });
       addEventListener("pointermove", (e) => pointer.move({ x: e.clientX, y: e.clientY }));
       addEventListener("pointerup", () => pointer.up());
@@ -10463,6 +10579,8 @@
         if (!FrameDom.setState(id, i)) return;
         const b = colOf(id) && colOf(id).querySelector(".states");
         if (b) b.innerHTML = stateLabel(id);
+        FrameDom.clearSpot();
+        FrameDom.ready(id).then(repaintPanel);
       }
 
       /* ======================================================================
@@ -10743,6 +10861,7 @@
         buildWorld();
         setSel(sel, prim);
         FrameDom.clearSpot();
+        await FrameDom.ready();
         repaintPanel(); /* the new world is drawn from the panel's own word: the sweep, and the screen it shows */
         if (prim) {
           const q = geo.screenRect(prim);
@@ -10794,7 +10913,7 @@
         $("#panel").setAttribute("role", "complementary");
         paintPanel(panel.state(), {}); /* the landmark's label is the panel's to say */
       }
-      function boot() {
+      async function boot() {
         labelUi();
         $("#productName").textContent = SCAN.product.name;
         $("#rescanFacts").textContent = SCAN.product.name;
@@ -10806,6 +10925,8 @@
         cam = fitRect(geo.bounds(), 30);
         apply();
         if (SCAN.start) select(SCAN.start, false);
+        await FrameDom.ready();
+        repaintPanel();
         requestAnimationFrame(() =>
           requestAnimationFrame(() => document.body.classList.remove("boot")),
         );

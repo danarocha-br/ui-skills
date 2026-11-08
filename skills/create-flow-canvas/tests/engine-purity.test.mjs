@@ -13,8 +13,8 @@ const engine = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
   .filter((m) => !/id="flow-scan(-behaviour)?"/.test(m[1]))
   .map((m) => m[2].replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")) /* comments may name the sample */
   .join("\n");
-const productCss = html.match(/<style id="flow-scan-styles">([\s\S]*?)<\/style>/)[1];
-const canvasCss = html.slice(html.indexOf("<style>"), html.indexOf('<style id="flow-scan-styles">'));
+const productCss = html.match(/<style id="flow-scan-styles"[^>]*>([\s\S]*?)<\/style>/)[1];
+const canvasCss = html.slice(html.indexOf("<style>"), html.indexOf('<style id="flow-scan-styles"'));
 const classesIn = (css) => new Set([...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
 
 test("the product's colour and display-font tokens belong to the replaceable styles", () => {
@@ -43,7 +43,7 @@ test("the product supplies its own reset and font import without depending on th
   assert.ok(!/\n\s*\*\s*\{/.test(canvasCss), "the shell's reset reaches into every product element");
   assert.ok(/:where\(\.phone, \.phone \*\)/.test(productCss), "the replaceable product styles supply their reset");
   assert.ok(productCss.includes("Fraunces"), "the sample supplies its display font");
-  assert.ok(!html.slice(0, html.indexOf('<style id="flow-scan-styles">')).includes("Fraunces"), "the shell imports the product's font");
+  assert.ok(!html.slice(0, html.indexOf('<style id="flow-scan-styles"')).includes("Fraunces"), "the shell imports the product's font");
 });
 
 test("the engine is there to be checked", () => {

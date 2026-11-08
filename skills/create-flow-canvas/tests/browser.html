@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Flow canvas browser checks</title>
+<style>
+  body { margin: 24px; font: 15px/1.5 system-ui, sans-serif; color: #172126; }
+  button { padding: 8px 14px; font: inherit; }
+  li { margin: 6px 0; white-space: pre-wrap; }
+  [data-result="pass"] { color: #17623b; }
+  [data-result="fail"] { color: #a02020; }
+  #fixture > iframe { width: 1280px; height: 800px; border: 1px solid #aaa; }
+</style>
+<h1>Flow canvas browser checks</h1>
+<p>Run against the real canvas template over HTTP. These checks use its DOM and user interaction paths.</p>
+<button id="run">Run browser checks</button>
+<p id="summary" role="status">Ready</p>
+<ol id="results"></ol>
+<div id="fixture"></div>
+<script type="module" src="./browser.mjs"></script>
+</html>

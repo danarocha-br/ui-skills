@@ -64,7 +64,7 @@ How big a thing on the canvas is, in world pixels on the device on show: a frame
 _Avoid_: Size, dimensions, bounds (the geometry's `bounds()` is the whole canvas, for the camera)
 
 **Device**:
-A size the canvas can show every screen at (mobile, tablet, desktop). Each is described once; the sizes of the screen and its caption, the style variables, the class on a frame, the switcher button and the key that reaches it all come from that description. Groups are shared by every device; places are per device. In code, `FlowDevice.describe(id)`.
+A size the canvas can show every screen at (mobile, tablet, desktop). Each is described once: its real **viewport** (the iframe's width and height), the smaller canvas card and caption, style variables, frame class, switcher button and key all come from that description. The iframe renders at the real viewport and scales into the card; media queries, viewport units and fixed-position elements use the screen's viewport. Groups are shared by every device; places are per device. In code, `FlowDevice.describe(id)`.
 _Avoid_: Breakpoint, platform
 
 **Carry**:
@@ -85,7 +85,7 @@ _Avoid_: Focus (that is where the camera looks), active
 
 **Press**:
 What the pointer does from button down to button up on the canvas. What it landed on is a **hit** (an edge dot, a group's grip, a deck, a frame, an annotation, something that is not the canvas, or the empty canvas), and what follows is decided in one place by one **mode**: a frame or group held but not yet dragged (**pending**; once it moves far enough it becomes a **gesture**, which `FlowGesture` holds), a marquee, a pan, or a connector being drawn. A note or finding being dragged stays with `FlowAnnotations`, which the pointer asks about before anything else. The click that follows a press that travelled is not a click. In code, `FlowPointer`.
-_Avoid_: Drag state, tool (the hand tool and Space only decide what a press on empty canvas does)
+_Avoid_: Drag state, tool (the hand tool and Space make a press pan across the canvas, including over screens)
 
 **Arrangement edit**:
 An edit that moves frames about as a whole rather than one at a time: **Tidy** (groups and loose frames back in order on this device, nothing about the flows changed), taking frames out of their groups, and dissolving a group (its frames stay where it was). Each is a write to the layout through its mutators. In code, `FlowArrange`.
@@ -112,7 +112,7 @@ A screen's own markup for one device and one state: what the product's screen lo
 _Avoid_: Template, markup (alone)
 
 **Mount**:
-Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. Where a mounted screen lives is the business of the one host that mounts it. In code, `FlowFrameDom` (the page's `FrameDom`).
+Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. The live host mounts each screen in its own iframe with local product styles and SVG symbols, and routes events across the boundary. A mount is ready when the latest document has loaded and its fonts are ready; Inspect and Search wait for it after a state or device change. Search copies are inert snapshots of the current render and field values. In code, `FlowFrameDom` (the page's `FrameDom`), with `ready(id?)` to await one screen or all of them.
 _Avoid_: Embed, inject
 
 **Link**:

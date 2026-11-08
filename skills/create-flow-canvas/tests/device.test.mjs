@@ -49,7 +49,8 @@ test("a description gives the style variables the stylesheet reads, exactly as a
 test("a description also says how the device is named, drawn and reached", () => {
   const { metrics, cssVars, ...rest } = plain(FlowDevice.describe("tablet"));
   assert.deepEqual(rest, {
-    id: "tablet", label: "Tablet", vp: "768 × 1024", key: "t", icon: "i-tablet", title: "Tablet (T)", cls: "dw dt", findY: 640,
+    id: "tablet", label: "Tablet", vp: "768 × 1024", viewport: { width: 768, height: 1024 },
+    key: "t", icon: "i-tablet", title: "Tablet (T)", cls: "dw dt", findY: 640,
   });
   assert.deepEqual(plain(FlowDevice.describe("mobile")).cls, "dm");
   assert.deepEqual(plain(FlowDevice.describe("desktop")).cls, "dw dd");
@@ -57,7 +58,7 @@ test("a description also says how the device is named, drawn and reached", () =>
 
 test("a description is frozen: nobody can change a device for everyone else", () => {
   const d = FlowDevice.describe("mobile");
-  assert.ok(Object.isFrozen(d) && Object.isFrozen(d.metrics) && Object.isFrozen(d.cssVars));
+  assert.ok(Object.isFrozen(d) && Object.isFrozen(d.viewport) && Object.isFrozen(d.metrics) && Object.isFrozen(d.cssVars));
   assert.equal(FlowDevice.describe("mobile"), d, "asking twice gives the same description");
 });
 

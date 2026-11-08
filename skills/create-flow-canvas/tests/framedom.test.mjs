@@ -78,6 +78,25 @@ test("render mounts the screen's own markup for the device", () => {
   assert.deepEqual(host.calls, [["mount", "list", "<m-list>", 0]]);
 });
 
+test("ready waits for the latest mount when a state replaces a still-loading render", async () => {
+  const host = fakeHost();
+  const loads = [];
+  host.mount = () => new Promise((resolve) => loads.push(resolve));
+  const frames = FlowFrameDom.create({ screens: SCREENS, device: () => DEVICES.mobile, host });
+  frames.render("form");
+  let done = false;
+  const ready = frames.ready("form").then(() => { done = true; });
+  frames.setState("form", 1);
+  loads[0]();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(done, false, "the superseded load cannot say the new screen is ready");
+  loads[1]();
+  await ready;
+  assert.equal(done, true);
+  await frames.ready("unknown");
+});
+
 test("setState mounts that state's render; a state with none, or none at all, is ignored", () => {
   const { frames, host } = make();
   assert.equal(frames.setState("form", 1), true);
@@ -258,10 +277,10 @@ test("a tap that is not on a screen does nothing", () => {
 test("interactive: a link inside a screen, or what the product says reacts to a tap, is not for the canvas to take", () => {
   const target = { t: 1 };
   const hit = { id: "list", x: 0, y: 0, target };
-  const withBehaviour = make({ behaviour: { interactive: ".plant,.tog" }, answers: { matches: { "[data-go],.plant,.tog": true } } });
+  const withBehaviour = make({ behaviour: { interactive: ".plant,.tog" }, answers: { matches: { "button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go],.plant,.tog": true } } });
   assert.equal(withBehaviour.frames.interactive(hit), true);
-  assert.deepEqual(withBehaviour.host.calls, [["matches", target, "[data-go],.plant,.tog"]]);
-  const without = make({ answers: { matches: { "[data-go]": true } } });
+  assert.deepEqual(withBehaviour.host.calls, [["matches", target, "button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go],.plant,.tog"]]);
+  const without = make({ answers: { matches: { "button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go]": true } } });
   assert.equal(without.frames.interactive(hit), true);
   assert.equal(make().frames.interactive(hit), false);
   assert.equal(make().frames.interactive(null), false, "an event outside any screen is not interactive");
@@ -308,7 +327,7 @@ test("outside the live screen host the page names nothing that is inside a scree
 });
 
 test("the page uses FrameDom only through its interface, which hands out no node", () => {
-  const allowed = new Set(["hostHTML", "render", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto"]);
+  const allowed = new Set(["hostHTML", "render", "ready", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto"]);
   const used = new Set([...strip(pageScript).matchAll(/\bFrameDom\.(\w+)/g)].map((m) => m[1]));
   assert.ok(used.has("render") && used.has("tap"), "the check sees the page's own calls");
   assert.deepEqual([...used].filter((m) => !allowed.has(m)), []);
