@@ -4469,7 +4469,7 @@
     </div>
 
     <div class="ui pill" id="hint">
-      Scroll to move · Ctrl/⌘ + scroll to zoom · drag the canvas to select ·
+      Scroll the canvas to move · Ctrl/⌘ + scroll to zoom · drag the canvas to select ·
       hold Space to pan · drag a frame’s edge dot to connect it
     </div>
     <div class="sbar h"><i></i></div>
@@ -8015,7 +8015,9 @@
            frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it in
                                         a frame, then calls render)
            frames.render(id)            mounts the render for the shown state on this device. The whole of it:
-                                        what was tapped inside the screen is gone, because a screen is its render
+                                        what was tapped inside the screen is gone, because a screen is its render.
+                                        A screen that is not known -> false; otherwise a promise that settles when the
+                                        mount has (or has been replaced). The page need not wait: ready() does
            frames.ready(id?)            waits for the latest mount of one screen, or all mounted screens; no node returned
            frames.setState(id, i)       shows state i, if it can be shown -> true; otherwise nothing happens -> false
            frames.count(id, c)          how many instances of component c are on the screen now (a number)
@@ -8150,13 +8152,15 @@
            resizeSettle  a resize waits this long for the window to stop      scrollbarFade, toast, hintHides, copied: feedback that goes away
            tail          extra time after an animation's own length before its class or node is taken off
            giveUp        how long past its expected length a wait on a signal (a transition's end, a frame being drawn)
-                         gives up, so a signal that never comes (nothing changed, the tab hidden) cannot hold anything up */
+                         gives up, so a signal that never comes (nothing changed, the tab hidden) cannot hold anything up
+           mountWait     how long a screen's document may take to load (fonts, imports) before the canvas goes on without it */
       const TIMING = Object.freeze({
         fly: 750,
         fade: 180,
         tapMark: 600,
         tail: 60,
         giveUp: 250,
+        mountWait: 4000,
         playDwell: 1900,
         tapLead: 180,
         doubleClick: 240,
@@ -8200,9 +8204,18 @@
          canvas chrome; its iframe has a real device viewport, local styles and SVG symbols. The parent runs
          only the scan's FlowScanBehaviour, not scripts in the render. Events target the wrapper in the parent
          and carry an opaque product hit separately, so product names cannot invoke chrome handlers. Mounts
-         resolve on load/fonts (superseded loads resolve too); Search gets an inert snapshot, not a cloned iframe. */
+         resolve on load/fonts (superseded loads resolve too); Search gets an inert snapshot, not a cloned iframe.
+         Trust: sandbox="allow-same-origin" keeps the iframe's document reachable from this page, so the scan's
+         behaviour (and this host) can read and change it. Scripts inside a render do not run (no allow-scripts);
+         the scan's own markup, styles and behaviour are trusted as much as the canvas file itself.
+         A screen is shown at its real viewport; the scale into the card is one number for both axes, so a card
+         whose shape differs from the viewport's shows the screen's own background in the spare strip, not a
+         stretched screen. Touch is not bridged: only mouse and trackpad input is verified. */
       const FrameDom = (() => {
         const phoneOf = (id) => document.getElementById("p-" + id);
+        /* native controls keep their own behaviour inside a screen: typing, activation */
+        const ENTRY = "input,select,textarea,[contenteditable]", ACTIVATE = "button,summary,a[href]";
+        const scaleOf = (ph, w, h) => Math.min(ph.offsetWidth / w, ph.offsetHeight / h);
         const documents = new Map();
         const bridged = new WeakMap();
         const rootOf = (id) => documents.get(id)?.frame.contentDocument?.body || null;
@@ -8223,8 +8236,12 @@
           const { width, height } = device.viewport;
           Object.assign(frame.style, {
             position: "absolute", left: "0", top: "0", border: "0", width: width + "px", height: height + "px",
-            transformOrigin: "0 0", transform: `scale(${ph.offsetWidth / width},${ph.offsetHeight / height})`,
+            transformOrigin: "0 0", transform: `scale(${scaleOf(ph, width, height)})`,
           });
+          /* the strip a card has beyond the scaled screen is the screen's own colour */
+          frame.addEventListener("load", () => {
+            ph.style.background = frame.contentWindow.getComputedStyle(frame.contentDocument.body).backgroundColor;
+          }, { once: true });
           frame.srcdoc = screenDocument(markup, device, snapshot);
           ph.appendChild(frame);
           return frame;
@@ -8233,9 +8250,8 @@
         function bridge(id, ph, frame) {
           const doc = frame.contentDocument;
           const forward = (e, EventType) => {
-            const r = frame.getBoundingClientRect();
-            const x = e.clientX * ph.offsetWidth / frame.offsetWidth,
-              y = e.clientY * ph.offsetHeight / frame.offsetHeight;
+            const r = frame.getBoundingClientRect(), k = scaleOf(ph, frame.offsetWidth, frame.offsetHeight);
+            const x = e.clientX * k, y = e.clientY * k;
             const event = new EventType(e.type, {
               bubbles: true, cancelable: true, clientX: r.left + e.clientX * r.width / frame.offsetWidth,
               clientY: r.top + e.clientY * r.height / frame.offsetHeight,
@@ -8248,7 +8264,8 @@
             if (!ph.dispatchEvent(event)) e.preventDefault();
           };
           ["click", "dblclick"].forEach((type) => doc.addEventListener(type, (e) => {
-            if (e.target.closest("a[data-go]")) e.preventDefault();
+            /* a link never navigates a screen: a data-go follows a connector, any other stays where it is */
+            if (e.target.closest("a")) e.preventDefault();
             forward(e, MouseEvent);
           }));
           ["pointerdown", "pointermove", "pointerup", "pointercancel"].forEach((type) => doc.addEventListener(type, (e) => {
@@ -8266,11 +8283,11 @@
             if (e.ctrlKey || e.metaKey) forward(e, WheelEvent);
           }, { passive: false });
           ["keydown", "keyup"].forEach((type) => doc.addEventListener(type, (e) => {
-            const editing = e.target.closest?.("input,select,textarea,[contenteditable]");
+            const editing = e.target.closest?.(ENTRY);
             const search = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k";
             /* Text entry and native activation stay in the screen. Escape and Search still reach canvas chrome. */
             if (editing && !search && e.key !== "Escape" && !(type === "keyup" && e.code === "Space")) return;
-            if (e.target.closest?.("button,summary,a[href]") && ["Space", "Enter"].includes(e.code) && !pointer.state().space) return;
+            if (e.target.closest?.(ACTIVATE) && ["Space", "Enter"].includes(e.code) && !pointer.state().space) return;
             const event = new KeyboardEvent(type, { bubbles: true, cancelable: true,
               key: e.key, code: e.code, repeat: e.repeat, ctrlKey: e.ctrlKey, metaKey: e.metaKey,
               altKey: e.altKey, shiftKey: e.shiftKey });
@@ -8287,20 +8304,25 @@
           mount(id, markup, state) {
             const ph = phoneOf(id);
             if (!ph) return;
-            documents.get(id)?.dispose();
+            documents.get(id)?.supersede();
             ph.replaceChildren();
             ph.dataset.state = state;
             ph.setAttribute("aria-busy", "true");
             const frame = makeDocument(ph, markup, DEV, SCREENS[id].name);
             return new Promise((resolve) => {
-              const record = { frame, dispose: resolve };
+              const record = { frame, supersede: resolve };
               documents.set(id, record);
+              const settle = () => {
+                if (documents.get(id) === record) ph.setAttribute("aria-busy", "false");
+                resolve();
+              };
+              /* a document that cannot finish (an offline font import) must not hold Inspect, Search or a device switch */
+              setTimeout(settle, TIMING.mountWait);
               frame.addEventListener("load", async () => {
                 if (documents.get(id) !== record || !ph.isConnected) return resolve();
                 bridge(id, ph, frame);
                 await frame.contentDocument.fonts.ready;
-                if (documents.get(id) === record) ph.setAttribute("aria-busy", "false");
-                resolve();
+                settle();
               }, { once: true });
             });
           },
@@ -8312,14 +8334,13 @@
           rects(id, selector) {
             const ph = phoneOf(id), root = rootOf(id), frame = documents.get(id)?.frame;
             if (!ph || !root || !frame) return null;
-            const w = ph.offsetWidth, h = ph.offsetHeight,
-              sx = w / frame.offsetWidth, sy = h / frame.offsetHeight;
+            const w = ph.offsetWidth, h = ph.offsetHeight, k = scaleOf(ph, frame.offsetWidth, frame.offsetHeight);
             return {
               w, h,
               rects: shown(root, selector).map((el) => {
                 const r = el.getBoundingClientRect();
-                const x = Math.max(0, r.left * sx), y = Math.max(0, r.top * sy);
-                return { x, y, w: Math.min(w, r.right * sx) - x, h: Math.min(h, r.bottom * sy) - y };
+                const x = Math.max(0, r.left * k), y = Math.max(0, r.top * k);
+                return { x, y, w: Math.min(w, r.right * k) - x, h: Math.min(h, r.bottom * k) - y };
               }).filter((r) => r.w > 0 && r.h > 0),
             };
           },

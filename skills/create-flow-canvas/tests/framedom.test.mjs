@@ -321,6 +321,7 @@ test("outside the live screen host the page names nothing that is inside a scree
     [/\bscreenHTML\b|\bstateOf\b/, "a screen's render and its shown state"],
     [/data-go|data-state/, "a screen's own attributes (links, shown state)"],
     [/\bSCREENS\[[^\]]*\]\.html\b/, "a screen's render"],
+    [/\biframe\b|contentDocument|contentWindow|screen-document/i, "a screen's document (the iframe it lives in)"],
   ];
   const found = forbidden.filter(([re]) => re.test(outside)).map(([, what]) => what);
   assert.deepEqual(found, []);

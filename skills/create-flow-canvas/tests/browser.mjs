@@ -10,7 +10,7 @@ const until = async (read, message) => {
   while (performance.now() < end) {
     const value = read();
     if (value) return value;
-    await new Promise(requestAnimationFrame);
+    await new Promise((resolve) => setTimeout(resolve, 30));   /* a timer, so a tab that does not paint fails here instead of hanging */
   }
   throw new Error(message);
 };
@@ -19,7 +19,7 @@ const devices = ['mobile', 'tablet', 'desktop'];
 const renders = (markup) => Object.fromEntries(devices.map((id) => [id, markup]));
 const render = `<svg aria-label="Fixture icon"><use href="#fixture-icon"/></svg>
   <h1>Entry</h1><p id="taps">0</p><input aria-label="Entry field" value="initial">
-  <button data-toggle>Toggle</button><a href="/unwanted" data-go="next">Continue</a>
+  <button data-toggle>Toggle</button><a href="/unwanted" data-go="next">Continue</a><a id="plain" href="/other">Plain link</a>
   <div class="note scan cap states hop cx" id="collision">Product content</div>
   <div id="long-content" style="height:1800px;flex-shrink:0">Scrollable screen</div><button id="bottom">Bottom action</button>`;
 const styles = `
@@ -89,6 +89,9 @@ test('screen taps run product behaviour and follow only canvas connectors', asyn
   frame.contentDocument.querySelector('[data-go]').click();
   await until(() => doc.querySelector('.col[data-id="next"].sel'), 'linked screen was not selected');
   assert(frame.contentDocument.querySelector('#taps'), 'data-go does not navigate the iframe');
+  frame.contentDocument.querySelector('#plain').click();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert(frame.contentDocument.querySelector('#taps') && frame.contentDocument.querySelector('#plain'), 'a plain link does not navigate the screen away');
   const data = scan();
   data.links = [];
   const unlinked = await canvas(data), other = await screen(unlinked.doc);
@@ -104,7 +107,7 @@ function press(frame, target, type, x, y, extra = {}) {
   target.dispatchEvent(event);
   return event;
 }
-const nextFrame = () => new Promise(requestAnimationFrame);
+const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 60));
 test('background drags move a frame; native controls and product chrome-like names keep their meaning', async () => {
   const data = scan();
   data.groups = [];
@@ -185,7 +188,7 @@ test('Inspect counts iframe components and draws highlights in canvas coordinate
   assert(spot,'hovering a component highlights it');
   const ring = spot.querySelector('rect[stroke]');
   const rect = frame.contentDocument.querySelector('input').getBoundingClientRect();
-  const x = rect.x * 270 / 390;
+  const x = rect.x * doc.querySelector('.col[data-id="entry"] .phone').offsetWidth / frame.contentWindow.innerWidth;
   assert(Math.abs(Number(ring.getAttribute('x')) - Math.max(0,x - 3)) < 1,'highlight converts viewport coordinates to canvas pixels');
   frame.contentDocument.body.scrollTop = 500;
   await nextFrame();
@@ -220,6 +223,13 @@ async function switchDevice(doc, id, width, height) {
   }, `${id} did not finish mounting`);
   return screen(doc);
 }
+/* one scale for both axes: a card whose shape differs from the viewport's must not stretch the screen */
+const uniformScale = (frame) => {
+  const m = new DOMMatrix(frame.ownerDocument.defaultView.getComputedStyle(frame).transform);
+  equal([m.a === m.d, m.a > 0], [true, true], 'the screen is scaled equally on both axes');
+  const card = frame.parentElement;
+  assert(frame.offsetWidth * m.a <= card.offsetWidth + 0.5 && frame.offsetHeight * m.d <= card.offsetHeight + 0.5, 'the scaled screen fits its card');
+};
 test('state and device changes await their documents before rebuilding Inspect', async () => {
   const { doc } = await canvas();
   await screen(doc);
@@ -229,9 +239,11 @@ test('state and device changes await their documents before rebuilding Inspect',
   equal(frame.contentDocument.querySelector('h1').textContent,'Offline','state render mounted');
   await until(() => doc.querySelector('[data-comp="Action"]')?.getAttribute('aria-label') === 'Action, 1 on this screen', 'Inspect retained the previous state count');
   frame = await switchDevice(doc,'desktop',1200,772);
+  uniformScale(frame);
   equal(frame.contentDocument.querySelector('h1').textContent,'Offline','chosen state survives desktop switch');
   equal(doc.querySelector('[data-comp="Action"]').getAttribute('aria-label'),'Action, 1 on this screen','Inspect waits for desktop document');
   frame = await switchDevice(doc,'tablet',768,1024);
+  uniformScale(frame);
   equal(frame.contentDocument.querySelector('h1').textContent,'Offline','chosen state survives tablet switch');
   doc.querySelector('[data-st="0"]').click();
   frame = await screen(doc);

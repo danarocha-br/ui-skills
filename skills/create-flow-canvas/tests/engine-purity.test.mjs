@@ -46,6 +46,10 @@ test("the product supplies its own reset and font import without depending on th
   assert.ok(!html.slice(0, html.indexOf('<style id="flow-scan-styles"')).includes("Fraunces"), "the shell imports the product's font");
 });
 
+test("the product's styles are inert in the shell: they apply only inside each screen's document", () => {
+  assert.match(html, /<style id="flow-scan-styles" media="not all">/, "a generator that drops media=\"not all\" lets product CSS style the canvas");
+});
+
 test("the engine is there to be checked", () => {
   assert.ok(scan, "the sample scan reads");
   assert.ok(engine.includes("FlowScan.read("), "the page script is among the engine blocks");
