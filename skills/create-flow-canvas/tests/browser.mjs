@@ -632,8 +632,15 @@ test('keyboard entry after a prior pointer focus selects the screen again and a 
   const col=doc.querySelector('.col[data-id="entry"]'), action=col.querySelector('.frame-actions');
   equal(col.tabIndex,-1,'a closed group\'s frame is not a Tab stop');
   equal(action.tabIndex,-1,'its invisible controls are not Tab stops');
+  const host=col.querySelector('.pwrap > .phone');
+  equal(host.inert,true,'a closed group\'s mounted screen cannot be tabbed into');
+  const drawnAway=[...col.querySelectorAll('.cap,.note,.scan')];
+  await until(()=>drawnAway.every(a=>win.getComputedStyle(a).visibility==='hidden'),'a closed group\'s annotations are still Tab stops');
   action.focus();
   equal(disclosure.getAttribute('aria-expanded'),'false','focus does not write the layout: the group stays closed');
+  disclosure.click();
+  await until(()=>disclosure.getAttribute('aria-expanded')==='true','group did not reopen');
+  equal(host.inert,false,'an open group\'s screen can be tabbed into again');
 });
 
 test('Shift does not turn the global shortcuts off, and a chord still does', async () => {
@@ -698,6 +705,11 @@ test('explicit keyboard navigation stops automatic Play and single-screen manual
   const first=doc.querySelector('.col[data-id="entry"]'); first.focus();
   key({contentWindow:win},first,'keydown','ArrowRight','ArrowRight');
   assert(!doc.querySelector('.fplay').classList.contains('on'),'arrow navigation stops Play');
+  ({doc,win}=await canvas());
+  doc.querySelector('.fplay').click();
+  await until(()=>doc.querySelector('.fplay').classList.contains('on'),'Play did not start');
+  doc.querySelector('.col[data-id="next"]').focus();
+  assert(!doc.querySelector('.fplay').classList.contains('on'),'Tab reaching a frame stops Play');
   const data=scan(); data.groups[0].screens=['entry'];
   ({doc,win}=await canvas(data,{reducedMotion:true}));
   doc.querySelector('.fplay').click();

@@ -498,8 +498,9 @@
       }
       .col.deck .cap {
         opacity: 0;
+        visibility: hidden; /* drawn away is not enough: Tab must not reach it */
         pointer-events: none;
-        transition: opacity 0.12s 0s;
+        transition: opacity 0.12s 0s, visibility 0s linear 0.12s;
       }
       .ct {
         display: flex;
@@ -726,8 +727,9 @@
       .col.deck .scan,
       .col.deck .stem {
         opacity: 0;
+        visibility: hidden; /* as .cap */
         pointer-events: none;
-        transition: opacity 0.12s 0s;
+        transition: opacity 0.12s 0s, visibility 0s linear 0.12s;
       }
       .ripple {
         position: absolute;
@@ -8072,6 +8074,7 @@
            frames.shownStates(id)       the states that have a render of their own, plus the first
            frames.switchable(id)        more than one state can be shown
            frames.focus(id)             ask the host to enter a mounted screen; boolean, never a node
+           frames.setTabbable(id, on)   whether Tab may enter the screen, mounted now or later
            frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it
                                         in a frame; the screen document is mounted into it by retain)
            frames.render(id)            mounts the render for the shown state on this device, fresh: what was tapped
@@ -8180,6 +8183,7 @@
             switchable: (id) => shownStates(id).length > 1,
             hostHTML: (id) => host.hostHTML(id, { device: device(), state: stateIndex(id) }),
             focus: (id) => known(id) ? host.focus(id) : false,
+            setTabbable: (id, on) => { if (known(id)) host.setTabbable(id, on); },
             render: (id) => known(id) && show(id),
             retain(ids, { reset = false } = {}) {
               const wanted = new Set(ids.filter(known));
@@ -8532,6 +8536,7 @@
           [...el.getClientRects()].some((r) => r.width > 0 && r.height > 0) && root.ownerDocument.defaultView.getComputedStyle(el).visibility !== "hidden");
         const host = {
           hostHTML: (id, { device, state }) => `<div class="phone placeholder ${device.cls}" id="p-${esc(id)}" data-state="${esc(state)}"></div>`,
+          setTabbable(id, on) { phoneOf(id).inert = !on; }, /* on the host: it outlives the documents mounted in it */
           focus(id) {
             const root = rootOf(id);
             if (!root) return false;
@@ -9505,6 +9510,8 @@
           col.tabIndex = stacked ? -1 : 0;
           /* the label's buttons are invisible on a deck: out of the Tab order with it, so Tab never lands on what is not shown */
           col.querySelectorAll(".label button").forEach((b) => { b.tabIndex = stacked ? -1 : 0; });
+          /* a deck keeps nearby screen documents mounted: Tab must not enter them */
+          FrameDom.setTabbable(id, !stacked);
         }
         colOf(id)?.setAttribute("aria-label", FlowKeyboard.frameName({
           name: screen.name, route: screen.route, state: screen.states[FrameDom.stateIndex(id)]?.name || "Default",
@@ -9537,6 +9544,7 @@
         col.setAttribute("aria-keyshortcuts", "Enter Shift+F10 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
         col.addEventListener("focusin", (e) => {
           if (returningFrameFocus || inputWasPointer || pointer.state().mode !== "idle") return;
+          stopPlay(); /* Tab is explicit navigation, like the arrows: Play must not pull selection away from where it landed */
           /* Focus selects; it never writes the layout. A frame in a closed group is not a tab stop (see updateFrameName),
              and if one is focused anyway its group stays closed. */
           if (e.target === col || selection.primary() !== id) select(id, true, { open: false });
