@@ -1,3 +1,4 @@
+import {largeScan} from './large-scan.mjs';
 /* Browser seam: the real page, including its live screen host. Open tests/browser.html over HTTP.
    No test reaches into a module's private state. The scan fixture is replaced exactly as a generator would. */
 const checks = [];
@@ -270,6 +271,78 @@ test('native labels and disclosure summaries retain pointer and keyboard activat
   assert(root.querySelector('details').open,'summary toggles its disclosure');
   equal(key(frame,root.querySelector('summary'),'keydown',' ','Space').defaultPrevented,false,'Space remains native on summary');
   key(frame,root.querySelector('summary'),'keyup',' ','Space');
+});
+
+test('Search debounces typing and reuses unchanged preview documents', async () => {
+  const {doc,win} = await canvas();
+  await screen(doc);
+  doc.querySelector('#btnSearch').click();
+  const preview=await until(()=>doc.querySelector('#results .tile iframe'),'Search has no preview');
+  const q=doc.querySelector('#q');
+  for(const value of ['E','En','Entry']) { q.value=value; q.dispatchEvent(new win.Event('input',{bubbles:true})); }
+  equal(doc.querySelectorAll('#results .tile').length,2,'typing does not immediately rebuild the results');
+  await until(()=>doc.querySelectorAll('#results .tile').length===1,'debounced query did not run');
+  equal(doc.querySelector('#results .tile iframe'),preview,'unchanged screen reuses its preview document');
+  const live = doc.querySelector('.col[data-id="entry"] iframe');
+  live.contentDocument.querySelector('#taps').textContent='changed';
+  live.contentDocument.querySelector('input').value='new field value';
+  q.value='Entr'; q.dispatchEvent(new win.Event('input',{bubbles:true}));
+  const updated=await until(()=>{
+    const f=doc.querySelector('#results .tile iframe');
+    return f!==preview && f?.contentDocument?.querySelector('#taps')?.textContent==='changed' && f;
+  },'changed screen did not invalidate its snapshot');
+  equal(updated.contentDocument.querySelector('input').value,'new field value','cached snapshots track property-only field changes');
+});
+
+test('unmounting preserves product taps, field values, scroll and the shown state', async () => {
+  const {doc,win}=await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not finish booting');
+  doc.querySelector('#seltb [title^="Focus"]').click();
+  await until(()=>!doc.querySelector('#stage.fly'),'focus did not finish');
+  let frame=await screen(doc,'screen-1');
+  frame.contentDocument.querySelector('[data-toggle]').click();
+  frame.contentDocument.querySelector('input').value='kept across unmount';
+  frame.contentDocument.body.scrollTop=350;
+  const scroll=frame.contentDocument.body.scrollTop;
+  key(frame,frame.contentDocument.body,'keydown','Escape','Escape');
+  const stage=doc.querySelector('#stage');
+  stage.dispatchEvent(new win.WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:12000,deltaY:0}));
+  await until(()=>!doc.querySelector('.col[data-id="screen-1"] iframe'),'screen did not unmount');
+  doc.querySelector('.col[data-id="screen-1"] .label').click();
+  frame=await screen(doc,'screen-1');
+  equal(frame.contentDocument.querySelector('#taps').textContent,'1','product reaction survives unmount');
+  equal(frame.contentDocument.querySelector('input').value,'kept across unmount','field value survives unmount');
+  equal(frame.contentDocument.body.scrollTop,scroll,'scroll survives unmount');
+  doc.querySelector('.col[data-id="screen-1"] .states').click();
+  frame=await screen(doc,'screen-1');
+  equal(frame.contentDocument.querySelector('h1').textContent,'Offline','state switches to its own render');
+  key(frame,frame.contentDocument.body,'keydown','Escape','Escape');
+  stage.dispatchEvent(new win.WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:12000,deltaY:0}));
+  await until(()=>!doc.querySelector('.col[data-id="screen-1"] iframe'),'state document did not unmount');
+  doc.querySelector('.col[data-id="screen-1"] .label').click();
+  frame=await screen(doc,'screen-1');
+  equal(frame.contentDocument.querySelector('h1').textContent,'Offline','shown state survives unmount');
+});
+
+test('a 60-screen flow keeps placeholders while mounting and releasing only nearby documents', async () => {
+  const data = largeScan(scan());
+  const {doc,win} = await canvas(data);
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not finish booting');
+  equal(doc.querySelectorAll('.col').length,60,'all frame outlines and labels exist');
+  assert(doc.querySelectorAll('#frames iframe').length < 60,'far screens have no document');
+  const far = doc.querySelector('.col[data-id="screen-60"]');
+  assert(!far.querySelector('iframe'),'last screen starts unmounted');
+  // Selecting an unmounted frame and opening Inspect uses the on-demand readiness path.
+  far.querySelector('.label').click();
+  doc.querySelector('#seltb [title^="Inspect"]').click();
+  await until(()=>doc.querySelector('[data-comp="Action"]')?.getAttribute('aria-label') === 'Action, 1 on this screen', 'Inspect did not await a far document');
+  const chip=doc.querySelector('[data-comp="Action"]');
+  chip.dispatchEvent(new win.MouseEvent('mouseenter'));
+  assert(far.querySelector('.spot'),'spotlight reaches the newly mounted screen');
+  doc.querySelector('#pclose').click();
+  // Focused camera keeps live documents bounded after travelling the long flow.
+  await nextFrame();
+  assert(doc.querySelectorAll('#frames iframe').length < 20,'focused view releases distant documents');
 });
 
 document.querySelector('#run').onclick = async () => {

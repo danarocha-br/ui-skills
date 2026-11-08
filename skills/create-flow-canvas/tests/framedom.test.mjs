@@ -328,11 +328,29 @@ test("outside the live screen host the page names nothing that is inside a scree
 });
 
 test("the page uses FrameDom only through its interface, which hands out no node", () => {
-  const allowed = new Set(["hostHTML", "render", "ready", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto"]);
+  const allowed = new Set(["hostHTML", "render", "retain", "ready", "setState", "stateIndex", "shownStates", "switchable", "count", "spotlight", "clearSpot", "hit", "tap", "interactive", "copyInto"]);
   const used = new Set([...strip(pageScript).matchAll(/\bFrameDom\.(\w+)/g)].map((m) => m[1]));
-  assert.ok(used.has("render") && used.has("tap"), "the check sees the page's own calls");
+  assert.ok(used.has("retain") && used.has("tap"), "the check sees the page's own calls");
   assert.deepEqual([...used].filter((m) => !allowed.has(m)), []);
   assert.deepEqual(Object.keys(FlowFrameDom).sort(), ["create"]);
   const { frames } = make();
   assert.deepEqual(Object.keys(frames).sort(), [...allowed].sort());
+});
+
+test('retain mounts only requested screens once and releases documents that leave the viewport', async () => {
+  const {frames,host,current} = make();
+  host.unmount = id => host.calls.push(['unmount',id]);
+  frames.retain(['form']);
+  await frames.ready();
+  frames.retain(['form']);
+  assert.equal(host.calls.filter(c=>c[0]==='mount').length,1,'camera updates reuse the same document');
+  frames.retain(['list']);
+  assert.deepEqual(host.calls.filter(c=>c[0]==='unmount'),[['unmount','form']]);
+  assert.equal(host.calls.filter(c=>c[0]==='mount').length,2);
+  frames.retain(['form']);
+  assert.equal(frames.stateIndex('form'),0);
+  assert.equal(host.calls.at(-1)[1],'form');
+  current.device='desktop';
+  frames.retain(['form']);
+  assert.equal(host.calls.at(-1)[2],'<d-form>','a retained screen updates on device change');
 });

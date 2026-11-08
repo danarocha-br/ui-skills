@@ -108,7 +108,7 @@ One way a screen can look (empty, denied, error). A state is **reachable** when 
 _Avoid_: Variant, mode
 
 **Render**:
-A screen's own markup for one device and one state: what the product's screen looks like when it is shown. It is markup by design, as are the product's SVG symbols. A render is shown whole, so what someone tapped inside a screen (a plant picked, a switch turned, a time chosen) belongs to the render on show and is gone when another is shown, whether that is another state or another device. Which state a frame shows is kept across devices; its taps are not.
+A screen's own markup for one device and one state: what the product's screen looks like when it is shown. It is markup by design, as are the product's SVG symbols. A render is shown whole, so what someone tapped inside a screen (a plant picked, a switch turned, a time chosen) belongs to the render on show and is gone when another is shown, whether that is another state or another device. Which state a frame shows is kept across devices; its taps are not. Removing an offscreen document to save resources preserves the current render, field values and scroll positions in memory, so returning to it on the same device and state keeps those interactions. A device or explicit state change discards them; a reload discards all such temporary state.
 _Avoid_: Template, markup (alone)
 
 **Viewport**:
@@ -120,7 +120,7 @@ The iframe one screen is mounted in: its own document with the product's styles 
 _Avoid_: Embed, frame (a **Frame** is the card on the canvas)
 
 **Mount**:
-Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. The live host mounts each screen in its own iframe with local product styles and SVG symbols, and routes events across the boundary. A mount is ready when the latest document has loaded and its fonts are ready; Inspect and Search wait for it after a state or device change. Search copies are inert snapshots of the current render and field values. In code, `FlowFrameDom` (the page's `FrameDom`), with `ready(id?)` to await one screen or all of them.
+Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. The live host mounts each screen in its own iframe with local product styles and SVG symbols, and routes events across the boundary. A mount is ready when the latest document has loaded and its fonts are ready; Inspect and Search wait for it after a state or device change. Search copies are inert snapshots of the current render and field values. A frame keeps its outline and label without a document. `FlowMounts` chooses frames within 300 CSS pixels of the visible canvas after zoom, selected frames and frames requested by Inspect or Search. Far documents are serialized and removed, preserving their current render in memory; the layout save format does not include them. In code, `FlowFrameDom` (the page's `FrameDom`), with `retain(ids)` to apply that choice and `ready(id?)` to await one mounted screen or all mounted screens. Search waits 150 ms after typing, reuses unchanged snapshots and tiles, and reads missing snapshots only near the panel viewport, at most two at a time.
 _Avoid_: Embed, inject
 
 **Link**:
