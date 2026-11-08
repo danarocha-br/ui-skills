@@ -518,9 +518,11 @@ test('frame keyboard actions reorder, take out, move, regroup, connect and undo 
   const target=dialog.querySelector('[name="group"]');
   target.value='panel'; dialog.querySelector('[data-frame-action="join"]').click();
   assert(!doc.querySelector('.col[data-id="entry"]').classList.contains('free'),'picker regroups frame');
+  await until(()=>!dialog.open && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','dialog close handler did not finish');
   send('F10','F10',{shiftKey:true});
   dialog.querySelector('[name="destination"]').value='next';
   dialog.querySelector('[data-frame-action="connect"]').click();
+  await until(()=>!dialog.open && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','connector dialog close handler did not finish');
   equal(doc.querySelectorAll('#cchips .echip').length,1,'picker creates a connector');
   assert(doc.querySelector('#toast').textContent.includes('Connected'),'connector is announced');
   equal(doc.activeElement.dataset.id,'entry','dialog returns focus to its frame');
@@ -546,6 +548,11 @@ test('group disclosures, popup menus and panel toggles expose their state and re
     equal(button.getAttribute('aria-expanded'),'false','closed state is announced');
     equal(doc.activeElement,button,'Escape restores menu trigger');
   }
+  doc.querySelector('#btnAdd').click();
+  send(doc.activeElement,'k','KeyK',{ctrlKey:true});
+  await until(()=>doc.activeElement.id==='q','Search shortcut was swallowed by the popup');
+  assert(!doc.querySelector('#mAdd').classList.contains('open'),'Search closes the popup');
+  send(doc.activeElement,'Escape');
   const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
   send(frame,'i','KeyI');
   equal(doc.querySelector('#seltb [data-a="inspect"]').getAttribute('aria-expanded'),'true','Inspect toggle reports open');
@@ -594,6 +601,49 @@ test('reduced-motion Play waits for Next, skips connector tokens and reacts to p
   await new Promise(resolve=>setTimeout(resolve,2100));
   assert(doc.querySelector('.col[data-id="entry"]').classList.contains('sel'),'preference change cancels pending automatic tick');
   assert(!doc.querySelector('#playControls').hidden,'preference change offers manual controls');
+});
+
+test('Enter skips effectively disabled controls and can reach native summaries and editable text', async () => {
+  const data=scan();
+  data.screens[0].html=renders('<h1>Entry</h1><fieldset disabled><input aria-label="Unavailable"></fieldset><button hidden>Hidden</button><button tabindex="-1">Skip</button><details><summary>Options</summary><p>Details</p></details><button>Later</button>');
+  let result=await canvas(data), frame=result.doc.querySelector('.col[data-id="entry"]');
+  frame.focus(); key({contentWindow:result.win},frame,'keydown','Enter','Enter');
+  let product=await screen(result.doc);
+  await until(()=>product.contentDocument.activeElement.tagName==='SUMMARY','Enter did not reach available summary');
+  data.screens[0].html=renders('<h1>Entry</h1><div contenteditable="true" aria-label="Editable">Text</div><button>Later</button>');
+  result=await canvas(data); frame=result.doc.querySelector('.col[data-id="entry"]');
+  frame.focus(); key({contentWindow:result.win},frame,'keydown','Enter','Enter');
+  product=await screen(result.doc);
+  await until(()=>product.contentDocument.activeElement.isContentEditable,'Enter did not reach editable text');
+});
+
+test('keyboard entry after a prior pointer focus selects the screen again and reveals closed frame controls', async () => {
+  const {doc,win}=await canvas();
+  const product=await screen(doc), field=product.contentDocument.querySelector('input');
+  press(product,field,'pointerdown',100,100); field.focus(); press(product,field,'pointerup',100,100);
+  const other=doc.querySelector('.col[data-id="next"]');
+  key({contentWindow:win},doc.body,'keydown','Tab','Tab'); other.focus();
+  assert(other.classList.contains('sel'),'other screen is selected before re-entry');
+  key({contentWindow:win},other,'keydown','Tab','Tab',{shiftKey:true});
+  field.focus();
+  assert(doc.querySelector('.col[data-id="entry"]').classList.contains('sel'),'keyboard entry is not suppressed by an old pointer event');
+  const disclosure=doc.querySelector('.chev'); disclosure.click();
+  const action=doc.querySelector('.col[data-id="entry"] .frame-actions');
+  key({contentWindow:win},disclosure,'keydown','Tab','Tab'); action.focus();
+  equal(disclosure.getAttribute('aria-expanded'),'true','reverse traversal into hidden controls reveals the group');
+});
+
+test('explicit keyboard navigation stops automatic Play and single-screen manual Play focuses Stop', async () => {
+  let {doc,win}=await canvas();
+  doc.querySelector('.fplay').click();
+  const first=doc.querySelector('.col[data-id="entry"]'); first.focus();
+  key({contentWindow:win},first,'keydown','ArrowRight','ArrowRight');
+  assert(!doc.querySelector('.fplay').classList.contains('on'),'arrow navigation stops Play');
+  const data=scan(); data.groups[0].screens=['entry'];
+  ({doc,win}=await canvas(data,{reducedMotion:true}));
+  doc.querySelector('.fplay').click();
+  await until(()=>doc.activeElement.id==='playStop','single-screen manual flow did not focus Stop');
+  assert(doc.querySelector('#playNext').disabled,'single-screen flow has no Next');
 });
 
 document.querySelector('#run').onclick = async () => {

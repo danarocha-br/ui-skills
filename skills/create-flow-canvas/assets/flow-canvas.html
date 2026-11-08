@@ -8070,6 +8070,7 @@
            frames.stateIndex(id)        the state a screen shows (0 until set); kept across devices, not saved
            frames.shownStates(id)       the states that have a render of their own, plus the first
            frames.switchable(id)        more than one state can be shown
+           frames.focus(id)             ask the host to enter a mounted screen; boolean, never a node
            frames.hostHTML(id)          the markup of the element a screen is mounted into (the page puts it
                                         in a frame; the screen document is mounted into it by retain)
            frames.render(id)            mounts the render for the shown state on this device, fresh: what was tapped
@@ -8254,7 +8255,7 @@
         }
         function command({ key, altKey, shiftKey, metaKey, ctrlKey }) {
           if (metaKey || ctrlKey) return null;
-          if (shiftKey && key === "F10" && !altKey || key === "ContextMenu") return { action: "actions" };
+          if ((shiftKey && key === "F10" && !altKey) || key === "ContextMenu") return { action: "actions" };
           if (key === "Enter" && !altKey && !shiftKey) return { action: "enter" };
           const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[key];
           if (!delta) return null;
@@ -8299,6 +8300,8 @@
          itself (geo.settled, a transitionend, the next frame). What is left are lengths that are the page's own.
            fly           the camera's flight (.fly in the styles)             fade       a device switch's fade (#world.fading)
            tapMark       how long the mark under a tap lasts (the CSS animation)
+           menu          the popup entrance, only when motion is allowed
+           tokenMin, tokenMax, tokenPerPixel: the connector token's length-based travel time
            playDwell     how long Play stays on each screen                   tapLead    a tap on a link, before the camera follows it
            doubleClick   a connector label's single click waits this long for a second one
            resizeSettle  a resize waits this long for the window to stop      scrollbarFade, toast, hintHides, copied: feedback that goes away
@@ -8328,6 +8331,10 @@
         hintHides: 9000,
         copied: 1700,
       });
+      /* Input modality is shared across the canvas and every live screen, including native Tab across documents. */
+      let inputWasPointer = false;
+      document.addEventListener("pointerdown", () => { inputWasPointer = true; }, true);
+      document.addEventListener("keydown", () => { inputWasPointer = false; }, true);
       /* custom properties the stylesheet is handed: { "--name": value } */
       const setVars = (vars) => Object.entries(vars).forEach(([name, value]) => document.documentElement.style.setProperty(name, value));
       setVars({ "--fly-dur": TIMING.fly + "ms", "--fade-dur": TIMING.fade + "ms", "--ripple-dur": TIMING.tapMark + "ms", "--menu-dur": TIMING.menu + "ms" });
@@ -8448,11 +8455,10 @@
         /* The parent event targets chrome, never a product node. Only hit() opens the opaque target again. */
         function bridge(id, ph, frame) {
           const doc = frame.contentDocument;
-          let pointerFocus = false;
-          doc.addEventListener("pointerdown", () => { pointerFocus = true; }, true);
-          doc.addEventListener("keydown", () => { pointerFocus = false; }, true);
+          doc.addEventListener("pointerdown", () => { inputWasPointer = true; }, true);
+          doc.addEventListener("keydown", () => { inputWasPointer = false; }, true);
           doc.addEventListener("focusin", () => {
-            if (!pointerFocus) ph.dispatchEvent(new Event("screenfocus", { bubbles: true }));
+            if (!inputWasPointer) ph.dispatchEvent(new Event("screenfocus", { bubbles: true }));
           });
           const forward = (e, EventType) => {
             const r = frame.getBoundingClientRect(), k = scaleOf(ph, frame.offsetWidth, frame.offsetHeight);
@@ -8524,11 +8530,17 @@
           focus(id) {
             const root = rootOf(id);
             if (!root) return false;
-            const control = [...root.querySelectorAll("button,input,select,textarea,a[href],[tabindex],[contenteditable]")]
-              .find(el => !el.disabled && !el.closest("[inert]") && el.tabIndex >= 0 && el.getClientRects().length && root.ownerDocument.defaultView.getComputedStyle(el).visibility !== "hidden");
-            if (control) control.focus({ preventScroll: true });
-            else { root.tabIndex = -1; root.focus({ preventScroll: true }); }
-            return root.ownerDocument.activeElement === (control || root);
+            const candidates = root.querySelectorAll("button,input,select,textarea,a[href],summary,[tabindex],[contenteditable]");
+            for (const control of candidates) {
+              if (control.matches(":disabled") || control.closest("[inert]") ||
+                control.hasAttribute("tabindex") && control.tabIndex < 0 ||
+                !control.getClientRects().length || root.ownerDocument.defaultView.getComputedStyle(control).visibility === "hidden") continue;
+              control.focus({ preventScroll: true });
+              if (root.ownerDocument.activeElement === control) return true;
+            }
+            root.tabIndex = -1;
+            root.focus({ preventScroll: true });
+            return root.ownerDocument.activeElement === root;
           },
           mount(id, markup, state, { resume = false } = {}) {
             const ph = phoneOf(id);
@@ -9501,8 +9513,9 @@
         col.setAttribute("role", "group");
         col.setAttribute("aria-describedby", "frameHelp");
         col.setAttribute("aria-keyshortcuts", "Enter Shift+F10 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
-        col.addEventListener("focus", () => {
-          if (!returningFrameFocus && pointer.state().mode === "idle") select(id, true);
+        col.addEventListener("focusin", (e) => {
+          if (returningFrameFocus || inputWasPointer || pointer.state().mode !== "idle") return;
+          if (e.target === col || selection.primary() !== id || groupOf(id)?.open === false) select(id, true);
         });
         col.addEventListener("screenfocus", () => { select(id, false); });
         col.addEventListener("keydown", (e) => {
@@ -9511,6 +9524,7 @@
           if (!command) return;
           e.preventDefault(); e.stopPropagation();
           if (command.action === "focus") {
+            stopPlay();
             const index = ORDER.indexOf(id), next = ORDER[clamp(index + command.delta, 0, ORDER.length - 1)];
             focusFrame(next);
           } else if (command.action === "enter") enterScreen(id);
@@ -10318,7 +10332,7 @@
         }
         if (visit !== playVisit) return;
         showPlayScreen(null);
-        if (playback.state().manual) $("#playNext").focus({ preventScroll: true });
+        if (playback.state().manual) $(playback.state().canNext ? "#playNext" : "#playStop").focus({ preventScroll: true });
       }
       function stopPlay() {
         clearTimeout(playTimer);
@@ -10680,6 +10694,7 @@
         removeFromGroup(selection.ids());
       }
       function editFrame(id, command) {
+        stopPlay();
         const name = SCREENS[id].name;
         if (command.action === "reorder") {
           const moved = commit(() => keyboard.reorder(id, command.delta));
@@ -10693,8 +10708,9 @@
         }
       }
       const frameActions = $("#frameActions");
-      let actionFrame = null;
+      let actionFrame = null, actionMessage = null;
       function openFrameActions(id) {
+        stopPlay();
         closeMenus();
         actionFrame = id;
         const group = groupOf(id), index = group?.screens.indexOf(id);
@@ -10713,19 +10729,22 @@
         frameActions.showModal();
       }
       frameActions.addEventListener("close", () => {
+        const message = actionMessage;
+        actionMessage = null;
         if (actionFrame) {
           colOf(actionFrame)?.querySelector(".frame-actions").setAttribute("aria-expanded", "false");
           focusFrame(actionFrame);
         }
         actionFrame = null;
+        if (message) toast(message); /* the status region is no longer inert after the modal closes */
       });
       frameActions.addEventListener("click", (e) => {
         const action = e.target.closest("[data-frame-action]")?.dataset.frameAction, id = actionFrame;
         if (!action || !id) return;
         if (action === "earlier" || action === "later") editFrame(id, { action: "reorder", delta: action === "earlier" ? -1 : 1 });
         if (action === "takeOut") removeFromGroup([id]);
-        const delta = { left: [-10, 0], right: [10, 0], up: [0, -10], down: [0, 10] }[action];
-        if (delta) editFrame(id, { action: "nudge", dx: delta[0], dy: delta[1] });
+        const direction = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" }[action];
+        if (direction) editFrame(id, FlowKeyboard.command({ key: direction, shiftKey: true }));
         if (action === "join") {
           const groupId = frameActions.querySelector('[name="group"]').value;
           const changed = commit(() => keyboard.join(id, groupId));
@@ -11224,6 +11243,12 @@
       });
       Object.values(menus).forEach(popup => popup.addEventListener("keydown", e => {
         e.stopPropagation();
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+          e.preventDefault();
+          closeMenus();
+          openSearch();
+          return;
+        }
         const buttons = [...popup.querySelectorAll("button:not(:disabled)")], index = buttons.indexOf(document.activeElement);
         let next;
         if (e.key === "ArrowDown") next = (index + 1) % buttons.length;
@@ -11319,6 +11344,7 @@
       };
       let tt;
       function toast(m) {
+        if (frameActions.open) { actionMessage = m; return; }
         const t = $("#toast");
         t.textContent = m;
         t.classList.add("show");

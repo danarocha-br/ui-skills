@@ -43,3 +43,19 @@ Keyboard-only manual checklist (pending):
 ## Execution limits
 
 The sandbox refused the Python HTTP server bind (`PermissionError: Operation not permitted`). The visible browser rejects file URLs by policy. No browser-suite run, manual keyboard walkthrough, accessibility-tree inspection or real screen-reader listening was completed in this session. Real touch was not tested. Node and syntax checks do not establish a browser pass.
+
+## Review results
+
+Standards review: two findings, both fixed. Enter could stop at an unavailable fieldset control; the host now checks effective disabled/inert/visibility state and tries candidates until focus succeeds, including summary and editable text. A pointer flag local to one screen could suppress later keyboard re-entry; modality is now shared across parent and product documents. Follow-up review found no remaining concrete issue.
+
+Spec review: two findings, both fixed. Frame-arrow navigation bypassed the old Play cancellation; explicit navigation and edits now stop playback. The new browser action test reopened a dialog before its queued close handler finished; it now awaits completed close/focus return. Follow-up review found no further concrete issue. Worst initial Standards issue: Enter could fail to reach a usable control. Worst initial Spec issue: Play could override explicit keyboard navigation.
+
+Self-review also moved action announcements after the modal closes (the page status region is inert during the modal), revealed a closed group's controls when reached by reverse traversal, focused Stop for single-screen manual Play, kept Search's modifier shortcut available inside menus, and reused the keyboard nudge rule for dialog buttons. Browser regressions were added for these focus/playback cases but remain unexecuted.
+
+## Automated evidence
+
+- Baseline on Node 22.22.2: 523 tests passed.
+- Final on Node 22.22.2: 532 tests passed, zero failures, skips or cancellations. This includes the existing engine-purity, layout-write/ownership, geometry and timing guards. The FrameDom public-interface guard still rejects every undeclared method and now declares its tested boolean focus operation.
+- All 19 executable HTML script blocks compile; `tests/browser.mjs` passes Node's syntax check.
+- Browser harness: 24 cases registered (16 existing plus 8 added), **not run**. This is a count of cases, not a pass count.
+- The saved layout schema and persistence modules were not changed. Existing pointer handlers remain in place, but real pointer regression checks are pending with the other browser work.
