@@ -1,0 +1,104 @@
+{
+  "date": "2026-11-08",
+  "baselineCommit": "7f3cda7",
+  "environment": "Visible in-app browser on macOS, one benchmark tab, 1280 x 800 canvas viewport; three runs per version, same tab and generated scan. Other verification tabs closed before the paired runs. Fonts/assets use normal browser caching.",
+  "fixture": "largeScan(sample, 60), tests/large-scan.mjs: one open 60-screen flow, realistic sample renders repeated. Start selects the first screen. The initial overview reaches the camera minimum of 10%; a desktop switch then focuses the selected screen.",
+  "definitions": {
+    "firstCanvasPaintMs": "Estimate: from inserting the canvas srcdoc to two requestAnimationFrame callbacks after all 60 cheap frame wrappers exist (16 ms polling). This measures the first drawable canvas, not browser-global FCP or complete product assets.",
+    "canvasReadyMs": "From insertion through boot document/font readiness and two paint opportunities.",
+    "liveIframes": "Live canvas screen documents at initial overview, excluding the outer benchmark harness. Search is closed, so no preview documents exist.",
+    "deviceSwitchMs": "Click desktop until its aria-pressed state is true, boot and opacity fade have finished, then two paint opportunities. Includes fades, document readiness and redraw.",
+    "afterSwitchIframes": "Live canvas screen documents after the switch focuses the first screen. A selected screen always stays mounted."
+  },
+  "before": [
+    {
+      "firstCanvasPaintMs": 492.9,
+      "canvasReadyMs": 2223.9,
+      "liveIframes": 60,
+      "deviceSwitchMs": 2501.6,
+      "afterSwitchIframes": 60
+    },
+    {
+      "firstCanvasPaintMs": 449.8,
+      "canvasReadyMs": 1943.6,
+      "liveIframes": 60,
+      "deviceSwitchMs": 2510.5,
+      "afterSwitchIframes": 60
+    },
+    {
+      "firstCanvasPaintMs": 482.2,
+      "canvasReadyMs": 1841.5,
+      "liveIframes": 60,
+      "deviceSwitchMs": 2383.7,
+      "afterSwitchIframes": 60
+    }
+  ],
+  "after": [
+    {
+      "firstCanvasPaintMs": 330.0,
+      "canvasReadyMs": 1489.6,
+      "liveIframes": 52,
+      "deviceSwitchMs": 577.2,
+      "afterSwitchIframes": 2
+    },
+    {
+      "firstCanvasPaintMs": 283.9,
+      "canvasReadyMs": 1449.9,
+      "liveIframes": 52,
+      "deviceSwitchMs": 583.6,
+      "afterSwitchIframes": 2
+    },
+    {
+      "firstCanvasPaintMs": 318.7,
+      "canvasReadyMs": 1406.5,
+      "liveIframes": 52,
+      "deviceSwitchMs": 570.5,
+      "afterSwitchIframes": 2
+    }
+  ],
+  "medians": {
+    "before": {
+      "firstCanvasPaintMs": 482.2,
+      "canvasReadyMs": 1943.6,
+      "liveIframes": 60,
+      "deviceSwitchMs": 2501.6,
+      "afterSwitchIframes": 60
+    },
+    "after": {
+      "firstCanvasPaintMs": 318.7,
+      "canvasReadyMs": 1449.9,
+      "liveIframes": 52,
+      "deviceSwitchMs": 577.2,
+      "afterSwitchIframes": 2
+    }
+  },
+  "reproduce": [
+    "From repo root: git show 7f3cda7:skills/create-flow-canvas/assets/flow-canvas.html > skills/create-flow-canvas/tests/.benchmark-before.html",
+    "From repo root: python3 -m http.server",
+    "Open skills/create-flow-canvas/tests/performance.html?template=.benchmark-before.html in a visible tab; press Measure.",
+    "In the same tab open skills/create-flow-canvas/tests/performance.html; press Measure. Keep other canvas fixtures closed."
+  ],
+  "decisions": {
+    "near": "300 CSS pixels outside the visible canvas after zoom; selection and active Inspect/Search/finding requests override distance. During camera flights, use the actual eased transition progress.",
+    "unmount": "Serialize current product markup, native field values and scroll offsets; remove the iframe/document. Frame wrapper, label, geometry, connectors and findings remain. No detached live documents are parked.",
+    "survival": "Temporary taps, field values, scroll offsets and chosen screen state survive unmount on the same device/state. Explicit state or device changes reset temporary interactions; the chosen state, including Reminders, survives device changes. Reload resets transient state. Layout save shape unchanged.",
+    "search": "150 ms debounce; unchanged tiles and serialized snapshots reused. Only previews within 300 CSS pixels of the panel viewport hold documents, at most two missing snapshots read concurrently across queries. Cancellation immediately releases requests."
+  },
+  "verification": {
+    "node": "523/523 passing under Node 22.22.2, including engine-purity and unchanged ownership guards (FrameDom API guard adds retain and tracks that live entry point).",
+    "browser": "16/16 passing by pressing Run browser checks in a visible HTTP-served tests/browser.html.",
+    "manual": [
+      "Real mouse click on Fiddle leaf in Pick your plants: 3 selected -> 4 selected.",
+      "Inspect: PlantCard x6 and other expected component counts.",
+      "Cmd+K Search, typed reminders: correct Reminders result.",
+      "Desktop switch completed with aria-pressed true.",
+      "Native horizontal wheel panning: live screen ids 1-4 -> 1 plus 17-22 -> 1 plus 36-41. Selected screen 1 retained; distant screens released."
+    ],
+    "notVerified": [
+      "Real touch input.",
+      "Reduced-motion behavior.",
+      "Physical Ctrl/Cmd plus wheel: the available UI input could not produce a simultaneous modified wheel. The real-browser integration checks verify modifier-wheel event routing and zoom, including inside screen documents."
+    ],
+    "console": "The in-app browser logs MutationObserver.observe errors on both the unmodified baseline (which has no MutationObserver code) and the new canvas. No assertion failures; a clean console could not be verified in this environment."
+  }
+}

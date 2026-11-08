@@ -8054,8 +8054,9 @@
                                         target led to (read before the reaction runs), or null. The page decides
                                         whether it can follow
            frames.interactive(hit)      the target is a native control, a link or something the product reacts to
-           frames.copyInto(id, container)   a copy of the screen, drawn into a container, without what the canvas
-                                        lays over a live one; returns false if a document must be mounted and awaited first
+           frames.copyInto(id, container, { release? })   a copy of the screen, drawn into a container, without what the canvas
+                                        lays over a live one; false if a document must be mounted and awaited first.
+                                        release removes a preview document, keeping its serialized snapshot cached
 
          Host adapter (what a host answers)
            hostHTML(id, { device, state }) -> markup      mount(id, markup, state) -> void | Promise (ready)
@@ -8172,7 +8173,7 @@
             },
             interactive: (hit) =>
               !!hit && host.matches(hit.target, ["button,input,select,textarea,label,summary,a[href],[contenteditable],[data-go]", behaviour && behaviour.interactive].filter(Boolean).join(",")),
-            copyInto: (id, container) => host.copyInto(id, container),
+            copyInto: (id, container, options) => options ? host.copyInto(id, container, options) : host.copyInto(id, container),
           };
         }
         return { create };
@@ -8315,6 +8316,7 @@
           });
           /* the strip a card has beyond the scaled screen is the screen's own colour */
           frame.addEventListener("load", () => {
+            if (!frame.isConnected || !frame.contentDocument?.body) return;
             ph.style.background = frame.contentWindow.getComputedStyle(frame.contentDocument.body).backgroundColor;
           }, { once: true });
           frame.srcdoc = screenDocument(markup, device, snapshot);
@@ -8370,7 +8372,7 @@
             if (editing && e.key === "Escape") e.target.blur();
           }));
           const changed = () => { const record = documents.get(id); if (record) record.dirty = true; };
-          ["input", "change", "click"].forEach((type) => doc.addEventListener(type, changed));
+          ["input", "change"].forEach((type) => doc.addEventListener(type, changed));
           doc.addEventListener("scroll", () => { changed(); host.clearSpot(); }, true);
         }
         /* what of a component is on the screen to be seen: the instances that take room, and not the spotlight itself */
@@ -8401,10 +8403,12 @@
                 finish();
               };
               timer = setTimeout(settle, TIMING.mountWait);
-              frame.addEventListener("load", async () => {
+              const loaded = async () => {
                 if (documents.get(id) !== record || !ph.isConnected) return finish();
+                const root = frame.contentDocument?.body;
+                if (!root) return; /* an initial empty document can load before srcdoc replaces it */
+                frame.removeEventListener("load", loaded);
                 bridge(id, ph, frame);
-                const root = frame.contentDocument.body;
                 record.loaded = true;
                 record.observer = new MutationObserver(() => { record.dirty = true; });
                 record.observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -8413,7 +8417,8 @@
                 if (documents.get(id) !== record) return finish();
                 restoreScroll(root, snapshot);
                 settle();
-              }, { once: true });
+              };
+              frame.addEventListener("load", loaded);
             });
           },
           unmount(id) {
@@ -8485,7 +8490,8 @@
           },
           matches: (target, selector) => !!target.closest(selector),
           /* a copy of a screen to draw somewhere else (a search tile), without what the canvas lays over a live one */
-          copyInto(id, container) {
+          copyInto(id, container, { release = false } = {}) {
+            if (release) { previews.delete(container); container.replaceChildren(); return true; }
             const snapshot = snapshotOf(id);
             if (!snapshot || snapshot.device !== DEV.id) return false;
             if (previews.get(container) === snapshot) return true;
@@ -8516,7 +8522,13 @@
          decides what lights up with the card, and what clicking it does. A kind the engine does not know shows
          the scan's own text and does nothing. */
       const FIND_W = 316;
-      let findingSpot = 0;
+      let findingSpot = 0, findingRelease;
+      function clearFindingSpot() {
+        findingSpot++;
+        findingRelease?.();
+        findingRelease = null;
+        FrameDom.clearSpot();
+      }
       const FINDING_KINDS = {
         "unreachable-states": {
           text(f) {
@@ -8542,9 +8554,11 @@
           },
           tie(f, col, on) {
             if (on && !col.classList.contains("deck")) {
-              const visit = ++findingSpot;
-              readScreen(f.frame, () => { if (visit === findingSpot) FrameDom.spotlight(f.frame, f.component); });
-            } else { findingSpot++; FrameDom.clearSpot(); }
+              clearFindingSpot();
+              const visit = findingSpot;
+              findingRelease = holdScreen(f.frame);
+              FrameDom.ready(f.frame).then(() => { if (visit === findingSpot) FrameDom.spotlight(f.frame, f.component); });
+            } else clearFindingSpot();
           },
           act(f) {
             select(f.frame, true);
@@ -9283,6 +9297,7 @@
         });
       }
       function refreshScans() {
+        clearFindingSpot();
         document.querySelectorAll(".col .scan, .col .stem").forEach((n) => n.remove());
         scanViews.clear();
         layout.scans.forEach((f) => {
@@ -9312,6 +9327,7 @@
         return col;
       }
       function buildWorld() {
+        clearFindingSpot();
         FrameDom.retain([], { reset: switching });
         frameEls.clear();
         document.querySelectorAll(".lane,.col").forEach((e) => e.remove());
@@ -9389,16 +9405,27 @@
         x: (cx - cam.x) / cam.k,
         y: (cy - cam.y) / cam.k,
       });
-      function apply() {
+      let flight = null;
+      function apply(from = visibleCamera()) {
+        if (stage.classList.contains("fly")) flight = { from, to: { ...cam } };
         world.style.transform = `translate(${cam.x}px,${cam.y}px) scale(${cam.k})`;
         $("#zoom").textContent = Math.round(cam.k * 100) + "%";
         updateBars(true);
         scheduleMounts();
       }
+      function visibleCamera() {
+        if (!flight || !stage.classList.contains("fly")) return cam;
+        const animation = world.getAnimations().find((a) => a.transitionProperty === "transform");
+        const progress = animation?.effect.getComputedTiming().progress;
+        if (progress == null) return cam;
+        return Object.fromEntries(["x", "y", "k"].map((key) =>
+          [key, flight.from[key] + (flight.to[key] - flight.from[key]) * progress]));
+      }
       function fly(t) {
+        const from = visibleCamera();
         stage.classList.add("fly");
         cam = { ...t };
-        apply();
+        apply(from);
         clearTimeout(flyTimer);
         flyTimer = setTimeout(() => stage.classList.remove("fly"), TIMING.fly + TIMING.tail);
       }
@@ -9452,30 +9479,51 @@
       let mountsQueued = false, mountsPaused = true;
       function refreshMounts() {
         if (mountsPaused) return;
-        const inset = panelInset(), now = performance.now();
+        const inset = panelInset(), now = performance.now(), camera = visibleCamera();
         const st = panel.state();
         const requested = [...screenReads.keys(), ...(st.open && st.mode === "inspect" && st.subject ? [st.subject] : [])];
         const ids = FlowMounts.choose({
           frames: ORDER.map((id) => ({ id, ...geo.frameBox(id, now) })),
-          viewport: { x: -cam.x / cam.k, y: -cam.y / cam.k,
-            w: (innerWidth - inset.right) / cam.k, h: (innerHeight - inset.bottom) / cam.k },
-          scale: cam.k, selected: selection.ids(), requested,
+          viewport: { x: -camera.x / camera.k, y: -camera.y / camera.k,
+            w: (innerWidth - inset.right) / camera.k, h: (innerHeight - inset.bottom) / camera.k },
+          scale: camera.k, selected: selection.ids(), requested,
         });
         FrameDom.retain(ids);
+        if (flight && stage.classList.contains("fly") && world.getAnimations().some((a) =>
+          a.transitionProperty === "transform" && a.playState === "running")) scheduleMounts();
       }
       function scheduleMounts() {
         if (mountsQueued || mountsPaused) return;
         mountsQueued = true;
         requestAnimationFrame(() => { mountsQueued = false; refreshMounts(); });
       }
-      async function readScreen(id, read) {
+      function holdScreen(id) {
         screenReads.set(id, (screenReads.get(id) || 0) + 1);
         refreshMounts();
-        try { await FrameDom.ready(id); return read(); }
-        finally {
+        let held = true;
+        return () => {
+          if (!held) return;
+          held = false;
           const readers = screenReads.get(id) - 1;
           if (readers) screenReads.set(id, readers); else screenReads.delete(id);
           scheduleMounts();
+        };
+      }
+      async function readScreen(id, read, signals = []) {
+        const aborted = () => signals.some((signal) => signal.aborted);
+        if (aborted()) return;
+        const release = holdScreen(id);
+        let abort;
+        const canceled = new Promise((resolve) => {
+          abort = () => { release(); refreshMounts(); resolve(); };
+          signals.forEach((signal) => signal.addEventListener("abort", abort, { once: true }));
+        });
+        try {
+          await Promise.race([FrameDom.ready(id), canceled]);
+          if (!aborted()) return read();
+        } finally {
+          signals.forEach((signal) => signal.removeEventListener("abort", abort));
+          release();
         }
       }
 
@@ -9639,9 +9687,10 @@
         if (!st.open) {
           if (!ch.closed) return;
           panelPaint++;
+          panelRead?.abort();
           searchVisit++;
-          clearTimeout(searchTimer);
-          searchObserver?.disconnect();
+          stopSearchReads();
+          releasePreviews();
           FrameDom.clearSpot();
           paintSweep(null);
           scheduleMounts();
@@ -9738,10 +9787,13 @@
         );
       }
       /* write the panel's body for what FlowPanel says it shows. Rebuilding replaces the nodes, so the focused one is found again afterwards. */
-      let panelPaint = 0;
+      let panelPaint = 0, panelRead;
       async function renderBody(st, still) {
+        panelRead?.abort();
+        const controller = new AbortController();
+        panelRead = controller;
         const visit = ++panelPaint;
-        if (st.mode !== "search") { searchVisit++; searchObserver?.disconnect(); clearTimeout(searchTimer); }
+        if (st.mode !== "search") { searchVisit++; stopSearchReads(); releasePreviews(); }
         FrameDom.clearSpot();
         const focusKey = (() => {
           const el = document.activeElement;
@@ -9751,7 +9803,7 @@
         })();
         if (st.mode === "search") renderSearchBody();
         else if (st.subject) {
-          await readScreen(st.subject, () => {});
+          await readScreen(st.subject, () => {}, [controller.signal]);
           if (visit !== panelPaint || !panel.state().open || panel.state().mode !== "inspect") return;
           renderInspect(st.subject, st.sweep, still);
         }
@@ -9856,13 +9908,22 @@
         };
         refreshSweepUI();
       }
-      let searchTimer, searchVisit = 0, searchObserver;
-      function queueSearch() {
+      let searchTimer, searchVisit = 0, searchObserver, searchAbort;
+      let searchReaders = 0, drainSearch = () => {};
+      function stopSearchReads() {
+        searchAbort?.abort();
+        searchObserver?.disconnect();
         clearTimeout(searchTimer);
-        searchVisit++; /* cancel stale async readers as soon as another query is typed */
-        setTimeoutSearch();
       }
-      function setTimeoutSearch() { searchTimer = setTimeout(renderSearch, TIMING.searchInput); }
+      function releasePreviews() {
+        pbody.querySelectorAll(".tile").forEach((t) =>
+          FrameDom.copyInto(t.dataset.screenId, t.querySelector(".th"), { release: true }));
+      }
+      function queueSearch() {
+        stopSearchReads();
+        searchVisit++; /* cancel stale readers immediately, before the debounce fires */
+        searchTimer = setTimeout(renderSearch, TIMING.searchInput);
+      }
       function openSearch() {
         panel.open("search");
         if ($("#q")) $("#q").focus({ preventScroll: true });
@@ -9891,9 +9952,9 @@
         renderSearch();
       }
       function renderSearch() {
-        clearTimeout(searchTimer);
-        searchObserver?.disconnect();
-        const visit = ++searchVisit;
+        stopSearchReads();
+        searchAbort = new AbortController();
+        const signal = searchAbort.signal, visit = ++searchVisit;
         if (!$("#q") || !panel.state().open || panel.state().mode !== "search") return;
         const q = $("#q").value.trim().toLowerCase(),
           type = $("#fType").value,
@@ -9938,20 +9999,38 @@
         }
         /* Only visible result tiles need a document. Read at most two missing snapshots at a time;
            every read releases its live screen again, and a new query cancels the remaining work. */
-        const queue = [];
-        let readers = 0;
+        const queue = [], visibleTiles = new Set(), pendingTiles = new Map();
         const drain = () => {
-          while (readers < 2 && queue.length && visit === searchVisit) {
+          while (searchReaders < 2 && queue.length && visit === searchVisit) {
             const t = queue.shift(), id = t.dataset.screenId, th = t.querySelector(".th");
-            if (!t.isConnected || FrameDom.copyInto(id, th)) continue;
-            readers++;
+            if (!t.isConnected || !visibleTiles.has(t) || pendingTiles.has(t) || FrameDom.copyInto(id, th)) continue;
+            const controller = new AbortController();
+            pendingTiles.set(t, controller);
+            searchReaders++;
             readScreen(id, () => {
-              if (visit === searchVisit && t.isConnected) FrameDom.copyInto(id, th);
-            }).finally(() => { readers--; drain(); });
+              if (visit === searchVisit && t.isConnected && visibleTiles.has(t)) FrameDom.copyInto(id, th);
+            }, [signal, controller.signal]).finally(() => {
+              if (pendingTiles.get(t) === controller) pendingTiles.delete(t);
+              searchReaders--;
+              drainSearch();
+            });
           }
         };
+        drainSearch = drain;
         searchObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => { if (entry.isIntersecting) queue.push(entry.target); });
+          if (visit !== searchVisit || signal.aborted) return;
+          entries.forEach((entry) => {
+            const t = entry.target;
+            if (entry.isIntersecting) { visibleTiles.add(t); queue.push(t); }
+            else {
+              visibleTiles.delete(t);
+              pendingTiles.get(t)?.abort();
+              pendingTiles.delete(t);
+              const queued = queue.indexOf(t);
+              if (queued >= 0) queue.splice(queued, 1);
+              FrameDom.copyInto(t.dataset.screenId, t.querySelector(".th"), { release: true });
+            }
+          });
           drain();
         }, { root: pbody, rootMargin: "300px" });
         hit.forEach((id, i) => {
@@ -10495,6 +10574,7 @@
         if (pv.regrouped) relayout();
         else {
           Object.keys(pv.held).forEach((id) => putFrame(id));
+          scheduleMounts();
           updateSelBox();
           drawConns();
         }
@@ -11066,6 +11146,11 @@
         await afterTransition(world, "opacity", TIMING.fade);
         document.body.classList.add("boot");
         mountsPaused = true;
+        panelPaint++;
+        panelRead?.abort();
+        searchVisit++;
+        stopSearchReads();
+        releasePreviews();
         applyDevice(id);
         buildWorld();
         setSel(sel, prim);

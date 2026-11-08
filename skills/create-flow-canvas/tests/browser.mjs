@@ -345,6 +345,109 @@ test('a 60-screen flow keeps placeholders while mounting and releasing only near
   assert(doc.querySelectorAll('#frames iframe').length < 20,'focused view releases distant documents');
 });
 
+test('Search parks previews outside the panel viewport and removes them on close', async () => {
+  const {doc}=await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  doc.querySelector('#btnSearch').click();
+  const first=await until(()=>doc.querySelector('#results .tile iframe'),'first preview did not mount');
+  const body=doc.querySelector('#pbody');
+  body.scrollTop=body.scrollHeight;
+  await until(()=>doc.querySelector('#results .tile:last-child iframe'),'last preview did not mount');
+  assert(!first.isConnected,'preview leaving the panel margin is released');
+  assert(doc.querySelectorAll('#results iframe').length<12,'Search keeps only nearby preview documents');
+  doc.querySelector('#pclose').click();
+  equal(doc.querySelectorAll('#results iframe').length,0,'closed Search has no preview documents');
+});
+
+test('closing Search cancels an offscreen read before its document finishes loading', async () => {
+  const {doc,win}=await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  const far=doc.querySelector('.col[data-id="screen-60"]');
+  assert(!far.querySelector('iframe'),'far screen begins unmounted');
+  doc.querySelector('#btnSearch').click();
+  const q=doc.querySelector('#q');q.value='Screen 60';q.dispatchEvent(new win.Event('input',{bubbles:true}));
+  await new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(Error('Search never requested the far document')),6000);
+    const observer=new MutationObserver(()=>{
+      if(!far.querySelector('iframe'))return;
+      observer.disconnect();clearTimeout(timeout);
+      doc.querySelector('#pclose').click();
+      Promise.resolve().then(()=>{
+        try { assert(!far.querySelector('iframe'),'canceled read immediately releases its offscreen document'); resolve(); }
+        catch(error) { reject(error); }
+      });
+    });
+    observer.observe(far,{subtree:true,childList:true});
+  });
+});
+
+test('Inspect cancels a document read when its subject is deselected before load', async () => {
+  const {doc,win}=await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  doc.querySelector('#seltb [title^="Inspect"]').click();
+  await until(()=>doc.querySelector('[data-comp="Field"]'),'Inspect did not open');
+  const far=doc.querySelector('.col[data-id="screen-60"]');
+  await new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(Error('Inspect never requested the far document')),6000);
+    const observer=new MutationObserver(()=>{
+      if(!far.querySelector('iframe'))return;
+      observer.disconnect();clearTimeout(timeout);
+      far.querySelector('.label').dispatchEvent(new win.MouseEvent('click',{bubbles:true,shiftKey:true}));
+      Promise.resolve().then(()=>{
+        try { assert(!far.querySelector('iframe'),'deselected Inspect subject immediately releases its pending document'); resolve(); }
+        catch(error) { reject(error); }
+      });
+    });
+    observer.observe(far,{subtree:true,childList:true});
+    far.querySelector('.label').click();
+  });
+});
+
+test('a finding retains its offscreen screen for the whole spotlight interaction', async () => {
+  const data=largeScan(scan());
+  data.findings=[{id:'far-finding',kind:'reused-component',frame:'screen-60',component:'Action',pos:{mobile:[-18000,50]}}];
+  const {doc}=await canvas(data);
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  const far=doc.querySelector('.col[data-id="screen-60"]');
+  assert(!far.querySelector('iframe'),'finding screen begins unmounted');
+  const finding=doc.querySelector('[data-sid="far-finding"]');
+  finding.focus({preventScroll:true});
+  await until(()=>far.querySelector('.spot'),'finding did not mount and spotlight its screen');
+  await nextFrame();
+  assert(far.querySelector('iframe') && far.querySelector('.spot'),'finding keeps its document while focused');
+  finding.blur();
+  await until(()=>!far.querySelector('iframe'),'ending spotlight did not release the far document');
+  finding.focus({preventScroll:true});
+  await until(()=>far.querySelector('.spot'),'finding did not reacquire its document');
+  finding.dispatchEvent(new doc.defaultView.KeyboardEvent('keydown',{bubbles:true,key:'ArrowRight',code:'ArrowRight'}));
+  doc.body.dispatchEvent(new doc.defaultView.KeyboardEvent('keydown',{bubbles:true,key:'z',code:'KeyZ',ctrlKey:true}));
+  await until(()=>!finding.isConnected,'Undo did not rebuild finding cards');
+  await until(()=>!far.querySelector('iframe'),'replacing a focused finding leaked its screen request');
+});
+
+test('a camera flight keeps origin screens mounted while they remain near the animated viewport', async () => {
+  const {doc,win}=await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  doc.querySelector('#seltb [title^="Focus"]').click();
+  await until(()=>!doc.querySelector('#stage.fly'),'focus did not settle');
+  const origin=doc.querySelector('.col[data-id="screen-2"]');
+  await until(()=>origin.querySelector('iframe'),'origin neighbor did not mount');
+  doc.querySelector('.col[data-id="screen-8"] .label').dispatchEvent(new win.MouseEvent('dblclick',{bubbles:true}));
+  await new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));
+  const rect=origin.getBoundingClientRect();
+  assert(rect.right>=-300 && rect.left<=win.innerWidth+300,'origin is still near the viewport during flight');
+  assert(origin.querySelector('iframe'),'visible origin document stays mounted during flight');
+  doc.body.dispatchEvent(new win.KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'+',code:'Equal'}));
+  for(let i=0;i<8;i++) {
+    await new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));
+    const near=[...doc.querySelectorAll('.col')].filter(col=>{
+      const r=col.getBoundingClientRect();
+      return r.right>=-280 && r.left<=win.innerWidth+280 && r.bottom>=-280 && r.top<=win.innerHeight+280;
+    });
+    assert(near.every(col=>col.querySelector('iframe')),'zoom interrupted a flight and released near documents');
+  }
+});
+
 document.querySelector('#run').onclick = async () => {
   const button = document.querySelector('#run');
   button.disabled = true;
