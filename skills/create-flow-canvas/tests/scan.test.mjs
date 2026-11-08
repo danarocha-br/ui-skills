@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FlowScan, sampleScan, readScan, block } from "./modules.mjs";
+import { FlowScan, FlowDevice, sampleScan, readScan, block } from "./modules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tinyRaw = fs.readFileSync(path.join(here, "fixtures/tiny-scan.json"), "utf8");
@@ -91,6 +91,8 @@ test("a screen gets every field the engine reads, even when the scanner left som
     components: [],
     states: [],
     note: "",
+    approximate: false,
+    unrendered: "",
     caption: { title: "", body: "", on: false },
     html: { mobile: "", tablet: "", desktop: "" },
   });
@@ -322,4 +324,49 @@ test("an item of the user's own that now shares an id with the scan is kept, aft
 test("edits that are not edits are ignored", () => {
   eq(FlowScan.merge(SCANNED, { edits: "nope", mine: "nope" }), SCANNED);
   eq(FlowScan.merge(SCANNED, { edits: { a: 5, b: null }, mine: [null, 3, { text: "no id" }] }), SCANNED);
+});
+
+/* ---------- approximate and unrendered screens ---------- */
+
+test("a screen the scanner stubbed part of reads as approximate, and nothing else is", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.screens[0].approximate = true;
+  raw.screens[1].approximate = "yes"; /* only a real true counts */
+  const { scan, problems } = readScan(raw);
+  eq(problems, []);
+  assert.equal(scan.screens[0].approximate, true);
+  assert.equal(scan.screens[1].approximate, false);
+});
+
+test("a screen that could not render gives its reason and a placeholder for every device", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.screens[1].html = {};
+  raw.screens[1].unrendered = "Needs a payment session the mocks do not provide";
+  const { scan, problems } = readScan(raw);
+  eq(problems, []);
+  const s = scan.screens[1];
+  assert.equal(s.unrendered, "Needs a payment session the mocks do not provide");
+  for (const d of FlowDevice.ids()) {
+    assert.match(s.html[d], /Needs a payment session the mocks do not provide/, d + " shows the reason");
+    assert.match(s.html[d], /could not be rendered/i);
+  }
+});
+
+test("the reason on a placeholder is text, never markup", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.screens[1].html = {};
+  raw.screens[1].unrendered = '<img src=x onerror="alert(1)">';
+  const { scan } = readScan(raw);
+  assert.ok(!scan.screens[1].html.mobile.includes("<img"), "escaped");
+  assert.match(scan.screens[1].html.mobile, /&lt;img/);
+});
+
+test("a render the scanner did give wins over the placeholder, and the reason is still kept", () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.screens[0].unrendered = "ignored for the render";
+  const { scan } = readScan(raw);
+  assert.equal(scan.screens[0].html.mobile, JSON.parse(tinyRaw).screens[0].html.mobile);
+  assert.equal(scan.screens[0].html.tablet, JSON.parse(tinyRaw).screens[0].html.tablet);
+  assert.match(scan.screens[0].html.desktop, /<p class="total">0<\/p>/);
+  assert.equal(scan.screens[0].unrendered, "ignored for the render");
 });
