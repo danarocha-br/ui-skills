@@ -130,7 +130,7 @@ test("a canvas module that never finishes loading fails with a timeout message i
   const html = (await good()).replace(/(<script id="scan-module">)/, "$1while(true){}\n");
   const t0 = Date.now();
   const e = errorsOf(html, { scriptTimeoutMs: 200 });
-  assert.match(e, /did not finish loading within 200 ?ms/);
+  assert.match(e, /did not finish within 200 ?ms/);
   assert.ok(Date.now() - t0 < 5000);
 });
 
@@ -142,4 +142,10 @@ test("a state that has no render on some device warns that those devices show a 
   const r = validate(html);
   assert.deepEqual([...r.errors], []);
   assert.match(r.warnings.join("\n"), /state "dialog".*mobile, tablet.*blank/);
+});
+
+test("a scan reader that never returns also fails with the timeout message", async () => {
+  const html = (await good()).replace(/(function read\(raw[^\n]*\) \{\n)/, "$1while(true){}\n");
+  assert.notEqual(html, await good(), "the reader was found to edit");
+  assert.match(errorsOf(html, { scriptTimeoutMs: 200 }), /did not finish within 200 ?ms/);
 });

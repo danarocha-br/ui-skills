@@ -264,6 +264,18 @@ test("a dropped image becomes a value that is valid for the property it was in",
   assert.match(css, /content:url\(data:image\/gif;base64,[A-Za-z0-9+/=]+\) "a"/);
 });
 
+test("a dropped image later in a value is judged by its property, even after colons earlier in it", async () => {
+  const c = baseCapture();
+  c.screens[0].captures.default.desktop.sheets = [{ key: "k", href: "http://h/a.css", rules: [
+    { s: ".a", t: ".a{mask:url(data:image/svg+xml;utf8,<svg/>) no-repeat,url(b.png)}", u: true },
+    { s: ".b", t: '.b::before{content:"a:b" url(b.png)}', u: true },
+  ] }];
+  const { html } = await run(c, baseFlows(), { fetchBytes: async () => null });
+  const css = html.match(/<style id="flow-scan-styles" media="not all">([\s\S]*?)<\/style>/)[1];
+  assert.match(css, /no-repeat,url\(data:image\/gif;base64,/);
+  assert.match(css, /content:"a:b" url\(data:image\/gif;base64,/);
+});
+
 test("the scan JSON is safe in a script tag and survives it", async () => {
   const c = baseCapture();
   c.screens[0].captures.default.desktop.html = '<p>a </script><!-- b</p><p>  "q" \\ 😀</p>';

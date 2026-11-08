@@ -13,3 +13,7 @@ test("without a matching route or a capture, the scan's own id is used", () => {
   assert.equal(refScreenId({ id: "x", route: "/x" }, captured), "x");
   assert.equal(refScreenId({ id: "x", route: "/x" }, null), "x");
 });
+test("a route two captures share is ambiguous, so the scan's own id is used", () => {
+  const two = [{ id: "home", route: "/" }, { id: "home-guest", route: "/" }];
+  assert.equal(refScreenId({ id: "home-guest", route: "/" }, two), "home-guest");
+});

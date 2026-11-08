@@ -40,6 +40,8 @@ export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
   let json;
   try { json = JSON.parse(rawScan); } catch (e) { errors.push(`The flow-scan block is not valid JSON: ${e.message}`); return { errors, warnings, stats }; }
 
+  const stuck = (e) => e && e.code === "ERR_SCRIPT_EXECUTION_TIMEOUT";
+  const timeoutMessage = `The canvas's own scripts did not finish within ${scriptTimeoutMs} ms (a script is stuck in a loop), so the page would hang.`;
   const sandbox = {};
   try {
     for (const id of ["device-module", "scan-module"]) {
@@ -48,12 +50,17 @@ export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
       vm.runInNewContext(code, sandbox, { timeout: scriptTimeoutMs });
     }
   } catch (e) {
-    errors.push(e && e.code === "ERR_SCRIPT_EXECUTION_TIMEOUT"
-      ? `The canvas's own modules did not finish loading within ${scriptTimeoutMs} ms (a script is stuck in a loop), so the page would hang.`
-      : `The canvas's own modules could not be loaded: ${e.message}`);
+    errors.push(stuck(e) ? timeoutMessage : `The canvas's own modules could not be loaded: ${e.message}`);
     return { errors, warnings, stats }; }
-  const devices = sandbox.FlowDevice.ids();
-  const { scan, problems } = sandbox.FlowScan.read(rawScan, { devices });
+  let devices, scan, problems;
+  try {
+    sandbox.__raw = rawScan;
+    devices = vm.runInContext("FlowDevice.ids()", sandbox, { timeout: scriptTimeoutMs });
+    ({ scan, problems } = vm.runInContext("FlowScan.read(__raw, { devices: FlowDevice.ids() })", sandbox, { timeout: scriptTimeoutMs }));
+  } catch (e) {
+    errors.push(stuck(e) ? timeoutMessage : `The canvas's own scan reader failed: ${e.message}`);
+    return { errors, warnings, stats };
+  }
   if (!scan) errors.push(`The scan was rejected by the page's own reader, so it would open empty: ${[...problems].join("; ")}`);
   else [...problems].forEach((p) => errors.push(`The page would report: ${p}`));
 

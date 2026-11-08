@@ -231,7 +231,17 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
      transparent 1px gif: the same "nothing shows" and a value every property accepts */
   const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
   const placeholderAt = (t, at) => {
-    const prop = (t.slice(0, at).match(/([\w-]+)\s*:[^:;{}]*$/) || [])[1] || "";
+    /* the declaration starts after the last ; { or } before the url that is not inside a string or parentheses */
+    let start = 0, quote = "", depth = 0;
+    for (let k = 0; k < at; k++) {
+      const ch = t[k];
+      if (quote) { if (ch === "\\") k++; else if (ch === quote) quote = ""; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === "(") depth++;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      else if (!depth && (ch === ";" || ch === "{" || ch === "}")) start = k + 1;
+    }
+    const prop = (t.slice(start, at).match(/^\s*([\w-]+)\s*:/) || [])[1] || "";
     return /^(-webkit-)?mask|^content$/i.test(prop) ? BLANK : "none";
   };
   async function images(t, base) {
