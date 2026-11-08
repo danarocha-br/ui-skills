@@ -52,7 +52,7 @@ One route or view of the product, as the scan found it. A **frame** is how a scr
 _Avoid_: Page, artboard
 
 **Frame**:
-A screen as drawn on the canvas: the device screen with its caption under it. It is in a group, or **loose** (in no group). In a closed group a frame is drawn small, in the deck.
+A screen as drawn on the canvas: the device screen with its caption under it. It is in a group, or **loose** (in no group). In a closed group a frame is drawn small, in the deck. Its wrapper is a keyboard Tab stop with a group role and a name that describes the screen, route, shown state, membership and selection, even when no screen document is mounted. Keyboard focus selects it and brings it into view; Left/Right move between wrappers, Enter enters the screen and Shift+F10 opens Frame actions.
 _Avoid_: Card, tile, artboard
 
 **Place**:
@@ -81,14 +81,18 @@ _Avoid_: Delay, timeout, sleep
 
 **Selection**:
 The frames the user has selected (a click, shift-click, a marquee, select all), or one connector, never both. One of the selected frames is the **primary** (the last one chosen): the frame the toolbar, the arrow keys, the counter ("03/09") and Inspect are about. Inspect follows the primary however the selection changes. Deselecting frames leaves a selected connector alone; selecting frames lets go of it. In code, `FlowSelection`; the page only paints it.
-_Avoid_: Focus (that is where the camera looks), active
+_Avoid_: Focus alone (use **keyboard focus** for the input position; the **Focus** action moves the camera), active
+
+**Keyboard focus**:
+Where keyboard input goes: a frame wrapper, a screen's own control, a menu or the panel. It is separate from the camera's Focus action. The wrapper exists independently of a screen document; entering a screen waits for its document, and Escape follows the canvas's existing cancellation/closing chain before returning keyboard focus to the wrapper when the panel is closed. Native Tab moves into and out of mounted screens.
+_Avoid_: Selection (the selected frames are kept by `FlowSelection`)
 
 **Press**:
 What the pointer does from button down to button up on the canvas. What it landed on is a **hit** (an edge dot, a group's grip, a deck, a frame, an annotation, something that is not the canvas, or the empty canvas), and what follows is decided in one place by one **mode**: a frame or group held but not yet dragged (**pending**; once it moves far enough it becomes a **gesture**, which `FlowGesture` holds), a marquee, a pan, or a connector being drawn. A note or finding being dragged stays with `FlowAnnotations`, which the pointer asks about before anything else. The click that follows a press that travelled is not a click. In code, `FlowPointer`.
 _Avoid_: Drag state, tool (the hand tool and Space make a press pan across the canvas, including over screens)
 
 **Arrangement edit**:
-An edit that moves frames about as a whole rather than one at a time: **Tidy** (groups and loose frames back in order on this device, nothing about the flows changed), taking frames out of their groups, and dissolving a group (its frames stay where it was). Each is a write to the layout through its mutators. In code, `FlowArrange`.
+An edit that moves frames about as a whole rather than one at a time: **Tidy** (groups and loose frames back in order on this device, nothing about the flows changed), taking frames out of their groups, and dissolving a group (its frames stay where it was). Each is a write to the layout through its mutators. In code, `FlowArrange`. Keyboard movement within a group, into a group or on the loose canvas uses `FlowKeyboard` over the same layout mutators; taking out shares the arranger.
 _Avoid_: Layout command, reset (that puts everything back as the scan has it)
 
 **Gesture**:
@@ -122,6 +126,10 @@ _Avoid_: Embed, frame (a **Frame** is the card on the canvas)
 **Mount**:
 Putting a render into a frame. One module owns the inside of every screen (which render is shown, its components, a tap's ripple and reaction, a copy for a search tile); everything else names a screen by its id and never holds a piece of one. The live host mounts each screen in its own iframe with local product styles and SVG symbols, and routes events across the boundary. A mount is ready when the latest document has loaded and its fonts are ready; Inspect and Search wait for it after a state or device change. Search copies are inert snapshots of the current render and field values. A frame keeps its outline and label without a document. `FlowMounts` chooses frames within 300 CSS pixels of the visible canvas after zoom, selected frames and frames requested by Inspect or Search. Far screen documents are serialized and removed, preserving their current render in memory; the layout save format does not include them. In code, `FlowFrameDom` (the page's `FrameDom`), with `retain(ids)` to apply that choice and `ready(id?)` to await one mounted screen or all mounted screens. Search waits 150 ms after typing, reuses unchanged snapshots and tiles, and reads missing snapshots only near the panel's visible area, at most two at a time. Previews outside that margin or in a closed panel have no screen document. Superseded panel reads release their requests immediately; a finding keeps its screen mounted until its spotlight interaction ends.
 _Avoid_: Embed, inject
+
+**Play**:
+Visiting the frames of a group in flow order. Ordinarily each screen advances after the dwell in `TIMING`. Under reduced motion the visit is manual: Next screen advances and Stop playback ends it. Enabling reduced motion makes an active visit manual; disabling it does not resume automatic advance until Play starts again. In code, `FlowPlayback`.
+_Avoid_: Slideshow, autoplay (for a manual visit)
 
 **Link**:
 The scan's finding that one screen leads to another. On the canvas a link is drawn as a **connector**; the connector is the only thing that says "A leads to B", and buttons inside a frame follow connectors.

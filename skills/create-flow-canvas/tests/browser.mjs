@@ -45,7 +45,7 @@ const scan = () => ({
   groups: [{ id: 'panel', title: 'Fixture flow', screens: ['entry','next'], open: true }],
   links: [{ from: 'entry', to: 'next', label: 'Continue' }], notes: [], findings: [],
 });
-async function canvas(data = scan()) {
+async function canvas(data = scan(), { reducedMotion } = {}) {
   const frame = document.createElement('iframe');
   frame.title = 'Canvas under test';
   const source = html
@@ -57,7 +57,16 @@ async function canvas(data = scan()) {
       (_, open, close) => open + `window.FlowScanBehaviour={interactive:'[data-toggle]',onTap(id,target,root){
         if(target.closest('[data-toggle]'))root.querySelector('#taps').textContent=Number(root.querySelector('#taps').textContent)+1;
       }};` + close);
-  frame.srcdoc = source;
+  const preference = `<script>
+    (() => {
+      const native = window.matchMedia.bind(window), changes = new EventTarget();
+      const motion = { matches: false, addEventListener: (...args) => changes.addEventListener(...args),
+        set(value) { this.matches=value; const event=new Event('change'); event.matches=value; changes.dispatchEvent(event); } };
+      window.motionPreference=motion;
+      window.matchMedia=query=>query==='(prefers-reduced-motion: reduce)' ? motion : native(query);
+    })();
+  </script>`;
+  frame.srcdoc = reducedMotion === undefined ? source : source.replace('<head>', '<head>' + preference.replace('matches: false', 'matches: ' + reducedMotion));
   document.querySelector('#fixture').replaceChildren(frame);
   await until(() => frame.contentDocument?.querySelector('.col'), 'canvas did not boot');
   return { frame, doc: frame.contentDocument, win: frame.contentWindow };
@@ -463,6 +472,128 @@ test('a camera flight keeps origin screens mounted while they remain near the an
     });
     assert(near.every(col=>col.querySelector('iframe')),'zoom interrupted a flight and released near documents');
   }
+});
+
+test('frames and placeholders have names and keyboard focus independently of their documents', async () => {
+  const {doc,win} = await canvas(largeScan(scan()));
+  await until(()=>!doc.body.classList.contains('boot'),'canvas did not boot');
+  const far = doc.querySelector('.col[data-id="screen-60"]');
+  assert(!far.querySelector('iframe'),'far frame begins without a document');
+  equal(far.tabIndex,0,'placeholder is a tab stop');
+  equal(far.getAttribute('role'),'group','frame role keeps child controls visible');
+  const label = far.getAttribute('aria-label');
+  assert(label.includes('Route ') && label.includes('State Default') && label.includes('Not selected'), 'placeholder names route, state and selection');
+  far.focus();
+  equal(doc.activeElement,far,'focus does not await a document');
+  assert(far.getAttribute('aria-label').includes('Selected.'),'selection is named');
+  await screen(doc,'screen-60');
+  equal(far.getAttribute('aria-label'),label.replace('Not selected.','Selected.'),'mounting does not change semantics');
+  key({contentWindow:win},far,'keydown','ArrowLeft','ArrowLeft');
+  equal(doc.activeElement.dataset.id,'screen-59','arrow moves DOM focus as well as selection');
+  assert([...doc.querySelectorAll('.col')].every(col=>col.tabIndex===0),'every frame remains reachable by Tab');
+});
+
+test('frame keyboard actions reorder, take out, move, regroup, connect and undo through the real page', async () => {
+  const data=scan(); data.links=[];
+  const {doc,win}=await canvas(data);
+  const frame=doc.querySelector('.col[data-id="entry"]');
+  const send=(keyName,code,extra={})=>key({contentWindow:win},doc.activeElement,'keydown',keyName,code,extra);
+  frame.focus();
+  send('ArrowRight','ArrowRight',{altKey:true,shiftKey:true});
+  assert(doc.querySelector('#toast').textContent.includes('2 of 2'),'reorder result is announced');
+  send('z','KeyZ',{ctrlKey:true});
+  assert(doc.querySelector('.col[data-id="entry"]').getAttribute('aria-label').includes('frame 1 of 2'),'undo restores order');
+  doc.querySelector('.col[data-id="entry"]').focus();
+  send('G','KeyG',{ctrlKey:true,shiftKey:true});
+  let loose=doc.querySelector('.col[data-id="entry"]');
+  assert(loose.classList.contains('free'),'existing take-out shortcut stays usable');
+  loose.focus();
+  const position=loose.style.translate;
+  send('ArrowRight','ArrowRight',{shiftKey:true});
+  assert(doc.querySelector('#toast').textContent.includes('Moved'),'loose movement is announced');
+  await until(()=>loose.style.translate!==position,'loose frame did not move');
+  send('F10','F10',{shiftKey:true});
+  const dialog=doc.querySelector('#frameActions');
+  assert(dialog.open,'keyboard opens frame actions');
+  const target=dialog.querySelector('[name="group"]');
+  target.value='panel'; dialog.querySelector('[data-frame-action="join"]').click();
+  assert(!doc.querySelector('.col[data-id="entry"]').classList.contains('free'),'picker regroups frame');
+  send('F10','F10',{shiftKey:true});
+  dialog.querySelector('[name="destination"]').value='next';
+  dialog.querySelector('[data-frame-action="connect"]').click();
+  equal(doc.querySelectorAll('#cchips .echip').length,1,'picker creates a connector');
+  assert(doc.querySelector('#toast').textContent.includes('Connected'),'connector is announced');
+  equal(doc.activeElement.dataset.id,'entry','dialog returns focus to its frame');
+  send('z','KeyZ',{ctrlKey:true});
+  equal(doc.querySelectorAll('#cchips .echip').length,0,'connector is one undo step');
+});
+
+test('group disclosures, popup menus and panel toggles expose their state and return keyboard focus', async () => {
+  const {doc,win}=await canvas();
+  const send=(target,name,code=name,extra={})=>key({contentWindow:win},target,'keydown',name,code,extra);
+  const disclosure=doc.querySelector('.chev');
+  disclosure.focus(); disclosure.click();
+  equal(disclosure.getAttribute('aria-expanded'),'false','group is announced closed');
+  disclosure.click(); equal(disclosure.getAttribute('aria-expanded'),'true','group is announced open');
+  for (const [trigger,popup] of [['#btnAdd','#mAdd'],['#btnSpace','#mSpace'],['#btnViews','#mViews'],['.fmore','#mGroup']]) {
+    const button=doc.querySelector(trigger); button.focus(); button.click();
+    equal(button.getAttribute('aria-haspopup'),'menu','button declares a menu');
+    equal(button.getAttribute('aria-expanded'),'true','open state is announced');
+    equal(doc.querySelector(popup).getAttribute('role'),'menu','popup has the matching role');
+    const first=doc.activeElement;
+    send(first,'ArrowDown'); assert(doc.activeElement!==first,'arrow navigates within popup');
+    send(doc.activeElement,'Escape');
+    equal(button.getAttribute('aria-expanded'),'false','closed state is announced');
+    equal(doc.activeElement,button,'Escape restores menu trigger');
+  }
+  const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
+  send(frame,'i','KeyI');
+  equal(doc.querySelector('#seltb [data-a="inspect"]').getAttribute('aria-expanded'),'true','Inspect toggle reports open');
+  send(doc.activeElement,'Escape'); equal(doc.activeElement,frame,'Inspect closes back to frame');
+  send(frame,'k','KeyK',{ctrlKey:true});
+  equal(doc.querySelector('#btnSearch').getAttribute('aria-expanded'),'true','Search toggle reports open');
+  send(doc.activeElement,'Escape');
+  equal(doc.querySelector('#btnSearch').getAttribute('aria-expanded'),'false','Search toggle reports closed');
+  equal(doc.activeElement,frame,'Search restores frame focus');
+});
+
+test('Enter reaches a screen control, Tab remains native, and Escape and Search return to canvas chrome', async () => {
+  const {doc,win}=await canvas();
+  const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
+  key({contentWindow:win},frame,'keydown','Enter','Enter');
+  const product=await screen(doc);
+  await until(()=>product.contentDocument.activeElement.matches('input'),'Enter did not focus the first screen control');
+  const input=product.contentDocument.activeElement;
+  assert(!key(product,input,'keydown','Tab','Tab').defaultPrevented,'forward Tab is native');
+  assert(!key(product,input,'keydown','Tab','Tab',{shiftKey:true}).defaultPrevented,'backward Tab is native');
+  key(product,input,'keydown','k','KeyK',{ctrlKey:true});
+  await until(()=>doc.activeElement.id==='q','Search did not cross the document boundary');
+  key({contentWindow:win},doc.activeElement,'keydown','Escape','Escape');
+  input.focus(); key(product,input,'keydown','Escape','Escape');
+  equal(doc.activeElement,frame,'Escape returns to wrapper');
+  assert(!doc.querySelector('#panel').classList.contains('open'),'panel stays closed');
+});
+
+test('reduced-motion Play waits for Next, skips connector tokens and reacts to preference changes', async () => {
+  const {doc,win}=await canvas(scan(),{reducedMotion:true});
+  doc.querySelector('.fplay').click();
+  await until(()=>!doc.querySelector('#playControls').hidden,'manual playback did not open');
+  await new Promise(resolve=>setTimeout(resolve,2100));
+  assert(doc.querySelector('.col[data-id="entry"]').classList.contains('sel'),'reduced Play did not auto-advance');
+  doc.querySelector('#playNext').click();
+  assert(doc.querySelector('.col[data-id="next"]').classList.contains('sel'),'Next advances manually');
+  equal(doc.querySelectorAll('.token').length,0,'manual reduced playback creates no moving token');
+  assert(doc.querySelector('#playNext').disabled,'last screen has no next');
+  doc.querySelector('#playStop').click();
+  win.motionPreference.set(false);
+  doc.querySelector('.fplay').click();
+  await until(()=>doc.querySelector('.col[data-id="next"]').classList.contains('sel'),'ordinary Play did not auto-advance');
+  doc.querySelector('#playStop').click();
+  doc.querySelector('.fplay').click();
+  win.motionPreference.set(true);
+  await new Promise(resolve=>setTimeout(resolve,2100));
+  assert(doc.querySelector('.col[data-id="entry"]').classList.contains('sel'),'preference change cancels pending automatic tick');
+  assert(!doc.querySelector('#playControls').hidden,'preference change offers manual controls');
 });
 
 document.querySelector('#run').onclick = async () => {

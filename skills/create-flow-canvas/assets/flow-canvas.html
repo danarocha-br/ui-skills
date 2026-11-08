@@ -1505,10 +1505,26 @@
         flex-direction: column;
         transform-origin: bottom left;
       }
-      .menu.open {
-        display: flex;
-        animation: pop 0.18s var(--ease);
+      .menu.open { display: flex; }
+      @media (prefers-reduced-motion: no-preference) {
+        .menu.open { animation: pop var(--menu-dur) var(--ease); }
       }
+      .col:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 8px; border-radius: 12px; }
+      .frame-actions { border: 0; background: transparent; color: var(--ink); cursor: pointer; padding: 4px; }
+      .frame-actions svg { width: 18px; height: 18px; }
+      .frame-actions:focus-visible, #frameActions :focus-visible, #playControls button:focus-visible {
+        outline: 2px solid var(--cobalt); outline-offset: 2px;
+      }
+      #frameActions { color: var(--ink); background: var(--paper, #fff); border: 1px solid var(--line, #bbb);
+        border-radius: 16px; padding: 24px; max-width: min(460px, calc(100vw - 48px)); font: 14px/1.5 var(--sans); }
+      #frameActions::backdrop { background: rgb(0 0 0 / .3); }
+      #frameActions h2 { font-size: 18px; margin: 0 0 8px; }
+      #frameActions label { display: block; margin-top: 12px; }
+      #frameActions select { max-width: 100%; }
+      #frameActions button, #frameActions select, #playControls button { font: inherit; padding: 6px 10px; margin: 4px 2px; }
+      #frameActions fieldset { margin: 12px 0; }
+      #playControls { left: 50%; bottom: 76px; transform: translateX(-50%); z-index: 70; }
+      #playControls[hidden] { display: none; }
       @keyframes pop {
         from {
           opacity: 0;
@@ -4323,7 +4339,10 @@
       </defs>
     </svg>
 
-    <div id="stage">
+    <p class="vh" id="frameHelp">Tab reaches each frame. Left and Right move between frames. Enter enters a screen; Escape returns to its frame.
+      Alt+Shift+Left or Right reorders within a group. Shift+arrow moves a loose frame. Control or Command+Shift+G takes selected frames out.
+      Shift+F10 opens frame actions to move to a group or choose a connector destination.</p>
+    <div id="stage" role="region" aria-label="Flow canvas">
       <div id="world">
         <div id="frames"></div>
         <svg id="conns" class="conns" width="1" height="1"></svg>
@@ -4489,6 +4508,22 @@
       <div id="pbody"></div>
     </aside>
     <div class="ui" id="toast"></div>
+    <div class="ui pill" id="playControls" hidden role="group" aria-label="Manual playback">
+      <button id="playNext">Next screen</button><button id="playStop">Stop playback</button>
+    </div>
+    <dialog id="frameActions" aria-labelledby="frameActionTitle">
+      <h2 id="frameActionTitle">Frame actions</h2>
+      <p>Changes can be undone with Control or Command+Z.</p>
+      <div class="action-row"><button data-frame-action="earlier">Move earlier</button><button data-frame-action="later">Move later</button></div>
+      <button data-frame-action="takeOut">Take out of group</button>
+      <fieldset><legend>Move loose frame</legend>
+        <button data-frame-action="left">Left</button><button data-frame-action="right">Right</button>
+        <button data-frame-action="up">Up</button><button data-frame-action="down">Down</button>
+      </fieldset>
+      <label>Group <select name="group"></select></label><button data-frame-action="join">Move to group</button>
+      <label>Connect to <select name="destination"></select></label><button data-frame-action="connect">Create connector</button>
+      <button data-frame-action="close">Close</button>
+    </dialog>
 
     <!-- ======================================================================
          THE SCAN: what the scanner found in the product (here the sample, Loam). The generator writes this
@@ -8142,6 +8177,7 @@
             shownStates,
             switchable: (id) => shownStates(id).length > 1,
             hostHTML: (id) => host.hostHTML(id, { device: device(), state: stateIndex(id) }),
+            focus: (id) => known(id) ? host.focus(id) : false,
             render: (id) => known(id) && show(id),
             retain(ids, { reset = false } = {}) {
               const wanted = new Set(ids.filter(known));
@@ -8187,6 +8223,74 @@
       })();
     </script>
 
+    <script id="keyboard-module">
+      /* Browser-free frame names and keyboard arrangement rules. The page owns focus, commits and feedback. */
+      var FlowKeyboard = (() => {
+        function frameName({ name, route, state = "Default", group, index, total, open, selected = false }) {
+          const membership = group ? `${group}, frame ${index + 1} of ${total}, ${open ? "open" : "closed"}` : "Loose frame";
+          return `${name}. Route ${route}. State ${state}. ${membership}. ${selected ? "Selected" : "Not selected"}.`;
+        }
+        function create({ layout, geo, device, frames }) {
+          function reorder(id, delta) {
+            const group = layout.groupOf(id);
+            if (!group || ![-1, 1].includes(delta)) return false;
+            const next = group.screens.indexOf(id) + delta;
+            if (next < 0 || next >= group.screens.length) return false;
+            layout.moveInto([id], group.id, next);
+            return true;
+          }
+          function nudge(id, dx, dy) {
+            const at = geo.place(id);
+            if (!at || layout.groupOf(id)) return false;
+            return layout.place(device(), id, { x: at.x + dx, y: at.y + dy });
+          }
+          function join(id, groupId) {
+            const target = layout.groups.find(group => group.id === groupId);
+            if (!frames.includes(id) || !target || target.screens.includes(id)) return false;
+            layout.moveInto([id], groupId, target.screens.length);
+            return true;
+          }
+          return { reorder, nudge, join };
+        }
+        function command({ key, altKey, shiftKey, metaKey, ctrlKey }) {
+          if (metaKey || ctrlKey) return null;
+          if (shiftKey && key === "F10" && !altKey || key === "ContextMenu") return { action: "actions" };
+          if (key === "Enter" && !altKey && !shiftKey) return { action: "enter" };
+          const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[key];
+          if (!delta) return null;
+          if (altKey && shiftKey && delta[0]) return { action: "reorder", delta: delta[0] };
+          if (altKey) return null;
+          if (shiftKey) return { action: "nudge", dx: delta[0] * 10, dy: delta[1] * 10 };
+          return delta[0] ? { action: "focus", delta: delta[0] } : null;
+        }
+        return { frameName, create, command };
+      })();
+    </script>
+
+    <script id="playback-module">
+      /* Play's sequence and reduced-motion policy. Timers, camera and announcements belong to the page. */
+      var FlowPlayback = (() => {
+        function create({ reduced = false } = {}) {
+          let ids = [], index = 0, active = false, manual = false;
+          const state = () => ({ active, manual, current: active ? ids[index] : null,
+            canNext: active && index + 1 < ids.length });
+          const stop = () => { active = false; };
+          const next = () => {
+            if (!state().canNext) return false;
+            index++;
+            return true;
+          };
+          return {
+            state, next, stop,
+            start(list) { ids = [...list]; index = 0; active = ids.length > 0; manual = reduced; },
+            tick() { return !manual && next(); },
+            setReducedMotion(value) { reduced = value; if (active && reduced) manual = true; },
+          };
+        }
+        return { create };
+      })();
+    </script>
+
     <script>
       "use strict"; /* a write to what the layout holds (read-only) throws here instead of being ignored */
       /* Every duration the page spells out, in ms, in one place. Where the stylesheet runs the same length it is handed
@@ -8212,6 +8316,10 @@
         mountWait: 4000,
         searchInput: 150,
         playDwell: 1900,
+        menu: 180,
+        tokenMin: 420,
+        tokenMax: 950,
+        tokenPerPixel: 0.3,
         tapLead: 180,
         doubleClick: 240,
         resizeSettle: 120,
@@ -8222,7 +8330,7 @@
       });
       /* custom properties the stylesheet is handed: { "--name": value } */
       const setVars = (vars) => Object.entries(vars).forEach(([name, value]) => document.documentElement.style.setProperty(name, value));
-      setVars({ "--fly-dur": TIMING.fly + "ms", "--fade-dur": TIMING.fade + "ms", "--ripple-dur": TIMING.tapMark + "ms" });
+      setVars({ "--fly-dur": TIMING.fly + "ms", "--fade-dur": TIMING.fade + "ms", "--ripple-dur": TIMING.tapMark + "ms", "--menu-dur": TIMING.menu + "ms" });
       /* ======================================================================
    THE SCAN, read through FlowScan. Everything below knows its shape, not its product: no screen ids, no
    product class names, no product words. Problems are reported in the console; a scan that cannot be read
@@ -8340,6 +8448,12 @@
         /* The parent event targets chrome, never a product node. Only hit() opens the opaque target again. */
         function bridge(id, ph, frame) {
           const doc = frame.contentDocument;
+          let pointerFocus = false;
+          doc.addEventListener("pointerdown", () => { pointerFocus = true; }, true);
+          doc.addEventListener("keydown", () => { pointerFocus = false; }, true);
+          doc.addEventListener("focusin", () => {
+            if (!pointerFocus) ph.dispatchEvent(new Event("screenfocus", { bubbles: true }));
+          });
           const forward = (e, EventType) => {
             const r = frame.getBoundingClientRect(), k = scaleOf(ph, frame.offsetWidth, frame.offsetHeight);
             const x = e.clientX * k, y = e.clientY * k;
@@ -8374,6 +8488,7 @@
             if (e.ctrlKey || e.metaKey) forward(e, WheelEvent);
           }, { passive: false });
           ["keydown", "keyup"].forEach((type) => doc.addEventListener(type, (e) => {
+            if (e.key === "Tab") return; /* the browser owns cross-document traversal */
             const editing = e.target.closest?.(ENTRY);
             const search = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k";
             /* Text entry and native activation stay in the screen. Escape and Search still reach canvas chrome. */
@@ -8383,7 +8498,11 @@
               key: e.key, code: e.code, repeat: e.repeat, ctrlKey: e.ctrlKey, metaKey: e.metaKey,
               altKey: e.altKey, shiftKey: e.shiftKey });
             if (!ph.dispatchEvent(event)) e.preventDefault();
-            if (editing && e.key === "Escape") e.target.blur();
+            if (type === "keydown" && e.key === "Escape") {
+              e.preventDefault();
+              if (!panel.state().open) focusFrame(id, { select: false });
+              else if (editing) e.target.blur();
+            }
           }));
           const changed = () => { const record = documents.get(id); if (record) record.dirty = true; };
           ["input", "change"].forEach((type) => doc.addEventListener(type, changed));
@@ -8402,6 +8521,15 @@
           [...el.getClientRects()].some((r) => r.width > 0 && r.height > 0) && root.ownerDocument.defaultView.getComputedStyle(el).visibility !== "hidden");
         const host = {
           hostHTML: (id, { device, state }) => `<div class="phone placeholder ${device.cls}" id="p-${esc(id)}" data-state="${esc(state)}"></div>`,
+          focus(id) {
+            const root = rootOf(id);
+            if (!root) return false;
+            const control = [...root.querySelectorAll("button,input,select,textarea,a[href],[tabindex],[contenteditable]")]
+              .find(el => !el.disabled && !el.closest("[inert]") && el.tabIndex >= 0 && el.getClientRects().length && root.ownerDocument.defaultView.getComputedStyle(el).visibility !== "hidden");
+            if (control) control.focus({ preventScroll: true });
+            else { root.tabIndex = -1; root.focus({ preventScroll: true }); }
+            return root.ownerDocument.activeElement === (control || root);
+          },
           mount(id, markup, state, { resume = false } = {}) {
             const ph = phoneOf(id);
             if (!ph) return;
@@ -8595,10 +8723,16 @@
       /* the canvas's fixed measurements, in world px (from the geometry) */
       const { head: HEAD } = FlowGeometry.WORLD; /* only the stylesheet's --head: the geometry measures with it */
       /* where every frame is, and where it is going: the one answer for the camera, connectors, notes and hit-tests */
-      const geo = FlowGeometry.create({
-        reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-      });
-      matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (e) => {
+      const motion = matchMedia("(prefers-reduced-motion: reduce)");
+      const playback = FlowPlayback.create({ reduced: motion.matches });
+      const geo = FlowGeometry.create({ reduceMotion: motion.matches });
+      motion.addEventListener("change", (e) => {
+        playback.setReducedMotion(e.matches);
+        clearTimeout(playTimer);
+        if (e.matches && playing) {
+          paintPlayback();
+          toast("Reduced motion: playback is manual. Use Next screen to continue.");
+        }
         geo.setReduceMotion(e.matches);
         applyFrames(); /* a slide in progress is put where it was going */
         drawConns();
@@ -9063,6 +9197,7 @@
         return { groups: v.groups.map(({ id, screens, open }) => ({ id, screens, open })), screens: ORDER, pos: v.pos };
       };
       const arrange = FlowArrange.create({ layout, geo, frames: ORDER, device: () => DEV.id, metrics: () => DEV.metrics, input: geoInput });
+      const keyboard = FlowKeyboard.create({ layout, geo, frames: ORDER, device: () => DEV.id });
       const geoMove = FlowGeometry.MOVES;
       for (const k of ["open", "deck"])
         setVars({
@@ -9090,6 +9225,7 @@
           col.classList.toggle("free", !f.group);
           col.dataset.lane = f.group || "";
           putFrame(id, now);
+          updateFrameName(id);
           st.setProperty("--r", f.r + "deg");
           st.setProperty("--d", f.d + "ms");
           st.setProperty("--z", f.z);
@@ -9194,6 +9330,11 @@
           el.style.width = box.w + "px";
           el.style.height = box.h + "px";
           el.classList.toggle("open", L.open);
+          el.querySelector(".chev").setAttribute("aria-expanded", String(L.open));
+          el.querySelector(".chev").setAttribute("aria-label", (L.open ? "Close " : "Open ") + groupName(L));
+          el.querySelector(".fmore").setAttribute("aria-haspopup", "menu");
+          el.querySelector(".fmore").setAttribute("aria-controls", "mGroup");
+          el.querySelector(".fmore").setAttribute("aria-expanded", String(menus.group.classList.contains("open") && menuOwner === el.querySelector(".fmore")));
           el.classList.toggle("closed", !L.open);
           el.classList.toggle("empty", n === 0);
           /* where a closed group's title stands, beside its deck */
@@ -9329,14 +9470,56 @@
       }
 
       /* frames */
+      function updateFrameName(id) {
+        const group = groupOf(id), screen = SCREENS[id];
+        colOf(id)?.setAttribute("aria-label", FlowKeyboard.frameName({
+          name: screen.name, route: screen.route, state: screen.states[FrameDom.stateIndex(id)]?.name || "Default",
+          group: group && groupName(group), index: group?.screens.indexOf(id), total: group?.screens.length,
+          open: group?.open, selected: selection.has(id),
+        }));
+      }
+      let returningFrameFocus = false;
+      function focusFrame(id, { select: choose = true } = {}) {
+        returningFrameFocus = !choose;
+        try { colOf(id)?.focus({ preventScroll: true }); } finally { returningFrameFocus = false; }
+      }
+      async function enterScreen(id) {
+        const col = colOf(id), release = holdScreen(id);
+        try {
+          refreshMounts();
+          await FrameDom.ready(id);
+          if (document.activeElement === col && !FrameDom.focus(id)) toast("This screen has no available controls.");
+        } finally { release(); }
+      }
       function makeCol(id) {
         const s = SCREENS[id],
           col = document.createElement("div"),
           many = FrameDom.switchable(id);
         col.className = "col" + (many ? " hasstack" : "");
         col.dataset.id = id;
-        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}</div>
+        col.tabIndex = 0;
+        col.setAttribute("role", "group");
+        col.setAttribute("aria-describedby", "frameHelp");
+        col.setAttribute("aria-keyshortcuts", "Enter Shift+F10 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+        col.addEventListener("focus", () => {
+          if (!returningFrameFocus && pointer.state().mode === "idle") select(id, true);
+        });
+        col.addEventListener("screenfocus", () => { select(id, false); });
+        col.addEventListener("keydown", (e) => {
+          if (e.target !== col) return;
+          const command = FlowKeyboard.command(e);
+          if (!command) return;
+          e.preventDefault(); e.stopPropagation();
+          if (command.action === "focus") {
+            const index = ORDER.indexOf(id), next = ORDER[clamp(index + command.delta, 0, ORDER.length - 1)];
+            focusFrame(next);
+          } else if (command.action === "enter") enterScreen(id);
+          else if (command.action === "actions") openFrameActions(id);
+          else editFrame(id, command);
+        });
+        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}<button class="frame-actions" title="Frame actions (Shift+F10)" aria-label="Frame actions" aria-haspopup="dialog" aria-controls="frameActions" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"/></svg></button></div>
     <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>`;
+        col.querySelector(".frame-actions").addEventListener("click", (e) => { e.stopPropagation(); select(id, false); openFrameActions(id); });
         if (many)
           col.querySelector(".states").addEventListener("click", (e) => {
             e.stopPropagation();
@@ -9349,6 +9532,7 @@
         return col;
       }
       function buildWorld() {
+        const focused = document.activeElement.closest?.(".col")?.dataset.id;
         clearFindingSpot();
         FrameDom.retain([], { reset: switching });
         frameEls.clear();
@@ -9358,6 +9542,7 @@
         KINDS.forEach((k) => k.refresh());
         geo.reset();
         relayout();
+        if (focused) focusFrame(focused, { select: false });
       }
 
       /* ---------- geometry helpers ---------- */
@@ -9368,6 +9553,7 @@
       function setGroup(id, open, opts = {}) {
         const L = layout.groups.find((l) => l.id === id);
         if (!L || L.open === open) return;
+        const name = groupName(L);
         commit(() => layout.setOpen(id, open));
         if (open) {
           if (opts.fly !== false) fly(fitRect(groupRect(L), 40));
@@ -9376,6 +9562,7 @@
           if (playing && playGroup === id) stopPlay();
           if (opts.fly !== false) fly(fitRect(geo.bounds(), 60, 1.1));
         }
+        toast(`${name}: ${open ? "opened" : "closed"}.`);
       }
 
       /* the screens that use a component, from the scan; and the panel that sweeps them (see FlowPanel) */
@@ -9504,6 +9691,8 @@
         const inset = panelInset(), now = performance.now(), camera = visibleCamera();
         const st = panel.state();
         const requested = [...screenReads.keys(), ...(st.open && st.mode === "inspect" && st.subject ? [st.subject] : [])];
+        const focused = document.activeElement.closest?.(".col");
+        if (focused && document.activeElement !== focused) requested.push(focused.dataset.id);
         const ids = FlowMounts.choose({
           frames: ORDER.map((id) => ({ id, ...geo.frameBox(id, now) })),
           viewport: { x: -camera.x / camera.k, y: -camera.y / camera.k,
@@ -9598,7 +9787,7 @@
         const { ids, primary } = selection.state();
         ORDER.forEach((s) => {
           const c = colOf(s);
-          if (c) c.classList.toggle("sel", selection.has(s));
+          if (c) { c.classList.toggle("sel", selection.has(s)); updateFrameName(s); }
         });
         markActive();
         const i = primary ? ORDER.indexOf(primary) + 1 : 0;
@@ -9651,7 +9840,10 @@
         const id = selection.primary() || selection.ids()[0],
           L = groupOf(id);
         if (a === "focus") focusScreen(id);
-        if (a === "inspect") panel.open("inspect", id);
+        if (a === "inspect") {
+          const st = panel.state();
+          if (st.open && st.mode === "inspect") panel.close(); else panel.open("inspect", id);
+        }
         if (a === "comment")
           createNote({ text: "Add a comment…", frame: id, local: FlowDevice.restingSpot(DEV.id, 60) });
         if (a === "play") {
@@ -9706,6 +9898,11 @@
       /* the panel changed (or the page needs it drawn again, `rebuild`): paint exactly what FlowPanel now says */
       function paintPanel(st, ch) {
         panelEl.setAttribute("aria-label", st.label);
+        [["#btnSearch", "search"], ['#seltb [data-a="inspect"]', "inspect"]].forEach(([selector, mode]) => {
+          const button = $(selector);
+          button.setAttribute("aria-controls", "panel");
+          button.setAttribute("aria-expanded", String(st.open && st.mode === mode));
+        });
         if (!st.open) {
           if (!ch.closed) return;
           cancelPanelReads();
@@ -10076,46 +10273,67 @@
       /* ======================================================================
    PLAY FLOW
    ====================================================================== */
-      let playing = false,
-        playGroup = null;
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      let playing = false, playGroup = null, playTimer, playVisit = 0;
+      function paintPlayback() {
+        const st = playback.state();
+        document.querySelectorAll(".fplay").forEach((button) => {
+          const on = playing && button.closest(".lane").dataset.groupId === playGroup;
+          button.classList.toggle("on", on);
+          button.setAttribute("aria-pressed", String(on));
+          button.setAttribute("aria-label", on ? "Stop playback" : "Play flow");
+          button.querySelector("use").setAttribute("href", on ? "#i-stop" : "#i-play");
+          button.querySelector("span").textContent = on ? "Stop" : "Play flow";
+        });
+        const controls = $("#playControls"), hadFocus = controls.contains(document.activeElement);
+        controls.hidden = !(playing && st.manual);
+        $("#playNext").disabled = !st.canNext;
+        if (controls.hidden && hadFocus) focusFrame(selection.primary());
+      }
+      function showPlayScreen(previous) {
+        const st = playback.state();
+        if (!st.active) return;
+        const hop = previous && connBetween(previous, st.current);
+        if (hop) tokenAlong(hop.id);
+        select(st.current, true);
+        paintPlayback();
+        toast(`Playing ${SCREENS[st.current].name}. ${st.manual ? (st.canNext ? "Use Next screen to continue." : "Last screen. Stop playback to finish.") : "Escape stops playback."}`);
+        if (!st.manual) playTimer = setTimeout(() => {
+          const previous = playback.state().current;
+          if (playback.tick()) showPlayScreen(previous); else stopPlay();
+        }, TIMING.playDwell);
+      }
       async function play(ids) {
         if (!ids.length) return;
-        const L = groupOf(ids[0]);
-        if (!L) return;
-        ids =
-          ids.length >= L.screens.length ? FlowLayout.flowOrder(L, layout.conns) : FlowLayout.flowOrder(L, layout.conns, ids[0]);
+        const group = groupOf(ids[0]);
+        if (!group) return;
+        ids = ids.length >= group.screens.length ? FlowLayout.flowOrder(group, layout.conns) : FlowLayout.flowOrder(group, layout.conns, ids[0]);
         stopPlay();
+        const visit = playVisit;
         playing = true;
-        playGroup = L.id;
-        const pl = groupEl(playGroup).querySelector(".fplay");
-        pl.classList.add("on");
-        pl.querySelector("use").setAttribute("href", "#i-stop");
-        pl.querySelector("span").textContent = "Stop";
-        if (!L.open) {
-          setGroup(L.id, true, { fly: false });
+        playGroup = group.id;
+        playback.start(ids);
+        if (!group.open) {
+          setGroup(group.id, true, { fly: false });
           await whenSettled();
         }
-        let prev = null;
-        for (const id of ids) {
-          if (!playing) break;
-          const hop = prev && layout.conns.find((c) => c.from === prev && c.to === id);
-          if (hop) tokenAlong(hop.id);
-          select(id, true);
-          prev = id;
-          await sleep(TIMING.playDwell);
-        }
-        stopPlay();
+        if (visit !== playVisit) return;
+        showPlayScreen(null);
+        if (playback.state().manual) $("#playNext").focus({ preventScroll: true });
       }
       function stopPlay() {
+        clearTimeout(playTimer);
+        playVisit++;
+        playback.stop();
         playing = false;
         playGroup = null;
-        document.querySelectorAll(".fplay").forEach((b) => {
-          b.classList.remove("on");
-          b.querySelector("use").setAttribute("href", "#i-play");
-          b.querySelector("span").textContent = "Play flow";
-        });
+        paintPlayback();
       }
+      $("#playNext").onclick = () => {
+        const previous = playback.state().current;
+        if (playback.next()) showPlayScreen(previous);
+        if (!playback.state().canNext) $("#playStop").focus({ preventScroll: true });
+      };
+      $("#playStop").onclick = stopPlay;
 
       /* ======================================================================
    CONNECTORS
@@ -10195,6 +10413,7 @@
       const connBetween = (a, b) =>
         layout.conns.find((c) => c.from === a && c.to === b);
       function tokenAlong(id) {
+        if (motion.matches) return Promise.resolve();
         const o = connEls.get(id);
         if (!o || o.g.classList.contains("off")) return Promise.resolve();
         const len = o.ln.getTotalLength();
@@ -10204,13 +10423,14 @@
         dot.setAttribute("class", "token");
         $("#conns").appendChild(dot);
         const t0 = performance.now(),
-          D = Math.min(950, 420 + len * 0.3);
+          D = Math.min(TIMING.tokenMax, TIMING.tokenMin + len * TIMING.tokenPerPixel);
         return new Promise((res) => {
           const done = () => {
             dot.remove();
             res();
           };
           const step = (now) => {
+            if (motion.matches || !dot.isConnected) return done();
             const k = Math.min(1, (now - t0) / D),
               e = 1 - Math.pow(1 - k, 3),
               pt = o.ln.getPointAtLength(len * e);
@@ -10459,6 +10679,65 @@
       function removeSel() {
         removeFromGroup(selection.ids());
       }
+      function editFrame(id, command) {
+        const name = SCREENS[id].name;
+        if (command.action === "reorder") {
+          const moved = commit(() => keyboard.reorder(id, command.delta));
+          const group = groupOf(id);
+          toast(moved ? "Moved " + name + ` to frame ${group.screens.indexOf(id) + 1} of ${group.screens.length} in ${groupName(group)}.`
+            : group ? name + ` is already at that end of ${groupName(group)}.` : name + " is a loose frame. Move it with Shift+arrow.");
+        } else if (command.action === "nudge") {
+          const moved = commit(() => keyboard.nudge(id, command.dx, command.dy));
+          toast(moved ? "Moved " + name + ` ${command.dx < 0 ? "left" : command.dx > 0 ? "right" : command.dy < 0 ? "up" : "down"}.`
+            : "Take " + name + " out of its group before moving it. Use Control or Command+Shift+G.");
+        }
+      }
+      const frameActions = $("#frameActions");
+      let actionFrame = null;
+      function openFrameActions(id) {
+        closeMenus();
+        actionFrame = id;
+        const group = groupOf(id), index = group?.screens.indexOf(id);
+        $("#frameActionTitle").textContent = "Frame actions: " + SCREENS[id].name;
+        frameActions.querySelector('[data-frame-action="earlier"]').disabled = !group || index === 0;
+        frameActions.querySelector('[data-frame-action="later"]').disabled = !group || index === group.screens.length - 1;
+        frameActions.querySelector('[data-frame-action="takeOut"]').disabled = !group;
+        frameActions.querySelector("fieldset").disabled = !!group;
+        const groups = layout.groups.filter(g => g.id !== group?.id);
+        frameActions.querySelector('[name="group"]').innerHTML = groups.map(g => `<option value="${esc(g.id)}">${esc(groupName(g))}</option>`).join("");
+        frameActions.querySelector('[data-frame-action="join"]').disabled = !groups.length;
+        const destinations = ORDER.filter(to => to !== id && !connBetween(id, to));
+        frameActions.querySelector('[name="destination"]').innerHTML = destinations.map(to => `<option value="${esc(to)}">${esc(SCREENS[to].name)} · ${esc(SCREENS[to].route)}</option>`).join("");
+        frameActions.querySelector('[data-frame-action="connect"]').disabled = !destinations.length;
+        colOf(id)?.querySelector(".frame-actions").setAttribute("aria-expanded", "true");
+        frameActions.showModal();
+      }
+      frameActions.addEventListener("close", () => {
+        if (actionFrame) {
+          colOf(actionFrame)?.querySelector(".frame-actions").setAttribute("aria-expanded", "false");
+          focusFrame(actionFrame);
+        }
+        actionFrame = null;
+      });
+      frameActions.addEventListener("click", (e) => {
+        const action = e.target.closest("[data-frame-action]")?.dataset.frameAction, id = actionFrame;
+        if (!action || !id) return;
+        if (action === "earlier" || action === "later") editFrame(id, { action: "reorder", delta: action === "earlier" ? -1 : 1 });
+        if (action === "takeOut") removeFromGroup([id]);
+        const delta = { left: [-10, 0], right: [10, 0], up: [0, -10], down: [0, 10] }[action];
+        if (delta) editFrame(id, { action: "nudge", dx: delta[0], dy: delta[1] });
+        if (action === "join") {
+          const groupId = frameActions.querySelector('[name="group"]').value;
+          const changed = commit(() => keyboard.join(id, groupId));
+          toast(changed ? `Moved ${SCREENS[id].name} to ${groupName(groupOf(id))}.` : "That group is no longer available.");
+        }
+        if (action === "connect") {
+          const to = frameActions.querySelector('[name="destination"]').value;
+          if (SCREENS[to] && addConn(id, to, { noEdit: true })) toast(`Connected ${SCREENS[id].name} to ${SCREENS[to].name}.`);
+        }
+        frameActions.close();
+      });
+
       /* put the view back in order without touching what the flows are: group membership and order,
          connectors, names, annotations and every note's text stay; only positions are reset on this device (a finding's
          moved places on every device: they are carried across devices, see below) */
@@ -10508,8 +10787,7 @@
         m.style.left = Math.min(r.left, innerWidth - 260) + "px";
         m.style.top = Math.min(r.bottom + 8, innerHeight - 220) + "px";
         m.style.bottom = "auto";
-        closeMenus();
-        m.classList.add("open");
+        menu("group", btn);
         m.querySelectorAll("[data-ga]").forEach(
           (b) =>
             (b.onclick = (ev) => {
@@ -10892,6 +11170,7 @@
         if (!FrameDom.setState(id, i)) return;
         const b = colOf(id) && colOf(id).querySelector(".states");
         if (b) b.innerHTML = stateLabel(id);
+        updateFrameName(id);
         FrameDom.clearSpot();
         FrameDom.ready(id).then(repaintPanel);
       }
@@ -10905,17 +11184,56 @@
         add: $("#mAdd"),
         group: $("#mGroup"),
       };
-      function menu(n) {
-        Object.entries(menus).forEach(([k, el]) =>
-          el.classList.toggle(
-            "open",
-            k === n && !el.classList.contains("open"),
-          ),
-        );
+      let menuOwner = null;
+      const menuButtons = { space: $("#btnSpace"), views: $("#btnViews"), add: $("#btnAdd") };
+      function closeMenus({ restore = true } = {}) {
+        const hadFocus = Object.values(menus).some(el => el.contains(document.activeElement));
+        Object.values(menus).forEach(el => el.classList.remove("open"));
+        if (menuOwner) menuOwner.setAttribute("aria-expanded", "false");
+        if (restore && hadFocus) menuOwner?.focus({ preventScroll: true });
+        menuOwner = null;
       }
-      function closeMenus() {
-        Object.values(menus).forEach((m) => m.classList.remove("open"));
+      function menu(n, owner = menuButtons[n]) {
+        const popup = menus[n], wasOpen = popup.classList.contains("open") && menuOwner === owner;
+        closeMenus({ restore: false });
+        if (wasOpen) return;
+        menuOwner = owner;
+        owner.setAttribute("aria-expanded", "true");
+        popup.setAttribute("role", "menu");
+        popup.setAttribute("aria-label", owner.getAttribute("aria-label") || owner.title);
+        popup.querySelectorAll("hr").forEach(el => el.setAttribute("role", "separator"));
+        popup.querySelectorAll("button").forEach(button => {
+          button.setAttribute("role", button.dataset.hide ? "menuitemcheckbox" : "menuitem");
+          if (button.dataset.hide) button.setAttribute("aria-checked", String(button.classList.contains("on")));
+          button.tabIndex = -1;
+          button.querySelectorAll("svg").forEach(svg => svg.setAttribute("aria-hidden", "true"));
+        });
+        popup.classList.add("open");
+        popup.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
       }
+      Object.entries(menuButtons).forEach(([name, button]) => {
+        button.setAttribute("aria-haspopup", "menu");
+        button.setAttribute("aria-controls", menus[name].id);
+        button.setAttribute("aria-expanded", "false");
+        button.addEventListener("keydown", e => {
+          if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
+          e.preventDefault(); e.stopPropagation();
+          if (!menus[name].classList.contains("open")) button.click();
+          if (e.key === "ArrowUp") [...menus[name].querySelectorAll("button:not(:disabled)")].at(-1)?.focus();
+        });
+      });
+      Object.values(menus).forEach(popup => popup.addEventListener("keydown", e => {
+        e.stopPropagation();
+        const buttons = [...popup.querySelectorAll("button:not(:disabled)")], index = buttons.indexOf(document.activeElement);
+        let next;
+        if (e.key === "ArrowDown") next = (index + 1) % buttons.length;
+        if (e.key === "ArrowUp") next = (index - 1 + buttons.length) % buttons.length;
+        if (e.key === "Home") next = 0;
+        if (e.key === "End") next = buttons.length - 1;
+        if (next !== undefined) { e.preventDefault(); buttons[next]?.focus(); }
+        if (e.key === "Escape") { e.preventDefault(); closeMenus(); }
+        if (e.key === "Tab") closeMenus();
+      }));
       $("#btnTidy").onclick = (e) => {
         e.stopPropagation();
         closeMenus();
@@ -10935,7 +11253,7 @@
         menu("add");
       };
       document.addEventListener("click", (e) => {
-        if (!e.target.closest(".menu")) closeMenus();
+        if (!e.target.closest(".menu")) closeMenus({ restore: false });
       });
       function buildViews() {
         $("#mViews").innerHTML =
@@ -10961,6 +11279,7 @@
           (b.onclick = (e) => {
             e.stopPropagation();
             const on = b.classList.toggle("on");
+            b.setAttribute("aria-checked", String(on));
             document.body.classList.toggle("hide-" + b.dataset.hide, !on);
           }),
       );
@@ -10970,6 +11289,7 @@
           closeMenus();
           if (a === "note") newNote();
           if (a === "group") groupSel();
+          if (a === "connect") { if (selection.count() > 1) connectSel(); else if (selection.primary()) openFrameActions(selection.primary()); }
           if (a === "tidy") tidy();
           if (a === "resetlayout") resetLayout();
           if (a === "resetann") resetAnn();
@@ -11021,7 +11341,8 @@
         true,
       );
       addEventListener("keydown", (e) => {
-        const typing = e.target.closest?.("input,select,[contenteditable]");
+        if (e.defaultPrevented || e.target.closest?.("dialog[open],.menu")) return;
+        const typing = e.target.closest?.("input,select,textarea,[contenteditable]");
         const mod = e.metaKey || e.ctrlKey;
         if (mod && e.key.toLowerCase() === "k") {
           e.preventDefault();
@@ -11058,6 +11379,7 @@
           return;
         }
         if (e.key === "Escape") {
+          if (Object.values(menus).some(m => m.classList.contains("open"))) { e.preventDefault(); closeMenus(); return; }
           if (pointer.cancelConnect()) return;
           if (selection.conn()) {
             selection.clearConn();
@@ -11075,7 +11397,7 @@
           else if (selection.count()) select(null);
           return;
         }
-        if (typing) return;
+        if (typing || mod || e.altKey || e.shiftKey) return;
         if (e.key === "c" && selection.count() > 1) {
           connectSel();
           return;
