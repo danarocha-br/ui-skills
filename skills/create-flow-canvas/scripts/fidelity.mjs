@@ -11,6 +11,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadPlaywright, launchBrowser } from "./lib/playwright.mjs";
 import { slug } from "./lib/scenarios.mjs";
+import { refScreenId } from "./lib/refs.mjs";
 import { diffPixels } from "./lib/pixels.mjs";
 import { DEVICES, screenDocument } from "./lib/devices.mjs";
 
@@ -55,6 +56,8 @@ async function main() {
   const outFile = values.out ?? path.join(values.refs, "fidelity.json");
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
 
+  let captured = null;
+  try { captured = JSON.parse(fs.readFileSync(path.join(values.refs, "capture.json"), "utf8")).screens; } catch { /* no capture.json beside the references: ids are used as they are */ }
   const browser = await launchBrowser(loadPlaywright());
   const rows = [];
   try {
@@ -66,7 +69,7 @@ async function main() {
         if (!renders) continue; /* a state the scan knows of but could not reach */
         for (const [device, { width, height, cls }] of Object.entries(DEVICES)) {
           if (!renders[device]) continue; /* limited to other devices; a failed capture is reported by capture.mjs */
-          const name = `${screen.id}-${slug(state.name)}-${device}`;
+          const name = `${refScreenId(screen, captured)}-${slug(state.name)}-${device}`;
           const refFile = path.join(values.refs, `ref-${name}.png`);
           if (!fs.existsSync(refFile)) {
             rows.push({ name, missing: true });

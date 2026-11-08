@@ -72,6 +72,11 @@ export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
       errors.push(`${name} has no frame: no render on any device and no "unrendered" reason to give it a placeholder.`);
     else if (rendered.length && rendered.length < devices.length)
       warnings.push(`${name} has no render for ${devices.filter((d) => !rendered.includes(d)).join(", ")}; those devices show a blank screen.`);
+    (Array.isArray(s.states) ? s.states : []).forEach((st, i) => {
+      if (!i || !st || typeof st !== "object" || !st.html || typeof st.html !== "object") return;
+      const missing = devices.filter((d) => !(typeof st.html[d] === "string" && st.html[d].trim()));
+      if (missing.length && missing.length < devices.length) warnings.push(`${name}, state "${st.name}" has no render for ${missing.join(", ")}; those devices show a blank frame when it is chosen.`);
+    });
   }
   const connected = new Set((Array.isArray(json.links) ? json.links : []).filter((l) => l && ids.has(l.from) && ids.has(l.to)).map((l) => `${l.from}>${l.to}`));
   for (const l of Array.isArray(json.links) ? json.links : []) {

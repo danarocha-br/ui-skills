@@ -133,3 +133,13 @@ test("a canvas module that never finishes loading fails with a timeout message i
   assert.match(e, /did not finish loading within 200 ?ms/);
   assert.ok(Date.now() - t0 < 5000);
 });
+
+test("a state that has no render on some device warns that those devices show a blank frame", async () => {
+  const html = edit(await good(), (scan) => {
+    const a = scan.screens[0];
+    a.states = [a.states[0], { name: "dialog", html: { desktop: "<p>d</p>" } }];
+  });
+  const r = validate(html);
+  assert.deepEqual([...r.errors], []);
+  assert.match(r.warnings.join("\n"), /state "dialog".*mobile, tablet.*blank/);
+});
