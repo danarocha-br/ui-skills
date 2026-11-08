@@ -38,6 +38,19 @@ test("a step must be a known action", () => {
   assert.throws(() => readScenarios({ screens: [screen({ states: [{ name: "open", steps: [{ tap: "b" }] }] })] }), /step 1/);
 });
 
+test("a step needs something to act on", () => {
+  const withStep = (step) => ({ screens: [screen({ states: [{ name: "open", steps: [step] }] })] });
+  assert.throws(() => readScenarios(withStep({ click: "" })), /step 1/);
+  assert.throws(() => readScenarios(withStep("click")), /step 1/);
+  assert.throws(() => readScenarios(withStep({ wait: "soon" })), /step 1/);
+});
+
+test("a state may be limited to the devices where its control exists", () => {
+  const states = [{ name: "menu", devices: ["desktop"] }];
+  assert.doesNotThrow(() => readScenarios({ screens: [screen({ states })] }));
+  assert.throws(() => readScenarios({ screens: [screen({ states: [{ name: "menu", devices: ["watch"] }] })] }), /watch/);
+});
+
 test("a state's persona and scenario become cookies under the project's names", () => {
   assert.deepEqual(
     stateCookies({ persona: "pro", scenario: "empty" }, { persona: "who", scenario: "what" }),
@@ -46,7 +59,7 @@ test("a state's persona and scenario become cookies under the project's names", 
   assert.deepEqual(stateCookies({ name: "plain" }, { persona: "who", scenario: "what" }), []);
 });
 
-test("state names become the same file-safe names the spike used", () => {
+test("state names become file-safe", () => {
   assert.equal(slug("signed in"), "signed_in");
 });
 

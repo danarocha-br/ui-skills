@@ -66,7 +66,8 @@ export function selectorProbe(selector) {
 }
 
 /* A CSSRuleList as plain data, marking which rules are in use. `matches(selector)` asks the document; a selector it
-   cannot parse (another browser's prefix, say) is kept. Grouping rules are walked; other at-rules are kept whole. */
+   cannot parse (another browser's prefix, say) is kept. Grouping rules are walked; other at-rules are kept whole.
+   Each becomes { s: selector, t: text, u: in use }, { g: head, c: children } or { t: text, u: true }. */
 export function walkRules(rules, matches) {
   const inUse = (selector) => {
     const probe = selectorProbe(selector);

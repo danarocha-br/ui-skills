@@ -11,6 +11,7 @@ import { componentName, declaredComponents } from "../scripts/lib/components.mjs
 import { fitsBudget } from "../scripts/lib/budget.mjs";
 import { diffPixels } from "../scripts/lib/pixels.mjs";
 import { loadPlaywright } from "../scripts/lib/playwright.mjs";
+import { DEVICES, screenDocument } from "../scripts/lib/devices.mjs";
 
 const inFrozenWorld = (code, options = { now: "2026-01-15T12:00:00.000Z", seed: 42 }) =>
   vm.runInNewContext(`(${freezeClockAndRandom})(${JSON.stringify(options)}); ${code}`);
@@ -32,6 +33,14 @@ test("the clock stands still in every way of asking it", () => {
   assert.equal(inFrozenWorld("Date.now()"), Date.UTC(2026, 0, 15, 12));
   assert.equal(inFrozenWorld("new Date().toISOString()"), "2026-01-15T12:00:00.000Z");
   assert.match(inFrozenWorld("Date()"), /2026/);
+});
+
+test("generated UUIDs repeat too", () => {
+  const draw = `globalThis.crypto = { randomUUID: () => "real" }; (${freezeClockAndRandom})({ now: 0, seed: 7 }); [crypto.randomUUID(), crypto.randomUUID()]`;
+  const [first, second] = vm.runInNewContext(draw);
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(first, second);
+  assert.deepEqual([...vm.runInNewContext(draw)], [first, second]);
 });
 
 test("explicit dates and subclasses still work", () => {
@@ -66,6 +75,17 @@ test("an item fits only within its own and the running limit", () => {
   assert.equal(fitsBudget(100, 0, limits), true);
   assert.equal(fitsBudget(101, 0, limits), false);
   assert.equal(fitsBudget(100, 200, limits), false);
+});
+
+test("device sizes and the screen document match the engine they stand in for", () => {
+  const engine = fs.readFileSync(new URL("../assets/flow-canvas.html", import.meta.url), "utf8");
+  for (const { width, height, cls } of Object.values(DEVICES)) {
+    assert.match(engine, new RegExp(`viewport: \\[${width}, ${height}\\][^\\n]*cls: "${cls}"`));
+  }
+  const shell = screenDocument("", "", "", "x").replace(/\s+/g, "");
+  for (const rule of [...engine.matchAll(/html\{width:100%[\s\S]*?overscroll-behavior:contain\}/g)]) {
+    assert.ok(shell.includes(rule[0].replace(/\s+/g, "")));
+  }
 });
 
 const rgba = (...pixels) => Uint8ClampedArray.from(pixels.flatMap((p) => [p, p, p, 255]));

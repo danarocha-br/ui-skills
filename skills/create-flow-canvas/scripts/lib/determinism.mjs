@@ -21,4 +21,8 @@ export function freezeClockAndRandom({ now, seed }) {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+  if (globalThis.crypto?.randomUUID) {
+    const hex = (count) => Array.from({ length: count }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+    crypto.randomUUID = () => `${hex(8)}-${hex(4)}-4${hex(3)}-${"89ab"[Math.floor(Math.random() * 4)]}${hex(3)}-${hex(12)}`;
+  }
 }

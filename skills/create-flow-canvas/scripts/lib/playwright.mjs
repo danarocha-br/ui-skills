@@ -25,9 +25,10 @@ export function loadPlaywright({ env = process.env, roots } = {}) {
       throw new Error(`FLOW_PLAYWRIGHT=${env.FLOW_PLAYWRIGHT} could not be loaded: ${error.message}`);
     }
   }
-  const searched = roots ?? [process.cwd(), SKILL_ROOT, globalRoot() && path.join(globalRoot(), "x")].filter(Boolean);
+  const global = roots ? null : globalRoot();
+  const searched = roots ?? [process.cwd(), SKILL_ROOT, global].filter(Boolean);
   for (const root of searched) {
-    const fromRoot = createRequire(path.join(root, "noop.js"));
+    const fromRoot = createRequire(path.join(root, "x", "noop.js")); /* so a global node_modules folder is searched too */
     for (const name of PACKAGES) {
       try {
         return fromRoot(name);

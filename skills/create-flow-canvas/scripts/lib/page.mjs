@@ -41,10 +41,14 @@ function tagComponents(names) {
 
 function readSheets() {
   const matches = (selector) => document.querySelector(selector.trim() || "*");
-  const inlineKey = (text) => "inline:" + [...text].reduce((hash, c) => (hash * 31 + c.charCodeAt(0)) | 0, 7);
+  const inlineKey = (sheet) => {
+    /* a sheet filled through insertRule has no text of its own, so its rules name it */
+    const text = sheet.ownerNode?.textContent || [...sheet.cssRules].map((rule) => rule.cssText).join("");
+    return "inline:" + [...text].reduce((hash, c) => (hash * 31 + c.charCodeAt(0)) | 0, 7);
+  };
   return [...document.styleSheets].flatMap((sheet) => {
     try {
-      return [{ key: sheet.href || inlineKey(sheet.ownerNode?.textContent || ""), href: sheet.href || location.href, rules: walkRules(sheet.cssRules, matches) }];
+      return [{ key: sheet.href || inlineKey(sheet), href: sheet.href || location.href, rules: walkRules(sheet.cssRules, matches) }];
     } catch {
       return sheet.href ? [{ key: sheet.href, href: sheet.href, raw: true }] : []; /* cross-origin: fetched at assembly */
     }
@@ -71,7 +75,7 @@ function signalFacts() {
       text: (element.textContent || "").slice(0, 300),
     })),
     textLength: bodyText.trim().length,
-    elementCount: body.querySelectorAll("*").length,
+    elementCount: body.querySelectorAll("*:not(script,style,link,noscript,template)").length,
     mediaCount: body.querySelectorAll("img,canvas,video").length,
     bodyText: bodyText.slice(0, 5000),
   };
@@ -108,33 +112,10 @@ async function capturePage({ names, budgets }) {
     return null;
   });
 
-  const imageData = new Map();
-  for (const image of document.querySelectorAll("img")) {
-    const url = image.currentSrc || image.src;
-    if (!url || url.startsWith("data:")) continue;
-    if (imageData.has(image)) continue;
-    try {
-      const blob = await (await fetch(url)).blob();
-      if (reserve(blob.size)) imageData.set(image, await toDataUrl(blob));
-      else dropped.push(url);
-    } catch {
-      dropped.push(url);
-    }
-  }
-  const liveImages = [...document.querySelectorAll("img")];
-
+  /* cloned before any await, so the live lists and the copy still line up one to one */
   const clone = document.body.cloneNode(true);
+  const liveImages = [...document.querySelectorAll("img")];
   const clonedImages = [...clone.querySelectorAll("img")];
-  clonedImages.forEach((image, i) => {
-    const data = imageData.get(liveImages[i]);
-    image.removeAttribute("srcset");
-    image.removeAttribute("data-nimg");
-    if (data) image.src = data;
-    else if (!(image.getAttribute("src") || "").startsWith("data:")) {
-      image.removeAttribute("src");
-      image.style.background = PLACEHOLDER;
-    }
-  });
   [...clone.querySelectorAll("canvas")].forEach((copy, i) => {
     const image = document.createElement("img");
     if (canvasImages[i]) image.src = canvasImages[i];
@@ -143,6 +124,7 @@ async function capturePage({ names, budgets }) {
     image.className = liveCanvases[i].className;
     image.width = liveCanvases[i].width;
     image.height = liveCanvases[i].height;
+    if (copy.hasAttribute("data-flow-c")) image.setAttribute("data-flow-c", copy.getAttribute("data-flow-c"));
     copy.replaceWith(image);
   });
   const liveFields = [...document.querySelectorAll("input,textarea,select")];
@@ -155,6 +137,31 @@ async function capturePage({ names, budgets }) {
   });
   clone.querySelectorAll("script,noscript,link,style[data-next-hide-fouc],iframe,nextjs-portal,vite-error-overlay,#webpack-dev-server-client-overlay").forEach((node) => node.remove());
   clone.querySelectorAll("a[href]").forEach((link) => link.setAttribute("data-flow-href", link.getAttribute("href")));
+
+  let inlinedImages = 0;
+  for (const [i, image] of clonedImages.entries()) {
+    const url = liveImages[i].currentSrc || liveImages[i].src;
+    image.removeAttribute("srcset");
+    image.removeAttribute("data-nimg");
+    if (url.startsWith("data:")) continue;
+    let data = null;
+    if (url) {
+      try {
+        const blob = await (await fetch(url)).blob();
+        if (reserve(blob.size)) data = await toDataUrl(blob);
+        else dropped.push(url);
+      } catch {
+        dropped.push(url);
+      }
+    }
+    if (data) {
+      image.src = data;
+      inlinedImages++;
+    } else {
+      image.removeAttribute("src");
+      image.style.background = PLACEHOLDER;
+    }
+  }
 
   const style = getComputedStyle(document.body);
   return {
@@ -171,7 +178,7 @@ async function capturePage({ names, budgets }) {
     scrollH: document.documentElement.scrollHeight,
     title: document.title,
     components,
-    inlined: { images: imageData.size, canvases: canvasImages.filter(Boolean).length, bytes: Math.round(inlinedBytes), dropped },
+    inlined: { images: inlinedImages, canvases: canvasImages.filter(Boolean).length, bytes: Math.round(inlinedBytes), dropped },
     facts,
   };
 }
