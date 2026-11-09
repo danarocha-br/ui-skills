@@ -11,10 +11,10 @@ export function textColors() {
     const length = node.textContent.replace(/\s+/g, "").length;
     if (!length) continue;
     const style = getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden") continue;
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
     counts[style.color] = (counts[style.color] || 0) + length;
   }
-  return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 24));
+  return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 60));
 }
 
 /* The share of the expected characters (in percent) that are no longer in their colour, and the three colours that lost the most. */

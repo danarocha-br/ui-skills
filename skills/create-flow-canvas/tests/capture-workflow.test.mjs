@@ -25,6 +25,7 @@ test("redirectOf compares path and query, and ignores a trailing slash and the h
   assert.equal(redirectOf("/a?x=1", "http://localhost:3210/a?x=1"), null);
   assert.deepEqual(redirectOf("/a?x=1", "http://localhost:3210/b"), { requested: "/a?x=1", final: "/b" });
   assert.deepEqual(redirectOf("/a", "http://localhost:3210/a?next=%2F"), { requested: "/a", final: "/a?next=%2F" });
+  assert.equal(redirectOf("/a?x=1&y=2", "http://localhost:3210/a?y=2&x=1"), null, "query order is not a redirect");
 });
 
 test("a signal a state lists as acknowledged no longer shows, and others still do", () => {
@@ -92,6 +93,7 @@ test("a closed browser is told from an ordinary failed capture", () => {
   assert.ok(isBrowserGone(new Error("page.goto: Target page, context or browser has been closed")));
   assert.ok(isBrowserGone(new Error("browserContext.newPage: Browser closed.")));
   assert.ok(isBrowserGone(new Error("Protocol error (Target.createTarget): Target closed")));
+  assert.ok(isBrowserGone(new Error("page.screenshot: Page crashed")));
   assert.ok(!isBrowserGone(new Error("page.click: Timeout 10000ms exceeded waiting for selector")));
 });
 

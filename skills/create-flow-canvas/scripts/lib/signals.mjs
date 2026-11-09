@@ -5,7 +5,7 @@
 /* Where a page ended up when it was not where it was sent: null when it stayed. Path and query count, the hash and a
    trailing slash do not. A client-side redirect (a router.push after load) shows up here, not as a failed capture. */
 export function redirectOf(requested, finalUrl) {
-  const norm = (u) => { const url = new URL(u, "http://flow.invalid"); return (url.pathname.replace(/\/+$/, "") || "/") + url.search; };
+  const norm = (u) => { const url = new URL(u, "http://flow.invalid"); url.searchParams.sort(); return (url.pathname.replace(/\/+$/, "") || "/") + url.search; };
   try {
     return norm(requested) === norm(finalUrl) ? null : { requested, final: norm(finalUrl) };
   } catch { return null; }

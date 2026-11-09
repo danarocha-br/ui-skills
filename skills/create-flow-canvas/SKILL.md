@@ -23,7 +23,7 @@ These protect the user's project and data, and every step depends on them.
 
 ## Prerequisites
 
-Node 22 or newer. Playwright is not a dependency of this skill; capture looks for it in the current folder, the skill and the global npm root, or at `FLOW_PLAYWRIGHT` if you set it, and uses the machine's Chrome if there is one. Below, `$SKILL` is this skill's directory, as an absolute path.
+Node 22 or newer. Playwright is not a dependency of this skill; capture looks for it at `FLOW_PLAYWRIGHT` if you set it, then at the path in `.flow-canvas/playwright-path` if that file exists (a stale path there is an error, not skipped), then in the current folder, the skill and the global npm root, and uses the machine's Chrome if there is one. Below, `$SKILL` is this skill's directory, as an absolute path.
 
 ## Workflow
 
@@ -49,7 +49,7 @@ Read `package.json` and the lockfile. **Next.js is the tested path.** Other Reac
 
 Install from the lockfile with lifecycle scripts off, since this is code you are about to run with no review: `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, or for Yarn `yarn install --immutable --mode=skip-build` (Yarn 1: `yarn install --frozen-lockfile --ignore-scripts`). If a native package then fails to load, rebuild only that one.
 
-If Playwright isn't available, install it into an empty temp folder, not into the copy: `P="$(mktemp -d)"; (cd "$P" && npm init -y >/dev/null && npm i playwright)`, then record where it is so every later command finds it: `mkdir -p .flow-canvas && echo "$P/node_modules/playwright" > .flow-canvas/playwright-path`. (A plain `npm i --no-save playwright` inside a pnpm project fails, and an exported `FLOW_PLAYWRIGHT` doesn't survive to the next command; the scripts read the file, and `FLOW_PLAYWRIGHT` still wins if set.)
+If Playwright isn't available, install it into an empty temp folder, not into the copy: `P="$(mktemp -d)"; (cd "$P" && npm init -y >/dev/null && npm i playwright)`, then record where it is so every later command finds it, from the app folder (the one you run the scripts in, which in a monorepo is not the workspace root where the install ran): `mkdir -p .flow-canvas && echo "$P/node_modules/playwright" > .flow-canvas/playwright-path`. (A plain `npm i --no-save playwright` inside a pnpm project fails, and an exported `FLOW_PLAYWRIGHT` doesn't survive to the next command; the scripts read the file, and `FLOW_PLAYWRIGHT` still wins if set.)
 
 ### 3. Find routes and write mocks
 
@@ -63,7 +63,7 @@ cp -R .flow-canvas/mocks/. ./
 cp .flow-canvas/env.fake .env.local
 ```
 
-**Where mocks go in a monorepo.** Mocks mirror paths from the app folder. A seam that lives in a sibling package (`packages/auth`, `packages/database`) is outside it, so keep those under `.flow-canvas/mocks/_root/`, mirroring paths from the workspace root, and copy them with a second command (`cp -R .flow-canvas/mocks/_root/. ../../`, from the app folder, adjusting the number of levels). The first command would otherwise create a literal `_root` folder in the app, so exclude it: `rsync -a --exclude _root .flow-canvas/mocks/ ./` does both jobs.
+**Where mocks go in a monorepo.** Mocks mirror paths from the app folder. A seam that lives in a sibling package (`packages/auth`, `packages/database`) is outside it, so keep those under `.flow-canvas/mocks/_root/`, mirroring paths from the workspace root, and copy them with a second command (`cp -R .flow-canvas/mocks/_root/. ../../`, from the app folder, adjusting the number of levels). With a `_root` folder present, the first command would also create a literal `_root` folder in the app, so use `rsync -a --exclude _root .flow-canvas/mocks/ ./` in its place (the `.env.local` copy stays). Run both from the app folder, after the `pwd` check.
 
 Keeping them apart from the source is what makes them reusable on the next regeneration. Start the server, with the outside network blocked and on a port you pick:
 

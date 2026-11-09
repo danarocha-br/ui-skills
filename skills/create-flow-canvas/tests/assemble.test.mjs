@@ -451,9 +451,10 @@ test("two stylesheets that give the same selector different values are each scop
   const b = scan.screens.find((s) => s.id === "items-id").html.desktop;
   const idA = a.match(/data-fsh="([^"]+)"/)?.[1], idB = b.match(/data-fsh="([^"]+)"/)?.[1];
   assert.ok(idA && idB && idA !== idB, "each frame names the sheets it loaded");
-  assert.ok(css.includes(`:where([data-fsh~="${idA}"]) .k{color:red}`), "theme A rules apply only inside frames that loaded theme A");
-  assert.ok(css.includes(`:where([data-fsh~="${idB}"]) .k{color:purple}`), "theme B likewise");
-  assert.ok(css.includes(`:where([data-fsh~="${idA}"]) .only-themeA{top:0}`), "all of a conflicting sheet is scoped, so its order is kept");
+  const both = (id, sel, body) => `:where([data-fsh~="${id}"]) ${sel}, ${sel}:where([data-fsh~="${id}"])${body}`;
+  assert.ok(css.includes(both(idA, ".k", "{color:red}")), "theme A rules apply only inside frames that loaded theme A");
+  assert.ok(css.includes(both(idB, ".k", "{color:purple}")), "theme B likewise");
+  assert.ok(css.includes(both(idA, ".only-themeA", "{top:0}")), "all of a conflicting sheet is scoped, so its order is kept");
 });
 
 test("a stylesheet that disagrees with no other stays global, with no attribute on the frames", async () => {
@@ -467,6 +468,20 @@ test("a stylesheet that disagrees with no other stays global, with no attribute 
   assert.match(styleOf(out.html), /\.a\{color:red\}/);
 });
 
+test("a scoped sheet's theme-class selectors still match the frame itself, which carries both the scope and the theme class", async () => {
+  const c = themed();
+  c.screens[0].captures.default.desktop.sheets[0].rules.push(
+    { s: ".dark .k", t: ".dark .k{color:white}", u: true },
+    { s: ".dark", t: ".dark{color:silver}", u: true },
+    { s: "*::before", t: "*::before{content:''}", u: true },
+  );
+  const css = styleOf((await run(c)).html);
+  assert.match(css, /\.dark:where\(\[data-fsh~="s1"\]\) \.k/, "the theme class on the wrapper itself");
+  assert.match(css, /:where\(\[data-fsh~="s1"\]\) \.dark \.k/, "and below it");
+  assert.match(css, /\.dark:where\(\[data-fsh~="s1"\]\)\{color:silver\}/, "a lone theme class is the wrapper");
+  assert.doesNotMatch(css, /::before:where/, "a pseudo-element is never followed by :where, which would invalidate the rule");
+});
+
 test("scoping leaves :root rules, at-rules and nested rules in a scoped sheet working", async () => {
   const c = themed();
   c.screens[0].captures.default.desktop.sheets[0].rules.push(
@@ -475,5 +490,5 @@ test("scoping leaves :root rules, at-rules and nested rules in a scoped sheet wo
   );
   const css = styleOf((await run(c)).html);
   assert.match(css, /:root, \.flow-root\{--x:1\}/, "root tokens still reach the wrapper, unscoped");
-  assert.match(css, /@media \(min-width: 1px\)\{:where\(\[data-fsh~="[^"]+"\]\) \.k, :where\(\[data-fsh~="[^"]+"\]\) \.j\{margin:0\}/);
+  assert.match(css, /@media \(min-width: 1px\)\{:where\(\[data-fsh~="[^"]+"\]\) \.k, \.k:where\(\[data-fsh~="[^"]+"\]\), :where\(\[data-fsh~="[^"]+"\]\) \.j, \.j:where\(\[data-fsh~="[^"]+"\]\)\{margin:0\}/);
 });

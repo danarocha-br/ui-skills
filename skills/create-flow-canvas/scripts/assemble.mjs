@@ -218,7 +218,27 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     if (!id || typeof r.s !== "string" || r.t[0] === "@" || !r.t.startsWith(r.s)) return r.t;
     const parts = topLevelCommas(r.s).map((x) => x.trim());
     const hasRoot = (x) => /(^|[\s>+~(])(:root|html|body)(?![\w-])/.test(x);
-    return parts.map((x) => (hasRoot(x) ? x : `:where([data-fsh~="${id}"]) ${x}`)).join(", ") + r.t.slice(r.s.length);
+    const scope = `:where([data-fsh~="${id}"])`;
+    /* the wrapper carries the scope and the product's own root classes (dark, theme-x) on one element, so ".dark .k"
+       must also match with ".dark" on the wrapper itself: the scope goes after the first compound as well. A
+       pseudo-element cannot be followed by :where, so a first compound with one gets only the descendant form. */
+    const firstCompound = (x) => {
+      let depth = 0, quote = "";
+      for (let i = 0; i < x.length; i++) {
+        const ch = x[i];
+        if (quote) { if (ch === "\\") i++; else if (ch === quote) quote = ""; }
+        else if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === "(" || ch === "[") depth++;
+        else if (ch === ")" || ch === "]") depth--;
+        else if (!depth && /[\s>+~]/.test(ch)) return i;
+      }
+      return x.length;
+    };
+    return parts.map((x) => {
+      if (hasRoot(x)) return x;
+      const i = firstCompound(x), head = x.slice(0, i);
+      return head && !head.includes("::") && !/:(before|after|first-line|first-letter)\b/.test(head) ? `${scope} ${x}, ${head}${scope}${x.slice(i)}` : `${scope} ${x}`;
+    }).join(", ") + r.t.slice(r.s.length);
   };
 
   /* ---------- 2. css, with fonts and images inlined within budget ---------- */

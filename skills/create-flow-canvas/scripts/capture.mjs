@@ -148,7 +148,7 @@ async function main() {
   if (!(loadTimeout > 0)) throw new Error(`--timeout must be a number of milliseconds, got "${values.timeout}"`);
   const todo = only ? config.screens.filter((screen) => only.includes(screen.id)) : config.screens;
 
-  const playwright = loadPlaywright();
+  const playwright = loadPlaywright({ cwd: projectRoot });
   let browser = await launchBrowser(playwright);
   const tally = { blocked: {}, assets: {}, escaped: {}, socketsGuarded: false };
   const result = { screens: [], blocked: tally.blocked, assets: tally.assets, escaped: tally.escaped, errors: [] };
@@ -156,7 +156,9 @@ async function main() {
     /* a cold dev-server route can take minutes to compile; ask once, patiently, so the capture's own limit is for the page */
     for (const screen of todo) {
       const began = Date.now();
-      await fetch(base + screen.url, { redirect: "manual", signal: AbortSignal.timeout(300_000) }).then((r) => r.arrayBuffer()).catch(() => null);
+      /* with the first state's cookies, so a route behind a login warms the page and not the login screen */
+      const cookie = stateCookies(screen.states[0], config.cookies).map(({ name, value }) => `${name}=${value}`).join("; ");
+      await fetch(base + screen.url, { redirect: "manual", headers: cookie ? { cookie } : {}, signal: AbortSignal.timeout(300_000) }).then((r) => r.arrayBuffer()).catch(() => null);
       const took = Date.now() - began;
       if (took > 5000) console.log(`warmed ${screen.url} (${Math.round(took / 1000)}s)`);
     }

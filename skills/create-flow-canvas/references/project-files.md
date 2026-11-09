@@ -2,6 +2,8 @@
 
 Read this while writing `.flow-canvas/scenarios.json` (step 4) or `.flow-canvas/flows.json` (step 6). `capture-format.md` describes what the scripts write between them; you rarely need it.
 
+`.flow-canvas/playwright-path` (one line, the folder of an installed Playwright) is not a project file you commit: it records where this machine's Playwright is for the scripts, so keep it out of the repository.
+
 ## scenarios.json: what to capture
 
 ```json

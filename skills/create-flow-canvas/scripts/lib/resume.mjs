@@ -19,4 +19,4 @@ export function mergeResume(previous, fresh, only, configured) {
 }
 
 /* Chrome can die mid-run (memory, a machine under load); the capture that was running did not fail on its merits. */
-export const isBrowserGone = (error) => /has been closed|browser closed|target closed|browser has disconnected|Connection closed/i.test(String(error?.message ?? error));
+export const isBrowserGone = (error) => /has been closed|browser closed|target closed|target crashed|page crashed|browser has disconnected|Connection closed/i.test(String(error?.message ?? error));
