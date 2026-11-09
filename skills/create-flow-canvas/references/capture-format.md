@@ -1,6 +1,6 @@
 # Contract between scripts/capture.mjs and scripts/assemble.mjs
 
-Capture writes `.flow-canvas/capture/capture.json`. Starting shape is what the spike produced:
+Read this when changing either script, or when debugging a capture by reading its JSON. Capture writes `.flow-canvas/capture/capture.json`:
 
 { screens: [{ id, route, url, states: [{ name, persona }],
     captures: { "<state name>": { "<mobile|tablet|desktop>": {
@@ -12,8 +12,6 @@ Capture writes `.flow-canvas/capture/capture.json`. Starting shape is what the s
 Rule is { s, t, u } (style rule: selector, text, used), { g, c: [Rule] } (grouping rule: head, children) or { t, u: true } (other at-rules).
 `html` carries `data-flow-c="Name Name"` and `data-flow-href`.
 
-## Added by the capture session (scripts/capture.mjs); everything above is unchanged
-
 Each capture (`captures[state][device]`) also has:
 - `scrollH` (number), as the spike had
 - `pageErrors: [string]`, uncaught page errors, at most 5
@@ -22,7 +20,7 @@ Each capture (`captures[state][device]`) also has:
 - `inlined: { images, canvases, bytes, dropped: [url or "canvas"] }`. A dropped image has no `src` and a grey background
 
 Top level:
-- `errors` is now `[{ screen, state, device, message }]`. A failed capture is absent from `captures`, so the assembler must tolerate a missing device
+- `errors` is `[{ screen, state, device, message }]`. A failed capture is absent from `captures`, so the assembler must tolerate a missing device
 - `errors[]` entries also carry `pageErrors: [string]`
 - `socketsGuarded: boolean`
 - `escaped: { host: count }`, outside hosts reached by a redirect from the app (Playwright cannot route those)
@@ -32,5 +30,3 @@ Top level:
 Next to capture.json: `report.json` (same run, no page bodies) and `ref-<screen>-<state slug>-<device>.png`, slug being `name.replace(/\W/g, "_")`.
 
 scripts/fidelity.mjs reads the assembled canvas's `flow-scan` and `flow-scan-styles` blocks, expecting `screens[].html[device]` for the first state and `screens[].states[i].html[device]` for later ones.
-
-Either session may extend this file. Say so here if a field changes, and in your final report.

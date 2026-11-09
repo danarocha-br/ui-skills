@@ -1,67 +1,191 @@
 ---
 name: create-flow-canvas
-description: Build an interactive flow canvas, a single HTML file, from a scanned codebase. It shows a product's real screens grouped into flows, with connectors, notes, scanner findings, an Inspect panel and mobile/tablet/desktop switching. Use when someone wants to see, review or document a product's flows from its code.
+description: Turn a web app's codebase into one self-contained interactive HTML canvas of its real screens, grouped into user flows, at mobile, tablet and desktop size, with states, personas, connectors and findings. It renders the actual frontend code from a throwaway copy with mocked auth and data, so it needs no login, credentials or running backend. Use this whenever someone wants to see, map, review, audit, document or hand off a product's screens or user flows from its code, asks for a flow map, screen inventory, sitemap of screens or "all our pages in one place", or wants to regenerate an existing `.flow-canvas/` canvas, even if they never say "canvas".
 ---
 
 # Create flow canvas
 
-Turns a codebase into one self-contained HTML canvas: screens laid out as frames, grouped into flows, tied together by connectors, with editable annotations on top. Open the file in a browser; nothing else to install.
+Given a codebase, produce one HTML file that shows its real screens as frames on a canvas, grouped by user journey. Opening the file needs nothing else: no server, no login. The reader can pan, switch device and state, inspect components, move things and leave notes.
 
-## Status: draft
+You do the reasoning: what the routes are, where to mock, which states matter, how the journeys read. Scripts do the mechanics: capture, assembly, pixel check and validation.
 
-`assets/flow-canvas.html` is the reference build, made around a fictional plant-care app ("Loam"). The scanner and generator are not written yet. The engine and the scan are separate inside the one file (see "The scan" below).
+The main idea is that you have the source, so you don't need an account or a backend. Replace the few files where the app meets the outside world, run the rest for real, and snapshot what the browser shows.
 
-Done so far: the layout (groups, positions per device, connectors, findings, notes, id counters, undo history) has one owner, the `FlowLayout` module, in its own `<script id="layout-module">` block at the top of the canvas. It has no DOM and no demo knowledge, and `tests/layout.test.mjs` runs it on its own: `node --test skills/create-flow-canvas/tests/layout.test.mjs`. Everything the scan provides (groups and their frames, connectors, findings, notes, frame captions) is saved the same way, as the user's edits over the scan, under one key and in one undo history; nothing is a separate store. Every edit ends in one place too: the `FlowCommit` module (`<script id="commit-module">`) owns the undo point, the save and the redraw, in a fixed order. The layout also owns its writes: what it holds is read-only from outside, every change goes through one of its mutators (`place`, `takeOut`, `moveInto`, `groupFrames`, `orderGroups`, `setGroupText`, `resetText`, `add`, `edit`, `remove`, `letGoOfMoves`, and `setOpen` for view state), and the page is strict code, so a stray write throws; `tests/layout-writes.test.mjs` pins the mutators and `tests/layout-owner.test.mjs` fails if the page script writes to the layout, or to a group, note, connector or finding under the names it uses for them, or hangs a DOM handle on a group (the page keeps its own `groupEls`); a write through some other alias is not caught by that test, but throws as soon as it runs. Because every write is counted, the snapshot is worked out once per change. Open or closed groups are view state, kept in a record of their own: saved with the layout so they come back after a reload, but never in a snapshot or an undo step, so undo does not flip them. Typing in a note, a caption or a group's title goes through the commit too (`commit.typing`): each key writes through a mutator, the text is saved a moment after the last key, and leaving the field is one undo step. The commit also redraws what the mutators say they touched, so a caller names only what it knows the layout cannot. What the annotation kinds share lives in a third module, `FlowAnnotations` (`<script id="annotations-module">`): the one drag for annotations (frames, groups, panning and connector drawing have their own), with one threshold and a real cancel, arrow-key moves, one Delete path, a `typing` guard the page supplies, and one "is this an annotation" check. A kind (notes, findings, connectors, captions) is one object that the page declares once, in `KINDS`, and hands to `FlowLayout` (its data half: the layout field, the scan's items, cleaning on load, which Reset applies), `FlowCommit` (its `refresh`, drawn in the order of the list) and `FlowAnnotations` (how it is found, grabbed, moved and deleted, by id; a kind that has DOM keeps its own id-to-DOM lookup, so nothing outside it holds a node). The data halves of the four kinds a scan provides are `FlowScan.dataKinds`. So a new kind is one more object in that list, and `tests/kinds.test.mjs` proves it with a throwaway fifth kind that needs nothing else in the engine; only a kind the scan itself provides would also need a place in the scan's shape. Findings carry across devices the way notes do. Dragging frames or a group has its own too, `FlowGesture` (`<script id="gesture-module">`): the drag holds a proposal outside the layout, the canvas draws the layout as it would be (`gesture.view()`), and the drop commits once; Escape and a taken-away pointer throw the proposal away, so there is nothing to restore. Group-making is one data change, `layout.groupFrames`, shared by ⌘G and a drop onto a frame. The edits that move frames about as a whole (tidy, taking frames out of their groups, dissolving a group) are `FlowArrange` (`<script id="arrange-module">`): writes to the layout through its mutators, worked out from where the geometry has things; the page wraps them in a commit and says what happened. How big a frame, a row, a deck or a group is, and the area where a dragged frame joins a group, is answered once, by `FlowGeometry` (`frame`, `rowW`, `deckSpread`, `slotPlace`, `exitX`, `dropZone`, `dropBand`, `slotAt`, `closedTitle`, with every offset between them named in its `EDGES` table); the gesture, the arrangement edits, the page and the leader line ask it, and `tests/extents-owner.test.mjs` fails if any other module or the page names the device's frame, row and deck sizes (`colW`, `phTop`, `phH`, `cap`, `deckW`, `peekX`, `peekY`, `collH`, `closedW`) or the world's gap and head. The pure helpers that used to sit in the page are in the modules that own their subject: `FlowGeometry.readingOrder`, `FlowLayout.flowOrder` (the order a group plays in) and `FlowRouting.leader` (a finding's leader line). What is selected has one owner, `FlowSelection` (`<script id="selection-module">`): the selected frames, the primary one (the frame the toolbar, Inspect, the arrow keys and the counter are about) and the selected connector, never frames and a connector together; `FlowSelection.follows` makes the panel follow the primary frame however the selection changed (click, marquee, shift-click, select all, the start of a drag, deselecting), and the page only paints. What a press, a move and a release mean has one owner too, `FlowPointer` (`<script id="pointer-module">`): one mode (idle, press, pan, marquee, connect) in place of the page's old flags. The page says what was pressed (a hit: edge dot, grip, deck, frame, annotation, chrome or canvas) and does what the arbiter asks through a host; `tests/pointer.test.mjs` drives it with fake events, `tests/selection.test.mjs` the selection with the real panel, and `tests/arrange.test.mjs` the arrangement edits on the real layout and geometry. A device is described once, in `FlowDevice` (`<script id="device-module">`): its screen and caption sizes, style variables, frame class, switcher button and key are all derived from that one entry, and a note with no place of its own on a device is carried over from one that has it, so it keeps its spot on the screen instead of jumping. Adding a device is one entry there, its renderings of each screen, and an icon symbol. The side panel has one owner as well, `FlowPanel` (`<script id="panel-module">`): whether it is open, Inspect or Search, which screen Inspect is about, which component is being swept, and the room it takes from the window (the camera asks `panel.insets()` when it fits something; a resize re-centres the selected screen while the panel is open). How much of the window it takes is one table, `FlowPanel.SIZE`: `insets` reads it, and `FlowPanel.cssVars()` hands the stylesheet the panel's width and height as variables at boot; a media query cannot read a variable, so `tests/panel.test.mjs` fails if the stylesheet's breakpoint is not `SIZE.narrowAt`. Where the page waits, it names the length or waits on the thing itself: every duration a timer spells out is in one frozen `TIMING` table at the top of the page script (`fly`, `fade` and `tapMark` also feed the stylesheet as variables), a wait for frames to come to rest is `whenSettled` (geometry's `settled`), a fade waits on its `transitionend`, and `tests/timing-owner.test.mjs` fails on a timer that spells its own number or a read of the world's computed transform. A point on a frame in the frame's own pixels is turned into a world point by `geo.worldOf` (a note dropped on the canvas is homed from its place and the geometry, not from the page's rects). The page only listens and paints (`paintPanel`), and everything inside a frame's own DOM has one owner too, `FrameDom` (`<script id="framedom-module">`, `FlowFrameDom.create`, no DOM of its own): which render a screen shows (its state, on this device), mounting it, counting and lighting up a component, the ripple and the product's own reaction to a tap and where a tap leads, and a search tile's copy. It hands back numbers, ids and where a tap leads, never a node, and it knows a screen only through a host adapter: the page has one, marked "live screen host", the only code that mounts product DOM, in one iframe per screen at the device's real viewport, scaled into the existing canvas card. Each document owns its product styles, fonts and SVG symbols; the canvas owns the wrapper, ripple and spotlight. Events cross through the host with normalised coordinates and opaque product targets, so product class names cannot trigger canvas chrome handlers. Native controls remain interactive, background drags move frames, wheel inside a screen scrolls that screen, wheel on empty canvas pans, Ctrl/⌘+wheel zooms and Space+drag pans across the canvas. `FrameDom.ready(id?)` waits for the latest mount of one screen or of every mounted screen (a screen with no document has nothing to wait for, so the page holds it mounted first); Inspect and Search rebuild after a state or device change is ready. Search snapshots the current screen and field values into an inert iframe. The scan's static renders and `FlowScanBehaviour` remain the content source; app bundles are not booted. Trust: the iframes use `sandbox="allow-same-origin"` without `allow-scripts`, so scripts in a render never run, but the canvas page can reach into each screen's document (to run `FlowScanBehaviour`, count components and snapshot a screen). The scan is therefore trusted as much as the canvas file itself: markup, styles and behaviour from an untrusted codebase are not made safe by the iframe. A link in a render never navigates the screen. Mounting: `FlowMounts` (`<script id="mounts-module">`, browser-free, tested in `tests/mounts.test.mjs`) chooses screens within 300 CSS pixels of the visible canvas after zoom, plus selected screens and the ones Inspect or Search are reading. The page supplies geometry and applies those ids through `FrameDom.retain`; frame wrappers, labels, connectors and findings always exist, with a cheap outline while a document is absent. `colOf` reads the frame registry maintained by frame creation and world rebuilding. Far documents are serialized and removed; their taps, native field values and scroll positions survive returning on the same device and state. Which state is shown (including the sample's Reminders state) also survives. Device changes discard parked interactions; explicit state changes start that render clean. These snapshots are memory-only and do not change the saved layout. Search debounces typing by `TIMING.searchInput` (150 ms), keeps unchanged result tiles and cached snapshots, and reads at most two missing snapshots at a time for tiles near the panel's visible area; changed markup or field values invalidate a snapshot. Preview screen documents outside that margin or in a closed panel are removed while their serialized snapshots stay cached. Superseded Inspect and Search reads release their mounting requests immediately; a finding holds its screen for the whole spotlight interaction. Camera flights use their actual transition progress to choose nearby screens. An overview where every frame is near can still mount every screen. A mount that has not finished after `TIMING.mountWait` no longer holds Inspect, Search or a device switch. Mouse, trackpad and keyboard events cross the host; real touch has not been checked. What was tapped inside a screen starts clean on an explicit state or device change; unmounting to save resources preserves it, and the shown state itself survives a device switch. `tests/framedom.test.mjs` runs the module with a fake host and fails if the page reaches into a screen any other way. Tests: `node --test skills/create-flow-canvas/tests/*.test.mjs`. For the live host integration checks, serve the repository over HTTP, open `skills/create-flow-canvas/tests/browser.html` and click **Run browser checks**. These cover isolation, real viewports, assets, taps, dragging, controls, scroll/zoom routing, keyboard entry, Inspect, Search, state changes and device switching.
+## Ground rules
 
-The scan: what a scanner finds lives in `<script type="application/json" id="flow-scan">`, with the product's own styles, scoped colour and font tokens, font imports and reset in the inert `<style id="flow-scan-styles" media="not all">` and, optionally, its in-screen reactions in `<script id="flow-scan-behaviour">` (`FlowScanBehaviour.onTap(screenId, target, root)`). Product SVG symbols are the scan's optional `icons` markup, mounted locally in each screen document; the shell's sprite contains only canvas icons. The generator replaces the contents of those three blocks and nothing else (the styles tag keeps its `media="not all"`, which `tests/engine-purity.test.mjs` checks); Loam is the sample scan. The rendering contract is a `.phone` body inside each iframe, with device classes supplied by `FlowDevice`; existing scan CSS keeps those selectors. The styles block stays inert in the canvas document and is copied into each screen. Relative assets resolve against the canvas URL. The engine reads the scan only through `FlowScan` (`<script id="scan-module">`, no other module needed): `read(raw, { devices, validateSelector? })` cleans it (dropping and reporting anything that points at a screen the scan does not have; the caller names the devices, so the scan module never reads the device module), `merge` and `diff` lay the user's edits over it and take them off again, and `mergeGroups` and `diffGroups` do the same for groups, adding which frames are in which group. The scan is JSON inside a `<script>` block, so the generator writes `</` in it as `<\/`. The shape is documented in the scan module's header. The engine knows two finding kinds, `unreachable-states` and `reused-component`, and writes their wording from the facts the scan gives; a screen with more than one rendered state gets the state switcher. A screen can carry `approximate: true` (a badge on its frame and a line in Inspect saying part of it was stubbed) or `unrendered: "reason"` (a placeholder with the reason where it has no render). The strip under a frame takes the background of a `.flow-root` element at the top of the screen when there is one and it is painted, otherwise the body's. A button inside a screen (`data-go="<screen id>"`) only follows a connector that exists, so a link in the scan is the one answer to "A leads to B". `tests/engine-purity.test.mjs` fails if the engine's scripts or page name a screen, finding, note, component, product or product class that only the sample has (wording that is not one of those words it cannot know).
+These protect the user's project and data, and every step depends on them.
 
-Give a scan a stable `product.id` and every scanned item a stable id. `FlowScan` rejects a scan with duplicate explicit ids, invalid ids (empty, untrimmed, control characters, unpaired surrogates or Object prototype names), or a group id shared with a screen. Annotation kinds have separate id spaces. Missing annotation ids use the existing fact-based defaults and occurrence suffixes (`~2`, `~3`, …), reserving explicit ids from valid annotations first; supply explicit ids for repeated facts that may reorder on a rescan. A saved user group whose id a new screen takes gets a fresh id with its edits, place and view state. Groups use a data attribute and the page's element registry, so ids such as `panel`, `stage` and `q` are safe. The browser passes its native CSS parser to `read`; bad component selectors are reported and omitted, so Inspect still opens. Without that host parser, only selector types and emptiness are checked. `FlowScan.storageKey(scan)` scopes the layout to `product.id` (the trimmed product name for older scans); supply the id to preserve edits through a rename. The old unscoped key is left untouched and not imported because it has no product identity. `tests/scan.test.mjs`, `tests/group-identity.test.mjs` and `tests/rescan.test.mjs` cover the policy, group ids and independent product layouts.
+- **Work in a throwaway copy.** The original repository stays untouched until the end, when one new folder is added to it. Mocks overwrite real files, so they must never land in the original.
+- **No `.env`, no real credentials.** With fake keys, a call that slips through can't reach anything real or spend anything.
+- **Invented data only.** The canvas gets shared, and everything in the snapshot travels with it. Never put real customers, emails or tokens in it.
+- **Outside network blocked during capture.** Mocks should make outbound calls unnecessary. `block-network.cjs` stops a missed one on the server, and capture guards the browser itself.
+- **Say what is true.** A canvas that looks finished but quietly shows a stub misleads design and product decisions. Mark what is approximate, omit what you can't prove and report what is missing.
 
-Scanned text enters markup only through `FlowMarkup` (`<script id="markup-module">`): `esc` is safe in text and in quoted attributes, `html` escapes every value put in a template, and `sel` makes a scanned id safe in an attribute selector. A route with "<", "&" or "[id]" in it shows as typed. `tests/markup.test.mjs`, `tests/groups-overlay.test.mjs` and `tests/rescan.test.mjs` cover this and a rescan reaching a saved layout.
+## Prerequisites
 
-Vocabulary is in `GLOSSARY.md`.
+Node 22 or newer. Playwright is not a dependency of this skill; capture looks for it in the current folder, the skill and the global npm root, or at `FLOW_PLAYWRIGHT` if you set it, and uses the machine's Chrome if there is one. Below, `$SKILL` is this skill's directory, as an absolute path.
 
-## What the canvas does
+## Workflow
 
-- **Frames and flows:** screens as frames, grouped into flows that open as a row or close into a stack. Drag frames to reorder, regroup or free them. Marquee-select, group, ungroup, rename.
-- **Connectors:** straight runs with rounded corners between frames, drawn from where each frame is at that moment (`FlowGeometry`, `<script id="geometry-module">`), so they follow every slide, however many frames the flow has. The routing itself is `FlowRouting` (`<script id="routing-module">`). Drag from a frame's edge dot to create one. Labels are editable.
-- **Annotations:** flow titles and descriptions, notes (one kind, saved with the layout, attach to a frame by dropping them on it), and scanner findings that point at the frame or component they describe.
-- **Inspect panel:** route, source file, components (hover to spotlight on the frame, click to find every screen that uses it), states, notes.
-- **Devices:** the same scan rendered at mobile, tablet or desktop size.
-- **Tidy up:** puts groups and loose frames back in order without touching flows, groups or connectors.
-- **Persistence:** the layout lives in `localStorage` under one product-scoped key: positions, and the user's edits to the scan's groups (title, description, which frames are in which group and in what order), connectors, notes, findings and frame captions, plus the groups, connectors and notes the user made. Undo covers all of it except how the groups are shown (open or closed), which is saved with the layout but is not an undo step. Because the scan is not copied into storage, a regenerated scan reaches people who already saved a layout (a renamed, regrouped or added group, a screen that moved or is new) and their edits win where they touched it. A layout saved in an older shape (whole groups, full lists of connectors and notes, captions and group text kept in a store of their own) is not read: the canvas starts from the scan, and the old file is replaced on the next save. Nothing but a first draft ever wrote one.
+### 1. Make the copy
 
-## Keyboard and reduced motion
+```bash
+REPO=/path/to/project
+COPY="$(mktemp -d)/app"
+git clone --quiet --no-hardlinks "$REPO" "$COPY"
+git -C "$COPY" remote remove origin
+find "$COPY" -type f -name '.env*' ! -name '*.example' ! -name '*.sample' ! -path '*/node_modules/*' -delete
+```
 
-Every frame wrapper is a Tab stop with `role="group"`. Its accessible name includes the screen name, route, shown state, group position (or loose), group disclosure state and selection. The name and keyboard focus exist without a mounted document. `FlowKeyboard` (`<script id="keyboard-module">`) builds the name and owns keyboard command recognition, one-slot reordering, loose-frame nudges and moving into a group; it writes only through layout mutators. Taking out uses the existing `FlowArrange.takeOut`. Each edit uses the existing commit and status toast, with the same save format and undo as pointer edits.
+A clone brings only committed files, so ignored secrets and stale `node_modules` stay behind. The `find` catches an env file someone committed. Also look for tracked key files (`*.pem`, service-account JSON) and delete them from the copy.
 
-| Key on a focused frame | Action |
+If the working tree has uncommitted changes, ask whether to include them. `git -C "$REPO" diff HEAD --binary | git -C "$COPY" apply` brings tracked changes. For a folder that isn't a git repository, `rsync -a --exclude node_modules --exclude '.env*'` does the same job.
+
+Run everything below from the copy's app folder (the package folder in a monorepo), because the scripts default to `.flow-canvas/` under the current directory. If `$REPO/.flow-canvas/` exists, this is a regeneration: see step 9 first.
+
+### 2. Detect the stack and install
+
+Read `package.json` and the lockfile. **Next.js is the tested path.** Other React web stacks (Vite, Remix) are untested but use the same capture path. Vue, Svelte and anything else are best-effort: capture still takes snapshots, but component names come only from React, so Inspect's component list will be empty. A framework needing a non-Node backend (Rails, Django, Laravel) has no seam this workflow knows how to mock. For anything except Next.js, tell the user before spending the time: this path is untested, here is what may not work.
+
+Install from the lockfile with lifecycle scripts off, since this is code you are about to run with no review: `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, or for Yarn `yarn install --immutable --mode=skip-build` (Yarn 1: `yarn install --frozen-lockfile --ignore-scripts`). If a native package then fails to load, rebuild only that one.
+
+If Playwright isn't available: `npm i --no-save playwright`, here in the copy, never in the original.
+
+### 3. Find routes and write mocks
+
+List every user-facing route from the code rather than from a guess at the navigation. In Next.js: `page.*` files under `app/` (folders in parentheses don't appear in the URL; skip `api/` and `route.*`), `pages/` in older apps, and `not-found.*` as a screen with route `"(404)"` and a `url` that doesn't exist. Note middleware that redirects, and dynamic segments, which need an id your mock data provides.
+
+Then read `references/mocking.md` and write the mocks. Keep them in `.flow-canvas/mocks/`, mirroring the paths they replace, with fake env values at `.flow-canvas/mocks/.env.local`, and apply them with:
+
+```bash
+cp -R .flow-canvas/mocks/. ./
+```
+
+Keeping them apart from the source is what makes them reusable on the next regeneration. Start the server, with the outside network blocked and on a port you pick:
+
+```bash
+NODE_OPTIONS="--require $SKILL/scripts/block-network.cjs" npm run dev -- --port 3210
+```
+
+Run it in the background and watch its log. `[flow-canvas] refused outbound connection to <host>` names something you haven't mocked: mock it. If the app fetches fonts at build time from JavaScript, let those hosts through with `FLOW_ALLOW_HOSTS=fonts.googleapis.com,fonts.gstatic.com`. Use the dev server, not a production build, because component names come from React's development fibers. Native code such as a Rust bundler doesn't go through Node and isn't covered by the preload, which is one more reason the keys have to be fake.
+
+### 4. Decide states and write scenarios
+
+Read `references/project-files.md`, then write `.flow-canvas/scenarios.json`.
+
+Each state comes from a persona cookie, a scenario cookie or clicks, all of which your mocks and the real UI respond to. Go page by page and ask what a person could actually see here: signed in and out, each plan or role that changes the screen, empty, error, an open dialog or menu. Prefer a few states that change the picture over many that don't.
+
+**Look for branches the happy path hides.** Search each page for query parameters and provider-dependent results, the way `references/mocking.md` describes. Jolly Code's checkout-success page, captured at its bare URL, showed only the no-`session_id` branch; the screen real customers land on needs a `session_id` and a mocked Stripe session. Write a scenario for each such branch you find, or record it as unreachable.
+
+Ways a state can fall short:
+
+- **Exists in code, can't be reproduced.** List it under the screen's `unreachable` in flows.json with evidence. It shows as a state marked `reachable:false` in the scan, and assemble writes the finding. Also list a state you did capture if nothing in the real UI leads to it.
+- **Exists on only some devices** (a hover menu, a desktop-only panel). Give it `devices`. The other devices get a "doesn't exist on this device" placeholder automatically. Don't list such a state first: the first state is the screen's default render and has no placeholder.
+
+In-screen tap reactions are not generated in this version. Don't write a `behaviour.js`; assemble would pick one up, but states come from real captures. Taps on links still follow connectors.
+
+### 5. Capture, and repair what's wrong
+
+```bash
+node "$SKILL/scripts/capture.mjs" http://localhost:3210
+```
+
+It only accepts a local address. It captures each screen × state × device in a fresh browser context, with the clock and random numbers frozen, and writes `.flow-canvas/capture/`: `capture.json`, `report.json` and one `ref-<screen>-<state>-<device>.png` per capture. Options: `--scenarios`, `--out`, and `--src` (the folder scanned for component names; default `src/`, or the project root).
+
+**A clean exit doesn't mean right screens.** Read `report.json`, where each capture has `signals` (skeleton, spinner, error-toast, error-text, near-empty, dev-overlay) and `pageErrors`. Then open the reference PNGs and look at them. A mock can produce a perfectly rendered error page, and every later check will agree with it.
+
+| What you see | Likely cause | What to do |
+| --- | --- | --- |
+| `FAILED … Timeout` on a step | Selector wrong, or the control is missing on that device | Fix the step, or limit the state with `devices` |
+| `FAILED` on page load | Server crashed or redirected | Read the server log |
+| Skeleton or spinner | A callback or subscription in a mock never fires | Mock the behaviour, raise `settleMs` only if it was merely slow |
+| Error toast, "Missing API key" | Fake env value missing, or a mock returning an error | Add it |
+| `escaped` hosts in the output | The app redirected somewhere outside | Mock the route that redirects |
+| `no component names` | Not React, or not a dev build | Expected off React; otherwise use the dev server |
+
+Exit code 1 means at least one capture failed. Repair each page in this order, and stop when you reach the bounds. A long tail of mock-fixing on one page costs more than an honest placeholder:
+
+1. **Repair the mock**, up to about three attempts per page, each aimed at a specific error.
+2. **Render the page without its layout.** If a shell or provider is what breaks, stub that layout in the copy so the page body renders. Mark the screen `approximate: true`.
+3. **Placeholder plus finding.** Remove it from scenarios, add it to flows.json with `route` and `unrendered: "<the actual reason>"`, and add a finding saying what's missing.
+
+Use `approximate: true` for any screen with a stubbed part someone could mistake for real: a replaced widget, a canned chart, an edited page. Use `unrendered` only when there's no render at all. If a mock changes, rerun capture for everything; it's cheap next to a mismatched canvas.
+
+### 6. Name groups, and state findings
+
+Write `.flow-canvas/flows.json` (format in `references/project-files.md`).
+
+**Groups are user journeys, not folders.** "Getting started: from invite to first project" says what a person is doing; `app/settings` says where a file is. A reader should be able to follow a group from left to right as one trip. A good title is a name, a colon, and the question the flow answers.
+
+**Connectors are derived, never written.** Assemble draws them from `<a href>` links actually captured that lead to another captured screen, which is why flows.json has no field for them. Navigation done in code (`router.push`, a form redirect) produces no connector, and that's the right outcome: a missing line is honest and an invented one is a false claim about the product. Mention significant ones in a screen's `note` if they matter.
+
+**Findings must be provable.** Each one needs `evidence` saying what in the code or the capture shows it, and assemble refuses one without. Good: "the Empty render has no link or button; `page.tsx:41` returns only a heading". Not a finding: "this could be clearer". If you can't point at it, leave it out.
+
+### 7. Assemble, check, validate
+
+With the dev server still running, because assembly fetches fonts and images from the URLs the capture saw:
+
+```bash
+node "$SKILL/scripts/assemble.mjs"
+node "$SKILL/scripts/fidelity.mjs" --canvas .flow-canvas/flow-canvas.html --refs .flow-canvas/capture
+node "$SKILL/scripts/validate.mjs"
+```
+
+Fidelity reads the assembled canvas, so assembly comes first. The server can stop after assembly.
+
+**Assemble** writes `.flow-canvas/flow-canvas.html` and `assemble-report.json`, always from the skill's current template. Options: `--capture`, `--flows`, `--out`, `--behaviour`, `--template`. It stops with a list of problems when flows.json and the capture disagree; fix each one. Check the report's `dropped` fonts and images. A dropped font visibly changes the screen, and a font over budget can be allowed with `budgets` in flows.json if the file size can bear it.
+
+**Fidelity** renders each snapshot as the canvas will and compares it to its reference, writing `fidelity.json` and `snap-*.png`. Default threshold 1%; options `--max-pct` and `--out`. Over threshold, compare `snap-<name>.png` with `ref-<name>.png` at the rows it names. Causes are usually a dropped font or a stylesheet that didn't make it across. Fix the cause and don't raise the threshold to pass: a raised threshold hides exactly what this check exists to find. If a difference is real but small and you can't remove it, keep the threshold and report that screen. `MISSING` means no reference exists for a render. A match only proves the snapshot equals the running copy, not that the mock was right.
+
+**Validate** reads the finished file with the canvas's own scan reader. Option: `--max-bytes`. Errors mean the page would open broken; each message names what to fix in flows.json or scenarios.json, then re-run from assemble. Read warnings too: a "blank screen" warning means a device has no render for a screen's first state, usually because of a failed capture or a device-limited first state.
+
+### 8. Open it and look
+
+The scripts can't tell you it reads well. Open the canvas in a visible browser tab (frames away from the view mount lazily; a background tab can look frozen). Check:
+
+- Every group's frames show real screens, not skeletons or error pages.
+- Switch mobile, tablet and desktop. Use the state switcher on a screen with several states.
+- Inspect shows route, file and components.
+- Connectors go where the product goes. Findings point at the right frame.
+- The console has no errors.
+
+Fix anything wrong at its source (mock, scenario, flows.json) and regenerate. Never hand-edit the HTML, since the next regeneration would discard it.
+
+### 9. Save the project files
+
+Copy the reusable part back into the original repository. This new folder is the only change the original gets:
+
+```bash
+mkdir -p "$REPO/.flow-canvas"
+cp -R .flow-canvas/mocks .flow-canvas/scenarios.json .flow-canvas/flows.json .flow-canvas/flow-canvas.html "$REPO/.flow-canvas/"
+```
+
+Don't commit unless asked. Recommend committing `mocks/`, `scenarios.json` and `flows.json`, and adding `.flow-canvas/capture/` to `.gitignore`: it is large and rebuilt each run. Before copying, scan `mocks/` once more for anything real. Delete the throwaway copy when you're done, and stop the dev server.
+
+**Regenerating.** Start at step 1, then copy `$REPO/.flow-canvas/` into the new copy, apply the mocks, and check they still fit: a replaced file may have changed upstream. Look for new routes and removed ones. Then continue from step 3.
+
+Keep ids stable, because the reader's saved layout is attached to them. `product.id` never changes. A screen's `id` in scenarios.json derives from its route pattern and stays (the scan's id is made from the route: `/items/[id]` becomes `items-id`, `/` becomes `home`). Give every group an explicit `id`. A regenerated canvas uses the current template and replaces only three blocks of it: `flow-scan`, `flow-scan-styles` (which keeps `media="not all"`, so the product's CSS can't restyle the canvas) and `flow-scan-behaviour`. A reader's moved frames and notes survive, and new screens appear.
+
+### 10. Report honestly
+
+Tell the user where the file is and what's in it, plainly, including:
+
+- **Captured:** how many screens, states and devices (from `report.json`).
+- **Approximate:** each `approximate` screen and what was stubbed.
+- **Not reachable or not rendered:** each `unreachable` state and `unrendered` screen, and why.
+- **Likely gaps:** branches you suspect but didn't capture, routes you skipped, navigation in code that has no connector.
+- **Checks:** fidelity result with any screen over threshold, validate's result, dropped fonts, and anything you didn't get to look at.
+- **Stack caveats**, if this wasn't Next.js.
+
+Also say what changed in the repository (the new `.flow-canvas/` folder, not committed). A short honest list of gaps is worth more than a tour of the features: the reader's trust in every other frame depends on it.
+
+## Reference files
+
+| File | Read it when |
 | --- | --- |
-| Tab / Shift+Tab | Native traversal through frames, their controls and mounted screens (a closed group's frames are not stops: its chevron is) |
-| Left / Right | Focus and select the previous / next frame in scan order |
-| Enter | Mount if necessary, wait, then enter the screen's first available control (or its body) |
-| Escape inside a screen | Follow the existing canvas Escape chain, then return focus to the wrapper when the panel is closed |
-| Alt+Shift+Left / Right | Move one slot earlier / later in its group; never wrap |
-| Shift+arrow | Move a loose frame by 10 world pixels on the shown device |
-| Control/Command+Shift+G | Existing take-out shortcut for selected frames |
-| Shift+F10 or the Menu key | Frame actions: reorder, take out, move, choose a group or choose a connector destination |
-
-A frame also has a native Frame actions button. The dialog returns focus to that frame without moving the camera; its move buttons keep it open and report each result in a status line. Shift does not turn the global shortcuts off (`+` and `/` need it on many layouts); Control, Command and Alt do, except AltGr. The existing `i`, `n`, `l`, `a`, `m`, `t`, `d`, `c`, device/view keys, Control/Command+G, Control/Command+K and Space-pan remain in place. Native text entry and activation stay inside a screen; Tab traversal is left to the browser. Keyboard focus in a screen keeps its document mounted. Add, Canvas, Views and group options are ARIA menus with arrow/Home/End navigation, Escape and focus return. Group chevrons and Inspect/Search toggles expose `aria-expanded`; panel toggles control the complementary panel, so they do not claim to open an ARIA popup.
-
-`FlowPlayback` (`<script id="playback-module">`, browser-free) owns Play's sequence. With reduced motion Play selects the first screen and offers Next screen and Stop playback; it never starts an automatic timer. Turning reduced motion on during Play cancels its pending automatic advance and makes the visit manual; turning it off does not restart that visit's timer. Start Play again for automatic playback. The connector token is skipped under reduced motion (and an in-flight token stops on the next animation frame). Menu pop runs only with no motion preference. Token durations and menu duration are named in `TIMING`, alongside the existing Play dwell; slides, ripple and spotlight retain their existing gates.
-
-Run module tests with `node --test skills/create-flow-canvas/tests/*.test.mjs` using Node 22 or newer. For live checks, serve the repository root with `python3 -m http.server`, open `skills/create-flow-canvas/tests/browser.html` in a visible tab, **click the page first** to give it focus, then click **Run browser checks**. The keyboard checks use actual page handlers and focus, but synthetic Tab cannot exercise native traversal; follow the manual checklist in `KEYBOARD.md`. The reduced-motion browser fixture controls the JavaScript preference; check the real OS/browser media setting too for CSS motion.
-
-## Intended workflow
-
-1. Scan the codebase: routes, screens, the components each screen uses, states, and navigation between screens.
-2. Turn the scan into data: screens, flows (groups), links (connectors), findings, notes.
-3. Render each screen. Default: render the real page component in isolation with mocked providers, props and data, taking fixtures from existing stories or tests first. Fall back to a screenshot of the running app for a screen that will not render, and mark that card as an approximation.
-4. Inject the data into the canvas template and write one HTML file into the repo, for example `docs/flows.html`.
-
-## Rules for the canvas
-
-- Keep frame wrappers and labels present independently of screen documents. Use the browser-free `FlowMounts` policy for nearby, selected and requested screens; apply its answer through `FrameDom.retain`, and mount and await a document before Inspect or Search reads it. Preserve temporary interactions across unmounts in memory; leave the layout save format unchanged.
-- Render each mounted product screen in its own iframe at the real device viewport from `FlowDevice`, with its own styles and SVG symbols. Product DOM stays inside the live screen host; the page receives ids and values, never product nodes. Keep the scan styles inert in the shell. Route events through the host, keep native controls and scrolling usable, and wait for replacement documents before rebuilding Inspect or Search. Search previews are inert snapshots. An iframe supplies the separate viewport needed by media queries, viewport units and fixed-position elements; a shadow root alone does not. `sandbox="allow-same-origin"` without scripts is a deliberate choice: the parent must read the screen's document, so the scan is trusted like the canvas itself.
-- Keep the engine free of demo knowledge: no hard-coded screen ids, finding ids, component names, product class names or product wording. The scan carries all of it.
-- Regenerating must not lose user edits. Give every scanned item a stable id (the scanner chooses; the engine reads no meaning into it) and keep user edits separate from scanned data: the saved layout holds edits over the scan, never copies of it (what the user made themselves is kept whole).
+| `references/mocking.md` | Writing mocks, or a screen renders wrong (step 3, step 5) |
+| `references/project-files.md` | Writing scenarios.json or flows.json (steps 4 and 6) |
+| `references/capture-format.md` | Debugging by reading capture.json, or changing the scripts |
+| `references/engine.md` | Changing the canvas engine or debugging it after a clean validate |
+| `references/keyboard.md` | Changing keyboard handling or Play, or answering accessibility questions |
+| `GLOSSARY.md` | Naming things in the engine or its docs |
