@@ -430,3 +430,50 @@ test("a failed capture is recorded on its state, so the canvas can say it failed
   const lost = scan.screens.flatMap((s) => s.states).find((st) => st.name === "Lost");
   assert.deepEqual(lost.failed, { desktop: "Navigation failed" }, "a state that failed everywhere is kept, with the failure");
 });
+
+/* ---------- stylesheets that disagree: one global stylesheet cannot hold two themes ---------- */
+
+const themed = () => {
+  const c = baseCapture();
+  const sheet = (key, color) => [{ key, href: `http://h/${key}.css`, rules: [{ s: ".k", t: `.k{color:${color}}`, u: true }, { s: ".only-" + key, t: `.only-${key}{top:0}`, u: true }] }];
+  c.screens[0].captures.default.desktop.sheets = sheet("themeA", "red");
+  c.screens[1].captures.default.desktop.sheets = sheet("themeB", "purple");
+  c.screens[1].captures["other state"].desktop.sheets = sheet("themeB", "purple");
+  return c;
+};
+const styleOf = (html) => html.match(/<style id="flow-scan-styles" media="not all">([\s\S]*?)<\/style>/)[1];
+
+test("two stylesheets that give the same selector different values are each scoped to the frames that loaded them", async () => {
+  const { html } = await run(themed());
+  const css = styleOf(html);
+  const scan = scanOf(html);
+  const a = scan.screens.find((s) => s.id === "home").html.desktop;
+  const b = scan.screens.find((s) => s.id === "items-id").html.desktop;
+  const idA = a.match(/data-fsh="([^"]+)"/)?.[1], idB = b.match(/data-fsh="([^"]+)"/)?.[1];
+  assert.ok(idA && idB && idA !== idB, "each frame names the sheets it loaded");
+  assert.ok(css.includes(`:where([data-fsh~="${idA}"]) .k{color:red}`), "theme A rules apply only inside frames that loaded theme A");
+  assert.ok(css.includes(`:where([data-fsh~="${idB}"]) .k{color:purple}`), "theme B likewise");
+  assert.ok(css.includes(`:where([data-fsh~="${idA}"]) .only-themeA{top:0}`), "all of a conflicting sheet is scoped, so its order is kept");
+});
+
+test("a stylesheet that disagrees with no other stays global, with no attribute on the frames", async () => {
+  const { html } = await run(baseCapture());
+  assert.ok(!html.includes("data-fsh"), "no scoping when nothing conflicts");
+  const c = baseCapture();
+  c.screens[0].captures.default.desktop.sheets = [{ key: "k", href: "http://h/a.css", rules: [{ s: ".a", t: ".a{color:red}", u: true }] }];
+  c.screens[1].captures.default.desktop.sheets = [{ key: "k", href: "http://h/a.css", rules: [{ s: ".a", t: ".a{color:red}", u: true }] }];
+  const out = await run(c);
+  assert.ok(!out.html.includes("data-fsh"), "the same sheet on two screens is not a conflict");
+  assert.match(styleOf(out.html), /\.a\{color:red\}/);
+});
+
+test("scoping leaves :root rules, at-rules and nested rules in a scoped sheet working", async () => {
+  const c = themed();
+  c.screens[0].captures.default.desktop.sheets[0].rules.push(
+    { s: ":root", t: ":root{--x:1}", u: true },
+    { g: "@media (min-width: 1px)", c: [{ s: ".k, .j", t: ".k, .j{margin:0}", u: true }] },
+  );
+  const css = styleOf((await run(c)).html);
+  assert.match(css, /:root, \.flow-root\{--x:1\}/, "root tokens still reach the wrapper, unscoped");
+  assert.match(css, /@media \(min-width: 1px\)\{:where\(\[data-fsh~="[^"]+"\]\) \.k, :where\(\[data-fsh~="[^"]+"\]\) \.j\{margin:0\}/);
+});

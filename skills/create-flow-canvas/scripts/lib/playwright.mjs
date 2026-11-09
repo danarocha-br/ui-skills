@@ -1,5 +1,6 @@
 /* Finding and launching Playwright. It is not a dependency of this skill, so it comes from wherever the machine has it. */
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +17,7 @@ function globalRoot() {
 }
 
 /* FLOW_PLAYWRIGHT wins, then the roots in order, each resolved as Node would from a file inside it. */
-export function loadPlaywright({ env = process.env, roots } = {}) {
+export function loadPlaywright({ env = process.env, roots, cwd = process.cwd() } = {}) {
   const require = createRequire(import.meta.url);
   if (env.FLOW_PLAYWRIGHT) {
     try {
@@ -25,8 +26,18 @@ export function loadPlaywright({ env = process.env, roots } = {}) {
       throw new Error(`FLOW_PLAYWRIGHT=${env.FLOW_PLAYWRIGHT} could not be loaded: ${error.message}`);
     }
   }
+  /* a shell does not keep FLOW_PLAYWRIGHT from one command to the next, so the project can keep the path */
+  const saved = path.join(cwd, ".flow-canvas", "playwright-path");
+  if (fs.existsSync(saved)) {
+    const target = fs.readFileSync(saved, "utf8").trim();
+    try {
+      return require(target);
+    } catch (error) {
+      throw new Error(`${saved} points at ${target}, which could not be loaded: ${error.message}`);
+    }
+  }
   const global = roots ? null : globalRoot();
-  const searched = roots ?? [process.cwd(), SKILL_ROOT, global].filter(Boolean);
+  const searched = roots ?? [cwd, SKILL_ROOT, global].filter(Boolean);
   for (const root of searched) {
     const fromRoot = createRequire(path.join(root, "x", "noop.js")); /* so a global node_modules folder is searched too */
     for (const name of PACKAGES) {

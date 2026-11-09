@@ -2,6 +2,12 @@
 /* Snapshots a running copy of a product, per screen, state and device, driven by the project's scenarios file.
 
      node capture.mjs http://localhost:3210 [--scenarios .flow-canvas/scenarios.json] [--out .flow-canvas/capture] [--src src]
+                      [--only id,id] [--timeout ms] [--no-warm]
+
+   --only captures just those screens and keeps the rest from the last capture.json (a screen is replaced whole, so
+   a state you removed from the scenarios goes with it). --timeout is the page-load limit, 90000 by default, or
+   loadTimeoutMs in the scenarios. Before capturing, each URL is requested once so a dev server compiles a cold route
+   outside the timeout; --no-warm skips that. A browser that dies mid-run is relaunched and the capture retried once.
 
    Writes capture.json (what the assembler reads), report.json (the same run without the page bodies) and one reference
    screenshot per capture, ref-<screen>-<state>-<device>.png. Exits 1 if any capture failed. Run it against the throwaway
@@ -14,7 +20,8 @@ import { readScenarios, stateCookies, slug, isLocalBase } from "./lib/scenarios.
 import { networkDecision } from "./lib/network.mjs";
 import { declaredComponents } from "./lib/components.mjs";
 import { freezeClockAndRandom } from "./lib/determinism.mjs";
-import { suspectSignals } from "./lib/signals.mjs";
+import { suspectSignals, acknowledged, identicalStates, redirectOf } from "./lib/signals.mjs";
+import { mergeResume, isBrowserGone } from "./lib/resume.mjs";
 import { pageExpression, clearOverlaysExpression } from "./lib/page.mjs";
 import { DEVICES } from "./lib/devices.mjs";
 
@@ -80,25 +87,27 @@ async function guardNetwork(context, base, tally) {
   return true;
 }
 
-async function captureOne(browser, { base, config, screen, state, device, names, outDir, tally }) {
+async function captureOne(browser, { base, config, screen, state, device, names, outDir, tally, loadTimeout }) {
   const { width, height } = DEVICES[device];
   const pageErrors = new Set();
   const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", deviceScaleFactor: 1, colorScheme: "light", serviceWorkers: "block" });
   try {
     await context.addCookies(stateCookies(state, config.cookies).map((cookie) => ({ ...cookie, url: base })));
     tally.socketsGuarded = await guardNetwork(context, base, tally);
-    await context.addInitScript(freezeClockAndRandom, { ...DEFAULTS.freeze, ...config.freeze });
+    if (config.freeze !== false) await context.addInitScript(freezeClockAndRandom, { ...DEFAULTS.freeze, ...config.freeze });
     const page = await context.newPage();
     page.on("pageerror", (error) => pageErrors.add(String(error.message).slice(0, 200)));
-    await page.goto(base + screen.url, { waitUntil: "load", timeout: LOAD_TIMEOUT });
-    await page.waitForTimeout(config.settleMs ?? DEFAULTS.settleMs);
+    await page.goto(base + screen.url, { waitUntil: "load", timeout: loadTimeout });
+    await page.waitForTimeout(state.settleMs ?? config.settleMs ?? DEFAULTS.settleMs);
+    /* a client-side redirect (a router.push after load) leaves a page that is not the one asked for, with no error */
+    const redirect = redirectOf(screen.url, page.url());
     for (const step of state.steps ?? []) await runStep(page, step);
     if (state.steps?.length) await page.waitForTimeout(AFTER_STEPS_MS);
     await page.evaluate("document.fonts.ready.then(() => true)");
     const devOverlayError = await page.evaluate(clearOverlaysExpression);
     await page.screenshot({ path: path.join(outDir, `ref-${screen.id}-${slug(state.name)}-${device}.png`) });
     const { facts, ...capture } = await page.evaluate(pageExpression({ names, budgets: { ...DEFAULTS.budgets, ...config.budgets } }));
-    return { ...capture, pageErrors: [...pageErrors], signals: suspectSignals({ ...facts, devOverlayError }) };
+    return { ...capture, finalUrl: redirect ? redirect.final : screen.url, pageErrors: [...pageErrors], signals: acknowledged(suspectSignals({ ...facts, devOverlayError, redirect }), state.acknowledge) };
   } catch (error) {
     error.pageErrors = [...pageErrors];
     throw error;
@@ -118,7 +127,7 @@ function logCapture(id, stateName, device, capture) {
 }
 
 async function main() {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: { scenarios: { type: "string" }, out: { type: "string" }, src: { type: "string" } } });
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: { scenarios: { type: "string" }, out: { type: "string" }, src: { type: "string" }, only: { type: "string" }, timeout: { type: "string" }, "no-warm": { type: "boolean" } } });
   const base = positionals[0]?.replace(/\/$/, "");
   if (!base) throw new Error("usage: capture.mjs <base-url> [--scenarios file] [--out dir] [--src dir]");
   if (!isLocalBase(base)) throw new Error(`refusing to capture ${base}: capture only a throwaway copy running on this machine`);
@@ -132,17 +141,45 @@ async function main() {
   const names = sourceComponentNames(srcDir);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const browser = await launchBrowser(loadPlaywright());
+  const only = values.only ? values.only.split(",").map((id) => id.trim()).filter(Boolean) : null;
+  const unknown = (only ?? []).filter((id) => !config.screens.some((screen) => screen.id === id));
+  if (unknown.length) throw new Error(`--only names ${unknown.join(", ")}, which the scenarios do not list`);
+  const loadTimeout = values.timeout ? Number(values.timeout) : config.loadTimeoutMs ?? LOAD_TIMEOUT;
+  if (!(loadTimeout > 0)) throw new Error(`--timeout must be a number of milliseconds, got "${values.timeout}"`);
+  const todo = only ? config.screens.filter((screen) => only.includes(screen.id)) : config.screens;
+
+  const playwright = loadPlaywright();
+  let browser = await launchBrowser(playwright);
   const tally = { blocked: {}, assets: {}, escaped: {}, socketsGuarded: false };
   const result = { screens: [], blocked: tally.blocked, assets: tally.assets, escaped: tally.escaped, errors: [] };
+  if (!values["no-warm"]) {
+    /* a cold dev-server route can take minutes to compile; ask once, patiently, so the capture's own limit is for the page */
+    for (const screen of todo) {
+      const began = Date.now();
+      await fetch(base + screen.url, { redirect: "manual", signal: AbortSignal.timeout(300_000) }).then((r) => r.arrayBuffer()).catch(() => null);
+      const took = Date.now() - began;
+      if (took > 5000) console.log(`warmed ${screen.url} (${Math.round(took / 1000)}s)`);
+    }
+  }
+  const captureWithRetry = async (args) => {
+    try {
+      return await captureOne(browser, args);
+    } catch (error) {
+      if (!isBrowserGone(error)) throw error;
+      console.error("the browser closed during a capture: relaunching it and trying once more");
+      await browser.close().catch(() => null);
+      browser = await launchBrowser(playwright);
+      return await captureOne(browser, args);
+    }
+  };
   try {
-    for (const screen of config.screens) {
+    for (const screen of todo) {
       const entry = { ...screen, captures: {} };
       for (const state of screen.states) {
         entry.captures[state.name] = {};
         for (const device of state.devices ?? Object.keys(DEVICES)) {
           try {
-            const capture = await captureOne(browser, { base, config, screen, state, device, names, outDir, tally });
+            const capture = await captureWithRetry({ base, config, screen, state, device, names, outDir, tally, loadTimeout });
             entry.captures[state.name][device] = capture;
             logCapture(screen.id, state.name, device, capture);
           } catch (error) {
@@ -151,17 +188,26 @@ async function main() {
           }
         }
       }
+      entry.warnings = identicalStates(screen.states, entry.captures);
+      for (const w of entry.warnings) console.log(`WARNING ${screen.id}: "${w.states.join('" and "')}" ask for different personas or scenarios but render the same on ${w.devices.join(", ")}. Is the mock reading its cookie?`);
       result.screens.push(entry);
     }
   } finally {
-    await browser.close();
+    await browser.close().catch(() => null);
   }
   result.socketsGuarded = tally.socketsGuarded;
+  if (only) {
+    const capturePath = path.join(outDir, "capture.json");
+    let previous = null;
+    try { previous = JSON.parse(fs.readFileSync(capturePath, "utf8")); } catch { /* nothing to resume from */ }
+    Object.assign(result, mergeResume(previous, result, only, config.screens.map((screen) => screen.id)));
+  }
   fs.writeFileSync(path.join(outDir, "capture.json"), JSON.stringify(result));
   const report = {
     blocked: result.blocked, assets: result.assets, escaped: result.escaped, errors: result.errors, socketsGuarded: result.socketsGuarded,
+    warnings: result.screens.flatMap((screen) => (screen.warnings ?? []).map((w) => ({ screen: screen.id, ...w }))),
     captures: result.screens.flatMap((screen) => Object.entries(screen.captures).flatMap(([stateName, devices]) => Object.entries(devices).map(([device, capture]) => ({
-      screen: screen.id, state: stateName, device, pageErrors: capture.pageErrors, signals: capture.signals, components: capture.components, inlined: capture.inlined,
+      screen: screen.id, state: stateName, device, finalUrl: capture.finalUrl, pageErrors: capture.pageErrors, signals: capture.signals, components: capture.components, inlined: capture.inlined,
     })))),
   };
   fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(report, null, 1));

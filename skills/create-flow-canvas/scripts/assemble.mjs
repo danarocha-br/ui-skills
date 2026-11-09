@@ -197,6 +197,30 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     }
   }
 
+  /* One stylesheet serves every frame, but the product may load a different stylesheet per route or per theme
+     (a runtime-swapped highlight theme, say) that gives the same selector another value. Merged, the last one
+     wins everywhere, so a frame can show another page's colours and still match its own reference to the pixel.
+     A sheet that disagrees with another is scoped, at zero specificity, to the frames that loaded it. */
+  /* each selector of a rule, with the declarations it gets: themes list the same selectors in different groups */
+  const leafKeys = (rules, head = "") => (rules || []).flatMap((r) => (r.c ? leafKeys(r.c, head + r.g + "\u0000")
+    : r.u && typeof r.s === "string" && r.t.startsWith(r.s) ? topLevelCommas(r.s).map((x) => [head + x.trim(), r.t.slice(r.s.length).replace(/\s+/g, " ").trim()]) : []));
+  const valuesOf = new Map(); /* selector in its at-rule context -> sheet key -> the rule text */
+  for (const sh of sheets.values()) if (!sh.raw) for (const [k, t] of leafKeys(sh.rules)) {
+    if (!valuesOf.has(k)) valuesOf.set(k, new Map());
+    valuesOf.get(k).set(sh.key, t);
+  }
+  const scopeIds = new Map(); /* sheet key -> "s1", "s2", ... */
+  for (const sh of sheets.values()) {
+    if (sh.raw || scopeIds.has(sh.key)) continue;
+    if (leafKeys(sh.rules).some(([k]) => new Set(valuesOf.get(k).values()).size > 1)) scopeIds.set(sh.key, "s" + (scopeIds.size + 1));
+  }
+  const scoped = (r, id) => {
+    if (!id || typeof r.s !== "string" || r.t[0] === "@" || !r.t.startsWith(r.s)) return r.t;
+    const parts = topLevelCommas(r.s).map((x) => x.trim());
+    const hasRoot = (x) => /(^|[\s>+~(])(:root|html|body)(?![\w-])/.test(x);
+    return parts.map((x) => (hasRoot(x) ? x : `:where([data-fsh~="${id}"]) ${x}`)).join(", ") + r.t.slice(r.s.length);
+  };
+
   /* ---------- 2. css, with fonts and images inlined within budget ---------- */
   const dropped = { fonts: [], images: [] };
   const used = { fontBytes: 0, fonts: 0, imageBytes: 0, images: 0 };
@@ -259,17 +283,18 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     }
     return out;
   }
-  async function emit(rules, base) {
+  async function emit(rules, base, scope) {
     let o = "";
     for (const r of rules || []) {
       if (r.c) {
-        const inner = await emit(r.c, base);
+        const inner = await emit(r.c, base, scope);
         if (inner) o += `${r.g}{${inner}}\n`;
         continue;
       }
       if (!r.u) continue;
       if (/^@font-face/.test(r.t)) { const f = await face(r.t, base); if (f) o += f + "\n"; continue; }
-      o += rootToo(/url\(/.test(r.t) && r.t[0] !== "@" ? await images(r.t, base) : r.t) + "\n";
+      const text = scoped(r, scope);
+      o += rootToo(/url\(/.test(text) && text[0] !== "@" ? await images(text, base) : text) + "\n";
     }
     return o;
   }
@@ -291,7 +316,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
       rawSheets.push({ href: sh.href, kept: hit || !!fonts, reason: hit ? "the markup uses its classes; :root rules in it are not re-declared on .flow-root" : fonts ? "font faces only: the markup uses none of its other classes" : "the markup uses none of its classes" });
       continue;
     }
-    css += await emit(sh.rules, sh.href);
+    css += await emit(sh.rules, sh.href, scopeIds.get(sh.key));
   }
   css = css.replace(/<\/style/gi, "<\\/style");
 
@@ -317,7 +342,8 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     namesIn(inner).forEach((n) => compNames.add(n));
     for (const m of inner.matchAll(/<img\b[^>]*\bsrc="([^"]*)"/gi)) if (!/^data:/i.test(m[1])) htmlImages.add(m[1]);
     const style = `flex:1 0 auto;min-height:100%;position:relative;background:${text(c.bg)};color:${text(c.color)};font-size:${text(c.fs)};font-family:${text(c.font)}`;
-    return `<div class="${esc(["flow-root", c.rootCls, c.bodyCls].filter(Boolean).join(" "))}" style="${esc(style)}">${inner}</div>`;
+    const fsh = (c.sheets || []).map((sh) => scopeIds.get(sh.key)).filter(Boolean);
+    return `<div class="${esc(["flow-root", c.rootCls, c.bodyCls].filter(Boolean).join(" "))}"${fsh.length ? ` data-fsh="${fsh.join(" ")}"` : ""} style="${esc(style)}">${inner}</div>`;
   };
   const perDevice = (state, selfId) => Object.fromEntries(Object.entries(state).map(([d, c]) => [d, render(c, selfId)]));
 

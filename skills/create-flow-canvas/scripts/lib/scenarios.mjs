@@ -39,6 +39,8 @@ export function readScenarios(file) {
       }
       if (files.has(slug(state.name))) problems.push(`screen ${name}: state "${state.name}" clashes with another as ${slug(state.name)}`);
       files.add(slug(state.name));
+      if ("settleMs" in state && !(Number.isFinite(state.settleMs) && state.settleMs >= 0)) problems.push(`screen ${name}, state "${state.name}": settleMs must be a number of milliseconds`);
+      if ("acknowledge" in state && !(Array.isArray(state.acknowledge) && state.acknowledge.every((k) => typeof k === "string"))) problems.push(`screen ${name}, state "${state.name}": acknowledge must be a list of signal kinds`);
       for (const device of state.devices ?? []) {
         if (!(device in DEVICES)) problems.push(`screen ${name}, state "${state.name}": unknown device ${device}`);
       }
@@ -48,6 +50,9 @@ export function readScenarios(file) {
       }
     }
   }
+  if ("freeze" in file && file.freeze !== false && (typeof file.freeze !== "object" || file.freeze === null || Array.isArray(file.freeze))) problems.push("freeze must be false or an object");
+  else if (file.freeze && file.freeze.clock !== undefined && !["frozen", "run"].includes(file.freeze.clock)) problems.push('freeze.clock must be "frozen" or "run"');
+  if ("loadTimeoutMs" in file && !(Number.isFinite(file.loadTimeoutMs) && file.loadTimeoutMs > 0)) problems.push("loadTimeoutMs must be a positive number of milliseconds");
   if (problems.length) throw new Error(`scenarios:\n  ${problems.join("\n  ")}`);
   return { ...file, cookies: { persona: "flow-persona", scenario: "flow-scenario", ...file.cookies } };
 }

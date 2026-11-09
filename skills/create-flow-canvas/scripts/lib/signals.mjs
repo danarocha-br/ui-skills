@@ -2,7 +2,35 @@
    The page gathers plain facts; this decides what they suggest. Every signal is a suspicion for a person or agent to
    check, not a verdict. */
 
-export function suspectSignals({ candidates, textLength, elementCount, mediaCount, bodyText, devOverlayError }) {
+/* Where a page ended up when it was not where it was sent: null when it stayed. Path and query count, the hash and a
+   trailing slash do not. A client-side redirect (a router.push after load) shows up here, not as a failed capture. */
+export function redirectOf(requested, finalUrl) {
+  const norm = (u) => { const url = new URL(u, "http://flow.invalid"); return (url.pathname.replace(/\/+$/, "") || "/") + url.search; };
+  try {
+    return norm(requested) === norm(finalUrl) ? null : { requested, final: norm(finalUrl) };
+  } catch { return null; }
+}
+
+/* Signals a state lists in its `acknowledge` are dropped: the person who wrote the state looked and said it is expected. */
+export function acknowledged(signals, kinds) {
+  return Array.isArray(kinds) && kinds.length ? signals.filter((signal) => !kinds.includes(signal.kind)) : signals;
+}
+
+/* A persona or scenario that changes nothing is usually a mock that is not reading its cookie. Two states that ask for
+   different personas or scenarios but render the same markup on a device are reported with that device. */
+export function identicalStates(states, captures) {
+  const out = [];
+  const ask = (state) => `${state.persona ?? ""}\u0000${state.scenario ?? ""}`;
+  for (let i = 0; i < states.length; i++) for (let j = i + 1; j < states.length; j++) {
+    const a = states[i], b = states[j];
+    if (ask(a) === ask(b)) continue;
+    const devices = Object.keys(captures[a.name] ?? {}).filter((d) => captures[b.name]?.[d] && captures[a.name][d].html === captures[b.name][d].html);
+    if (devices.length) out.push({ kind: "states-identical", states: [a.name, b.name], devices });
+  }
+  return out;
+}
+
+export function suspectSignals({ candidates, textLength, elementCount, mediaCount, bodyText, devOverlayError, redirect }) {
   /* a token with a colon is a Tailwind variant: it describes another state, not this one */
   const tokens = (cls) => cls.split(/\s+/).filter((token) => token && !token.includes(":"));
   const anyToken = (cls, pattern) => tokens(cls).some((token) => pattern.test(token));
@@ -30,5 +58,6 @@ export function suspectSignals({ candidates, textLength, elementCount, mediaCoun
   if (crash) signals.push({ kind: "error-text", count: 1, samples: [crash[0]] });
   if (textLength < 20 && elementCount < 15 && mediaCount === 0) signals.push({ kind: "near-empty", count: 1 });
   if (devOverlayError) signals.push({ kind: "dev-overlay", count: 1 });
+  if (redirect) signals.push({ kind: "redirected", count: 1, samples: [`${redirect.requested} -> ${redirect.final}`] });
   return signals;
 }

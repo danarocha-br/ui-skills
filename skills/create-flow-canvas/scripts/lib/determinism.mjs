@@ -1,14 +1,17 @@
 /* Runs in the page before any of its scripts, so two captures of a screen see the same random numbers and the same
    time. Serialised with toString(): it may use only its argument and globals. */
-export function freezeClockAndRandom({ now, seed }) {
+export function freezeClockAndRandom({ now, seed, clock }) {
   const RealDate = Date;
-  const fixed = new RealDate(now).getTime();
+  const base = new RealDate(now).getTime();
+  const began = RealDate.now();
+  /* "run": start at the frozen time but keep moving, for animation libraries that stall on a clock that stands still */
+  const current = () => (clock === "run" ? base + (RealDate.now() - began) : base);
   function FrozenDate(...args) {
-    if (!new.target) return new RealDate(fixed).toString();
-    return Reflect.construct(RealDate, args.length ? args : [fixed], new.target === FrozenDate ? RealDate : new.target);
+    if (!new.target) return new RealDate(current()).toString();
+    return Reflect.construct(RealDate, args.length ? args : [current()], new.target === FrozenDate ? RealDate : new.target);
   }
   FrozenDate.prototype = RealDate.prototype;
-  FrozenDate.now = () => fixed;
+  FrozenDate.now = current;
   FrozenDate.parse = RealDate.parse;
   FrozenDate.UTC = RealDate.UTC;
   globalThis.Date = FrozenDate;
