@@ -126,6 +126,6 @@ test("textColors counts visible characters by their computed colour", async (t) 
     const page = await browser.newPage();
     await page.setContent(`<body style="color:rgb(10,10,10)"><p>abc</p><span style="color:rgb(255,0,0)">de f</span><span style="display:none">hidden</span><script>1</script><style>p{}</style></body>`);
     const got = await page.evaluate(`(${textColors})()`);
-    assert.deepEqual(got, { "rgb(255, 0, 0)": 4, "rgb(10, 10, 10)": 3 });
+    assert.deepEqual(got, { "rgb(255, 0, 0)": 3, "rgb(10, 10, 10)": 3 });
   } finally { await browser.close(); }
 });
