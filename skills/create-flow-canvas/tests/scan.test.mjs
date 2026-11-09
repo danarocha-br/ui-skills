@@ -370,3 +370,32 @@ test("a render the scanner did give wins over the placeholder, and the reason is
   assert.match(scan.screens[0].html.desktop, /<p class="total">0<\/p>/);
   assert.equal(scan.screens[0].unrendered, "ignored for the render");
 });
+
+/* ---------- a state that exists on some devices only ---------- */
+
+const withDesktopOnlyState = () => {
+  const raw = JSON.parse(tinyRaw);
+  raw.screens[0].states = [
+    { name: "Default" },
+    { name: "Dialog", html: { desktop: '<p class="dlg">Sign in</p>' } },
+  ];
+  return raw;
+};
+
+test("a state with no render for a device shows a placeholder that says so, on that device only", () => {
+  const { scan, problems } = readScan(withDesktopOnlyState());
+  eq(problems, []);
+  const st = scan.screens[0].states[1];
+  assert.match(st.html.desktop, /class="dlg"/, "the device it exists on still renders it");
+  for (const d of FlowDevice.ids().filter((x) => x !== "desktop")) {
+    assert.match(st.html[d], /This state doesn&#39;t exist on |This state doesn't exist on /, d + " says why");
+    assert.ok(st.html[d].includes(d), d + " is named");
+    assert.ok(!/could not be rendered/i.test(st.html[d]), "it is not the unrendered-screen wording");
+  }
+});
+
+test("a state placeholder leaves the first state and a state with no html of its own alone", () => {
+  const { scan } = readScan(withDesktopOnlyState());
+  assert.equal(scan.screens[0].states[0].html, undefined, "the first state is the screen's own render");
+  assert.equal(scan.screens[0].html.mobile, JSON.parse(tinyRaw).screens[0].html.mobile);
+});

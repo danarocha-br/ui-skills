@@ -5385,6 +5385,14 @@
             const markup = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This screen could not be rendered</strong><span>${escapeText(s.unrendered)}</span></div>`;
             devices.forEach((d) => { if (!s.html[d]) s.html[d] = markup; });
           });
+          /* a state the product only has on some devices: the others say so, rather than showing a blank frame */
+          screens.forEach((s) => s.states.forEach((st) => {
+            if (!st.html) return;
+            devices.forEach((d) => {
+              if (st.html[d]) return;
+              st.html[d] = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This state doesn't exist on ${escapeText(d)}</strong><span>It was only captured on the other devices.</span></div>`;
+            });
+          }));
           const known = (id) => ids.has(id);
 
           /* Reserve ids of valid annotations before inferring any, including ones later in the list. Repeated

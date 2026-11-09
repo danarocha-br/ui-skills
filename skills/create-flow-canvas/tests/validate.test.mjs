@@ -134,14 +134,14 @@ test("a canvas module that never finishes loading fails with a timeout message i
   assert.ok(Date.now() - t0 < 5000);
 });
 
-test("a state that has no render on some device warns that those devices show a blank frame", async () => {
+test("a state that exists on some devices only is fine: the engine gives the others a placeholder", async () => {
   const html = edit(await good(), (scan) => {
     const a = scan.screens[0];
     a.states = [a.states[0], { name: "dialog", html: { desktop: "<p>d</p>" } }];
   });
   const r = validate(html);
   assert.deepEqual([...r.errors], []);
-  assert.match(r.warnings.join("\n"), /state "dialog".*mobile, tablet.*blank/);
+  assert.deepEqual([...r.warnings].filter((w) => /dialog/.test(w)), [], "no warning for a device-limited state");
 });
 
 test("a scan reader that never returns also fails with the timeout message", async () => {

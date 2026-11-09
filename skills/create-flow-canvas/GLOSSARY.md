@@ -61,6 +61,7 @@ _Avoid_: Mock, fake, partial
 
 **Unrendered**:
 A screen the scanner could not render (`unrendered: "reason"` in the scan). Where it has no render for a device, the scan module fills one in: a placeholder that says the screen could not be rendered and gives the reason, as text. A render the scan does supply wins, and Inspect shows the reason either way.
+A state the product has on only some devices (a state's `html` lacks a device) gets the same kind of placeholder on the others, saying "This state doesn't exist on <device>"; the state stays selectable everywhere.
 _Avoid_: Empty frame, broken screen
 
 **Screen root**:
