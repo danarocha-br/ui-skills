@@ -149,3 +149,13 @@ test("a scan reader that never returns also fails with the timeout message", asy
   assert.notEqual(html, await good(), "the reader was found to edit");
   assert.match(errorsOf(html, { scriptTimeoutMs: 200 }), /did not finish within 200 ?ms/);
 });
+
+test("a failed capture is an error that names the state, device and reason", async () => {
+  const html = edit(await good(), (scan) => { scan.screens[0].states.push({ name: "Open", failed: { mobile: "Timeout waiting for #x" } }); });
+  const msg = errorsOf(html);
+  assert.match(msg, /screen "home"/);
+  assert.match(msg, /Open/);
+  assert.match(msg, /mobile/);
+  assert.match(msg, /Timeout waiting for #x/);
+  assert.match(msg, /failed/i);
+});

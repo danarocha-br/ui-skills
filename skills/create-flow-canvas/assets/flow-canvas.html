@@ -5371,7 +5371,7 @@
               components: Array.isArray(s.components) ? s.components.filter((c) => typeof c === "string") : [],
               states: (Array.isArray(s.states) ? s.states : [])
                 .filter((st) => isObj(st) && typeof st.name === "string")
-                .map((st) => Object.assign({ name: st.name, reachable: st.reachable !== false }, isObj(st.html) ? { html: perDev(st.html) } : {})),
+                .map((st) => Object.assign({ name: st.name, reachable: st.reachable !== false }, isObj(st.html) ? { html: perDev(st.html) } : {}, isObj(st.failed) && Object.keys(st.failed).length ? { failed: Object.fromEntries(Object.entries(st.failed).filter(([d]) => devices.includes(d)).map(([d, why]) => [d, str(why, "no reason recorded")])) } : {})),
               note: str(s.note),
               approximate: s.approximate === true,
               unrendered: str(s.unrendered).trim(),
@@ -5385,12 +5385,22 @@
             const markup = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This screen could not be rendered</strong><span>${escapeText(s.unrendered)}</span></div>`;
             devices.forEach((d) => { if (!s.html[d]) s.html[d] = markup; });
           });
+          /* a capture that failed says so, apart from a state the product deliberately lacks on a device (below) */
+          const placeholder = (title, why) => `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>${title}</strong><span>${why}</span></div>`;
+          screens.forEach((s) => s.states.forEach((st, i) => {
+            if (!st.failed) return;
+            /* the first state is the screen's own render; a later state with no render of its own gets one here */
+            const into = i === 0 ? s.html : (st.html = st.html || {});
+            Object.keys(st.failed).forEach((d) => {
+              if (!into[d]) into[d] = placeholder(`Capture failed on ${escapeText(d)}`, `This is a failure, not a product choice: ${escapeText(st.failed[d])}`);
+            });
+          }));
           /* a state the product only has on some devices: the others say so, rather than showing a blank frame */
           screens.forEach((s) => s.states.forEach((st) => {
             if (!st.html) return;
             devices.forEach((d) => {
               if (st.html[d]) return;
-              st.html[d] = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This state doesn't exist on ${escapeText(d)}</strong><span>It was only captured on the other devices.</span></div>`;
+              st.html[d] = placeholder(`This state doesn't exist on ${escapeText(d)}`, "It was only captured on the other devices.");
             });
           }));
           const known = (id) => ids.has(id);

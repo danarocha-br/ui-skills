@@ -24,6 +24,7 @@ Top level:
 - `errors[]` entries also carry `pageErrors: [string]`
 - `socketsGuarded: boolean`
 - `escaped: { host: count }`, outside hosts reached by a redirect from the app (Playwright cannot route those)
+- The assembler copies each error onto its state as `failed: { <device>: message }` in the scan. The canvas shows "Capture failed on <device>" there (never "doesn't exist"), and `validate.mjs` fails on it
 - A state may list `devices: ["desktop"]`; the other devices are then absent from its captures, on purpose. Scenarios may also set top-level `cookies`, `freeze`, `budgets`, `settleMs`
 - Screen entries carry whatever scenarios.json gave (`id, route, url, states`), including `states[].steps`
 

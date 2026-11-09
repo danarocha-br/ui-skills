@@ -413,3 +413,19 @@ test("a raw sheet keeps its other rules beside its fonts, rebases its urls, and 
   assert.match(css, /\.used\{background:url\(data:image\/png/);
   assert.equal(report.rawSheets[0].kept, true);
 });
+
+test("a failed capture is recorded on its state, so the canvas can say it failed", async () => {
+  const capture = baseCapture();
+  const a = capture.screens[0];
+  a.captures.Open = { desktop: a.captures[Object.keys(a.captures)[0]].desktop };
+  a.states = [...a.states, { name: "Open" }, { name: "Lost" }];
+  capture.errors = [
+    { screen: a.id, state: "Open", device: "mobile", message: "Timeout waiting for #x", pageErrors: [] },
+    { screen: a.id, state: "Lost", device: "desktop", message: "Navigation failed", pageErrors: [] },
+  ];
+  const scan = scanOf((await run(capture)).html);
+  const open = scan.screens.find((s) => s.states.some((st) => st.name === "Open")).states.find((st) => st.name === "Open");
+  assert.deepEqual(open.failed, { mobile: "Timeout waiting for #x" });
+  const lost = scan.screens.flatMap((s) => s.states).find((st) => st.name === "Lost");
+  assert.deepEqual(lost.failed, { desktop: "Navigation failed" }, "a state that failed everywhere is not silently dropped");
+});

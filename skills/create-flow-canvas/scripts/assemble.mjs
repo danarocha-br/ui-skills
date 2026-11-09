@@ -328,11 +328,20 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     const unreachNames = new Set(unreachable.map((u) => u.name));
     const names = e.cap ? Object.keys(e.cap.captures || {}) : [];
     const comps = new Set();
+    /* a capture that failed is absent from captures; the canvas must say it failed, not that the state is missing there */
+    const failedOf = new Map();
+    for (const err of e.cap ? list(capture.errors).filter((x) => isObj(x) && x.screen === e.cap.id) : []) {
+      const m = failedOf.get(err.state) || {};
+      m[err.device] = text(err.message).split("\n")[0].slice(0, 200) || "no reason recorded";
+      failedOf.set(err.state, m);
+    }
+    const failedField = (n) => (failedOf.has(n) ? { failed: failedOf.get(n) } : {});
     const states = names.map((n, i) => {
       for (const c of Object.values(e.cap.captures[n])) namesIn(c.html).forEach((x) => comps.add(x));
-      return { name: n, reachable: !unreachNames.has(n), ...(i ? { html: perDevice(e.cap.captures[n], id) } : {}) };
+      return { name: n, reachable: !unreachNames.has(n), ...failedField(n), ...(i ? { html: perDevice(e.cap.captures[n], id) } : {}) };
     });
-    for (const u of unreachable) if (!names.includes(u.name)) states.push({ name: u.name, reachable: false });
+    for (const n of failedOf.keys()) if (!names.includes(n)) states.push({ name: n, reachable: !unreachNames.has(n), ...failedField(n) });
+    for (const u of unreachable) if (!states.some((st) => st.name === u.name)) states.push({ name: u.name, reachable: false });
     const first = names.length ? perDevice(e.cap.captures[names[0]], id) : {};
     screens.push({
       id, name: f.name, route: e.route, file: f.file, components: [...comps].sort(), states, note: text(f.note),

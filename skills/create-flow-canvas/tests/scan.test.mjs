@@ -394,6 +394,28 @@ test("a state with no render for a device shows a placeholder that says so, on t
   }
 });
 
+test("a device a capture failed on says it failed, not that the state does not exist there", () => {
+  const raw = withDesktopOnlyState();
+  raw.screens[0].states[1].failed = { mobile: "Timeout 5000ms waiting for #open" };
+  const { scan, problems } = readScan(raw);
+  eq(problems, []);
+  const st = scan.screens[0].states[1];
+  assert.match(st.html.mobile, /Capture failed on mobile/);
+  assert.match(st.html.mobile, /Timeout 5000ms waiting for #open/, "the reason is shown");
+  assert.ok(!/doesn.{1,6}t exist/.test(st.html.mobile), "a failure never reads as intentional");
+  assert.match(st.html.tablet, /doesn.{1,6}t exist on tablet/, "a deliberately absent device still says so");
+  eq(st.failed, { mobile: "Timeout 5000ms waiting for #open" }, "the failure stays on the state for the validator");
+});
+
+test("a failed first state, or a state that failed everywhere, still gets a placeholder", () => {
+  const raw = JSON.parse(tinyRaw);
+  delete raw.screens[0].html.mobile;
+  raw.screens[0].states = [{ name: "Default", failed: { mobile: "boom" } }, { name: "Gone", failed: { mobile: "a", tablet: "b", desktop: "c" } }];
+  const { scan } = readScan(raw);
+  assert.match(scan.screens[0].html.mobile, /Capture failed on mobile/);
+  for (const d of ["mobile", "tablet", "desktop"]) assert.match(scan.screens[0].states[1].html[d], new RegExp("Capture failed on " + d));
+});
+
 test("a state placeholder leaves the first state and a state with no html of its own alone", () => {
   const { scan } = readScan(withDesktopOnlyState());
   assert.equal(scan.screens[0].states[0].html, undefined, "the first state is the screen's own render");
