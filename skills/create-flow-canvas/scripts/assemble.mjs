@@ -113,6 +113,69 @@ const hrefPath = (h) => {
 };
 const internalHref = (h) => typeof h === "string" && h.startsWith("/") && !h.startsWith("//");
 
+/* A link's text that is a record rather than a name: a whole list row (it has line breaks, or runs on), whose words
+   came from the data the screen was captured with. The link is real; its words are not the product's. */
+const RECORD_TEXT_LENGTH = 40;
+const isRecordText = (label) => /[\r\n]/.test(label.trim()) || label.trim().length > RECORD_TEXT_LENGTH;
+/* a count in a label changes from screen to screen ("Inbox 3", "Inbox 12"), the link does not */
+const sameWords = (label) => {
+  const words = label.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return words.replace(/\s*\d+\s*/g, " ").trim() || words;
+};
+
+/* A destination with the same words on this many screens is the product's chrome (a sidebar, a header, tabs), not a
+   step of a journey. Three, because two screens that both say "Back" are still two journeys; a sidebar is on far more.
+   The number does not scale with the product: a sidebar can be on a third of the screens when the others have other chrome. */
+export const SHARED_NAVIGATION_SCREENS = 3;
+
+/* Which captured links become connectors, and which are noted once as shared navigation.
+   links: [{ id, from, to, label, record? }] in capture order, more than one per pair of screens when a screen links twice.
+   groups: [[screen id]] in flow order; nameOf(id): a screen's name.
+   -> { links, navigation: [{ to, label, from: [ids] }] }, the busiest navigation first
+   A pair of screens gets one connector: two would be drawn on top of each other. It keeps the first label that names
+   something; a row of record text, or a link with no text at all, is labelled with where it leads.
+   A shared link stays a connector only where it is the next step of a group's flow, so a row of tabs keeps its spine. */
+export function journeyLinks(links, { groups = [], nameOf = () => "" } = {}) {
+  const key = (l) => l.to + "\u0000" + sameWords(l.label);
+  const isRecord = (l) => !!l.record || isRecordText(l.label);
+  const named = (l) => !!l.label.trim() && !isRecord(l);
+  /* an icon-only sidebar link has no words, and is shared navigation all the same; a row of record text is not */
+  const onScreens = new Map();
+  for (const l of links) if (!isRecord(l)) onScreens.set(key(l), (onScreens.get(key(l)) || new Set()).add(l.from));
+  const shared = (l) => !isRecord(l) && onScreens.get(key(l)).size >= SHARED_NAVIGATION_SCREENS;
+  const nextStep = new Set(groups.flatMap((ids) => ids.slice(1).map((to, i) => ids[i] + "\u0000" + to)));
+  const isStep = (l) => !shared(l) || nextStep.has(l.from + "\u0000" + l.to);
+  const pairs = new Map();
+  for (const l of links) if (isStep(l)) pairs.set(l.from + "\u0000" + l.to, [...(pairs.get(l.from + "\u0000" + l.to) || []), l]);
+  const out = [...pairs.values()].map((all) => {
+    const best = all.filter(named).sort((a, b) => (a.id < b.id ? -1 : 1))[0] || all[0];
+    return { id: best.id, from: best.from, to: best.to, label: named(best) ? best.label.trim() : nameOf(best.to) || "" };
+  });
+  const navigation = [...onScreens.entries()].filter(([, from]) => from.size >= SHARED_NAVIGATION_SCREENS).map(([k, from]) => {
+    const l = links.find((x) => !isRecord(x) && key(x) === k);
+    return { to: l.to, label: l.label.trim().replace(/\s+/g, " ") || nameOf(l.to) || "", from: [...from].sort() };
+  }).sort((a, b) => b.from.length - a.from.length || (a.label < b.label ? -1 : 1));
+  return { links: out, navigation };
+}
+
+/* One finding per fact: the same words about the same thing on several screens come from a layout they share, so they
+   are one finding on the first of them, which says where else it applies. A finding without its own text (its wording
+   comes from its screen's facts) stays with its screen. */
+export function mergeSharedFindings(raw, { nameOf = () => "" } = {}) {
+  const groups = new Map();
+  for (const f of raw) {
+    const k = f.text ? `${f.kind}\u0000${f.target}\u0000${f.text}` : f;
+    groups.set(k, [...(groups.get(k) || []), f]);
+  }
+  return [...groups.values()].map((all) => {
+    const frames = [...new Set(all.map((f) => f.frame))];
+    if (frames.length < 2) return all[0];
+    const names = frames.map(nameOf);
+    const shown = names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${names.length - 3} more` : names.join(", ");
+    return { ...all[0], screens: frames, text: `${all[0].text} It is on ${frames.length} screens: ${shown}.` };
+  });
+}
+
 export async function fetchBytes(url) {
   if (!/^https?:/i.test(url)) return null;
   try {
@@ -360,13 +423,11 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   const seenLink = new Set();
   for (const c of candidates) { const k = c.base + "\u0000" + c.key; if (!seenLink.has(k)) { seenLink.add(k); uniqueLinks.push(c); } }
   const linkIds = assignIds(uniqueLinks, (c) => c.base, (c) => c.key);
-  const links = [], emitted = new Set();
-  for (const c of uniqueLinks) {
-    if (emitted.has(c.base)) continue;
-    emitted.add(c.base);
-    uniqueLinks.filter((x) => x.base === c.base).map((x) => ({ x, id: linkIds.get(x) })).sort((a, b) => (a.id < b.id ? -1 : 1))
-      .forEach(({ x, id }) => links.push({ id, from: x.from, to: x.to, label: x.label }));
-  }
+  const nameOf = new Map(screens.map((s) => [s.id, s.name]));
+  /* the same link written across lines on another device is a record there too, even where it came out on one line */
+  const recordHrefs = new Set(uniqueLinks.filter((x) => isRecordText(x.label)).map((x) => x.from + "\u0000" + x.href));
+  const { links, navigation } = journeyLinks(uniqueLinks.map((x) => ({ id: linkIds.get(x), from: x.from, to: x.to, label: x.label, record: recordHrefs.has(x.from + "\u0000" + x.href) })), {
+    groups: groupList.map(({ g }) => list(g.screens).map(idOf)), nameOf: (id) => nameOf.get(id) });
 
   /* ---------- 5. findings ---------- */
   const raw = [];
@@ -387,8 +448,9 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     const { screen, ...rest } = f;
     raw.push({ ...rest, frame: idOf(screen), target: text(f.target) });
   }
-  const fids = assignIds(raw, (f) => `${f.kind}:${f.frame}${f.target ? ":" + (slug(f.target) || "target") : ""}`, (f) => JSON.stringify(f));
-  const findings = raw.map((f) => {
+  const merged = mergeSharedFindings(raw, { nameOf: (id) => nameOf.get(id) });
+  const fids = assignIds(merged, (f) => `${f.kind}:${f.frame}${f.target ? ":" + (slug(f.target) || "target") : ""}`, (f) => JSON.stringify(f));
+  const findings = merged.map((f) => {
     const { target, ...rest } = f;
     return { ...rest, id: fids.get(f), ...(target ? { target } : {}) };
   });
@@ -409,7 +471,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
     product: { id: product.id.trim(), name: product.name.trim(), ...(text(product.scanned) ? { scanned: product.scanned } : {}) },
     start: flows.start != null ? idOf(flows.start) : (groups[0]?.screens[0] || screens[0].id),
     components: Object.fromEntries(sorted.map((n) => [n, `[data-flow-c~="${n.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`])),
-    screens, groups, links, findings, notes: [],
+    screens, groups, links, navigation, findings, notes: [],
   };
   /* JSON for a script tag: "</" and "<!--" written with escapes JSON allows */
   const json = JSON.stringify(scan).replace(/<\//g, "<\\/").replace(/<!--/g, "<\\u0021--");
@@ -426,7 +488,7 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
 
   const kb = (s) => Math.round(Buffer.byteLength(s) / 1024);
   const report = {
-    screens: screens.length, links: links.length, findings: findings.length, components: sorted.length,
+    screens: screens.length, links: links.length, sharedNavigation: navigation.length, findings: findings.length, components: sorted.length,
     sizesKB: { css: kb(css), scan: kb(json), file: kb(html) },
     fonts: { inlined: used.fonts, bytes: used.fontBytes }, images: { inlined: used.images, bytes: used.imageBytes },
     dropped, rawSheets, looseScreens, htmlImagesNotInlined: htmlImages.size,

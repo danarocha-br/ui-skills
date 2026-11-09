@@ -147,6 +147,14 @@ _Avoid_: Slideshow, autoplay (for a manual visit)
 The scan's finding that one screen leads to another. On the canvas a link is drawn as a **connector**; the connector is the only thing that says "A leads to B", and buttons inside a frame follow connectors.
 _Avoid_: Edge, arrow, transition
 
+**Shared navigation**:
+A link on many screens (a sidebar, a header, a row of tabs): the same words to the same screen on three or more. It is not a journey, so it is noted once above everything rather than drawn on each screen, and a button in a screen still follows it. A link that is the next step of a group's flow keeps its connector.
+_Avoid_: Global nav, chrome links
+
+**Connector path**:
+The way a connector goes: right-angle runs through the gutters, off every frame. A label stands on a clear stretch of its path, or just beside it; with no room at all it is **tucked** to a dot that shows the label on hover and focus. A path with no way round goes through the fewest frames and is drawn dotted. In code, `FlowRouting.planner` and `placeLabels`.
+_Avoid_: Edge, route (a **route** is a screen's URL)
+
 **Finding**:
 Something the scanner wants a reviewer to notice about a frame, shown as a card pointing at it. Every finding has a **kind** (unreachable states, reused component) that decides its wording and what it does when clicked.
 _Avoid_: Scan card, insight, warning

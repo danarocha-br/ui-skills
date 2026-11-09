@@ -934,6 +934,11 @@
       .conn.sel .ln {
         stroke-width: 2.75;
       }
+      /* no way round exists (a frame is walled in by others): a quiet dotted line says it is passing through */
+      .conn.through .ln {
+        stroke-dasharray: 2 6;
+        opacity: 0.7;
+      }
       .conn.off {
         opacity: 0;
         pointer-events: none;
@@ -996,6 +1001,78 @@
       .echip .lb {
         outline: 0;
         min-width: 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* the full label comes back when someone is looking at it */
+      .echip:hover .lb,
+      .echip:focus-within .lb,
+      .echip .lb[contenteditable] {
+        max-width: none !important;
+      }
+      .echip:hover,
+      .echip:focus-within {
+        z-index: 8;
+      }
+      /* nowhere to stand: a small dot on the line, its label on hover or focus */
+      .echip.tuck:not(:hover):not(:focus-within) {
+        width: 12px;
+        height: 12px;
+        padding: 0;
+        box-shadow: 0 0 0 1px rgba(16, 19, 19, 0.16);
+      }
+      .echip.tuck:not(:hover):not(:focus-within) > * {
+        display: none;
+      }
+      /* links on many screens, noted once above everything */
+      #navNote {
+        position: absolute;
+        z-index: 4;
+        width: min(720px, 90vw);
+        font: 500 12px/1.4 var(--sans);
+        color: #666c74;
+      }
+      #navNote[hidden] {
+        display: none;
+      }
+      #navNote h3 {
+        margin: 0 0 8px;
+        font: 600 13px var(--sans);
+        color: var(--ink);
+      }
+      #navNote p {
+        margin: 0 0 8px;
+      }
+      #navNote .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #navNote button {
+        border: 0;
+        cursor: pointer;
+        font: 500 12px var(--sans);
+        padding: 5px 11px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #3a3f46;
+        box-shadow: 0 1px 2px rgba(16, 19, 19, 0.06);
+      }
+      #navNote button:hover {
+        background: var(--ink);
+        color: #fff;
+      }
+      #navNote button:focus-visible {
+        outline: 2px solid var(--cobalt);
+        outline-offset: 2px;
+      }
+      #navNote button i {
+        font-style: normal;
+        opacity: 0.6;
+        margin-left: 6px;
+      }
+      body.hide-edges #navNote {
+        display: none;
       }
       .echip .lb[contenteditable] {
         cursor: text;
@@ -1525,17 +1602,23 @@
       .col:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 8px; border-radius: 12px; }
       .frame-actions { border: 0; background: transparent; color: var(--ink); cursor: pointer; padding: 4px; }
       .frame-actions svg { width: 18px; height: 18px; }
-      .frame-actions:focus-visible, #frameActions :focus-visible, #playControls button:focus-visible {
+      .frame-actions:focus-visible, #playControls button:focus-visible {
         outline: 2px solid var(--cobalt); outline-offset: 2px;
       }
-      #frameActions { color: var(--ink); background: var(--paper, #fff); border: 1px solid var(--line, #bbb);
-        border-radius: 16px; padding: 24px; max-width: min(460px, calc(100vw - 48px)); font: 14px/1.5 var(--sans); }
-      #frameActions::backdrop { background: rgb(0 0 0 / .3); }
-      #frameActions h2 { font-size: 18px; margin: 0 0 8px; }
-      #frameActions label { display: block; margin-top: 12px; }
-      #frameActions select { max-width: 100%; }
-      #frameActions button, #frameActions select, #playControls button { font: inherit; padding: 6px 10px; margin: 4px 2px; }
-      #frameActions fieldset { margin: 12px 0; }
+      #frameActions { width: 276px; max-height: min(440px, calc(100vh - 24px)); overflow-y: auto; overscroll-behavior: contain;
+        transform-origin: top right; scroll-padding: 6px; }
+      #frameActions.up { transform-origin: bottom right; }
+      #frameActions .mhead { padding: 8px 11px 7px; font: 600 12.5px var(--sans); color: var(--ink);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #frameActions .mnote { padding: 6px 11px 7px; font: 400 12px var(--sans); color: #666c74; }
+      #frameActions .mi span.sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
+      #frameActions .pick { flex-direction: column; align-items: flex-start; gap: 1px; }
+      #frameActions .pick span { margin: 0; padding: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+      #frameActions .nudge { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+      #frameActions .nudge .mi { justify-content: center; padding: 8px 4px; }
+      #frameActions .nudge .mi svg { color: inherit; }
+      #frameActions :focus-visible { outline: 2px solid var(--cobalt); outline-offset: -2px; }
+      #playControls button { font: inherit; padding: 6px 10px; margin: 4px 2px; }
       #playControls { left: 50%; bottom: 76px; transform: translateX(-50%); z-index: 70; }
       #playControls[hidden] { display: none; }
       @keyframes pop {
@@ -4331,6 +4414,7 @@
           <circle cx="7.5" cy="15" r="1.3" />
           <circle cx="12.5" cy="15" r="1.3" />
         </symbol>
+        <symbol id="i-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></symbol>
         <symbol id="i-more" viewBox="0 0 20 20" fill="currentColor">
           <circle cx="4.5" cy="10" r="1.5" />
           <circle cx="10" cy="10" r="1.5" />
@@ -4371,6 +4455,7 @@
         <div id="frames"></div>
         <svg id="conns" class="conns" width="1" height="1"></svg>
         <div id="cchips"></div>
+        <aside id="navNote" aria-label="Shared navigation" hidden></aside>
         <div id="notes"></div>
       </div>
     </div>
@@ -4535,20 +4620,7 @@
     <div class="ui pill" id="playControls" hidden role="group" aria-label="Manual playback">
       <button id="playNext">Next screen</button><button id="playStop">Stop playback</button>
     </div>
-    <dialog id="frameActions" aria-labelledby="frameActionTitle">
-      <h2 id="frameActionTitle">Frame actions</h2>
-      <p>Changes can be undone with Control or Command+Z.</p>
-      <p id="frameActionStatus" role="status" aria-live="polite"></p>
-      <div class="action-row"><button data-frame-action="earlier">Move earlier</button><button data-frame-action="later">Move later</button></div>
-      <button data-frame-action="takeOut">Take out of group</button>
-      <fieldset><legend>Move loose frame</legend>
-        <button data-frame-action="left">Left</button><button data-frame-action="right">Right</button>
-        <button data-frame-action="up">Up</button><button data-frame-action="down">Down</button>
-      </fieldset>
-      <label>Group <select name="group"></select></label><button data-frame-action="join">Move to group</button>
-      <label>Connect to <select name="destination"></select></label><button data-frame-action="connect">Create connector</button>
-      <button data-frame-action="close">Close</button>
-    </dialog>
+    <div class="menu ui" id="frameActions"></div>
 
     <!-- ======================================================================
          THE SCAN: what the scanner found in the product (here the sample, Loam). The generator writes this
@@ -5248,6 +5320,7 @@
                                                                  button that follows the connector to <id>
              groups:   [{ id, screens, open, title, sub, subOn, meta }],
              links:    [{ id?, from, to, label }],          id defaults to "from>to"
+             navigation?: [{ to, label, from: [ids] }],     links on many screens (a sidebar, a header): shown once, not drawn
              findings: [{ id?, kind, frame, ...facts, text? }],  id defaults to "frame:kind"
              notes:    [{ id?, frame, who, t, text, pos?: { device: [x, y] } }] }  id defaults to "frame:who"
 
@@ -5464,8 +5537,22 @@
           findingItems.forEach((f) => {
             const kind = str(f.kind, "note");
             const id = findingId(f.id, f.frame + ":" + kind);
-            if (unique("findings", findingIds, id)) findings.push(Object.assign(clone(f), { id, kind }));
+            if (!unique("findings", findingIds, id)) return;
+            const finding = Object.assign(clone(f), { id, kind });
+            if (Array.isArray(f.screens)) {
+              finding.screens = f.screens.filter(known);
+              if (finding.screens.length < f.screens.length) problems.push(`finding "${id}" lists a screen the scan does not have: left out`);
+            }
+            findings.push(finding);
           });
+
+          /* shared navigation: a list of facts, shown once; a screen the scan does not have is left out of it */
+          const navigation = Array.isArray(src.navigation) ? src.navigation.flatMap((n, i) => {
+            const from = isObj(n) && Array.isArray(n.from) ? n.from.filter(known) : [];
+            if (!isObj(n) || !known(n.to) || !from.length) { problems.push(`navigation ${i} leads to or from a screen the scan does not have: dropped`); return []; }
+            if (from.length < n.from.length) problems.push(`navigation ${i} lists a screen the scan does not have: left out`);
+            return [{ to: n.to, label: str(n.label), from }];
+          }) : [];
 
           const noteItems = validItems("notes", (n, i) => {
             if (!isObj(n)) return `note ${i} is not a note: dropped`;
@@ -5514,6 +5601,7 @@
               screens,
               groups,
               links,
+              navigation,
               findings,
               notes,
             },
@@ -6632,7 +6720,9 @@
                                          eases its tilt and scale with, too
            FlowGeometry.arrange(input, m) -> { places, boxes, bottom }    pure; nothing is written back
              input  { groups: [{ id, screens, open }], screens: [every frame id, in order],
-                      pos: { [group or loose frame id]: { x, y } } }   the saved positions on this device
+                      pos: { [group or loose frame id]: { x, y } },   the saved positions on this device
+                      stacks?: { [group id]: n }, findY? }            the tallest stack of unmoved findings under a frame of that group, and
+                                                                      where the first stands (the group grows so the stack ends before the next title)
              place  { x, y, r, s, d, z, fx, fy, deck, group, i }   s = drawn scale; d = ms it waits before it slides
              box    { x, top, w, h, n, open }                  one per group; empty ones too
            FlowGeometry.loosePlace(k, bottom, m) -> { x, y }    the k-th default place of a loose frame
@@ -6647,6 +6737,7 @@
            FlowGeometry.deckSpread(n, m)  -> the width of a deck of n cards
            FlowGeometry.groupCornerFor(place) -> { x, y }   where a group sits so its first frame lands at `place`
            FlowGeometry.EDGES             every offset these are built from, named once (see its comment)
+           FlowGeometry.FINDINGS          { pitch, card, clearance } a finding's default stack; FlowGeometry.stackRoom(n, findY, m) the height it adds
 
            const geo = FlowGeometry.create({ reduceMotion })
            geo.setMetrics(m)    geo.setReduceMotion(bool)    geo.reset()   (setMetrics first: retarget throws without it)
@@ -6667,6 +6758,9 @@
            geo.worldOf(id, [x, y], now) -> { x, y } | undefined   a point in the frame's own pixels, in the world: the corner it has now plus the point, scaled
            geo.screenRect(id, now)  geo.frameBox(id, now)      the screen area / the whole frame with its caption
            geo.frameAt(point, now, { margin, skip }) -> id|null  the frame whose screen is under the point
+           geo.routeScene(now) -> { hard, soft }               what a connector keeps off: frames and decks (hard), group titles (soft)
+           geo.topLeft() -> { x, y }                           the top-left corner of everything on the canvas
+           geo.reserveAbove(px)                                room bounds() leaves above everything, for something standing there
            geo.bounds()                                        everything on the canvas, with room round it
            geo.hold(id, x, y)  geo.release(ids)                a frame under the pointer; it stays put, then slides home
            geo.step(now) -> [ids that moved]    geo.restsAt()    geo.settled(now)
@@ -6751,6 +6845,11 @@
           exit: Object.freeze({ open: 40, closed: 120 }),
         });
 
+        /* a finding's card in its default stack under a frame: how far apart two stand, and the tallest a card usually is */
+        const FINDINGS = Object.freeze({ pitch: 132, card: 130, clearance: 24 });
+        /* the extra height a group needs so a stack of n cards ends before the next group's title (findY: where the first stands) */
+        const stackRoom = (n, findY, m) =>
+          n > 0 ? Math.max(0, findY + (n - 1) * FINDINGS.pitch + FINDINGS.card + FINDINGS.clearance - m.body) : 0;
         const groupH = (m) => WORLD.head + m.body + m.cap;
         /* a frame, from the top of its column: the bezel above the screen, the screen, then the caption */
         const frame = (m) => ({
@@ -6828,7 +6927,7 @@
             bottom = WORLD.top0;
           groups.forEach((g) => {
             const n = g.screens.length,
-              h = g.open ? groupH(m) : m.collH,
+              h = g.open ? groupH(m) + stackRoom(input.stacks?.[g.id] || 0, input.findY || 0, m) : m.collH,
               w = g.open ? Math.max(rowW(n, m) + EDGES.rowPad, EDGES.rowMin) : m.closedW;
             const p = pos[g.id];
             let box;
@@ -6904,6 +7003,7 @@
             return { x: p.x, y: p.y, s: p.s };
           };
           /* a frame is drawn from its corner, scaled about it: a deck frame is small, and grows as it fans out */
+          let above = 0;
           const screenRect = (id, now) => {
             const r = rect(id, now);
             const f = frame(m);
@@ -7051,6 +7151,33 @@
               }
               return null;
             },
+            /* frames as they stand now; a closed group is one obstacle, the fan of its deck */
+            routeScene(now) {
+              const hard = [], soft = [];
+              order.forEach((id) => {
+                if (arr.places[id].deck) return;
+                const b = frameBox(id, now);
+                hard.push({ id, x: b.x, y: b.y, w: b.w, h: b.h });
+              });
+              groupIds.forEach((g) => {
+                const b = arr.boxes[g];
+                if (!b || !b.n) return;
+                if (b.open) soft.push({ group: g, x: b.x, y: b.top, w: b.w, h: WORLD.head - EDGES.titleRise });
+                else {
+                  hard.push({ x: b.x, y: b.top, w: deckSpread(b.n, m), h: m.collH });
+                  const t = this.closedTitle(g);
+                  soft.push({ group: g, x: t.x, y: t.y, w: b.w, h: EDGES.titleRise });
+                }
+              });
+              return { hard, soft };
+            },
+            topLeft() {
+              let x = 1e9, y = 1e9;
+              Object.values(arr.boxes).forEach((b) => { if (b.n) { x = Math.min(x, b.x); y = Math.min(y, b.top); } });
+              order.forEach((id) => { if (!arr.places[id].group) { x = Math.min(x, arr.places[id].x); y = Math.min(y, arr.places[id].y); } });
+              return x > 1e8 ? { x: 0, y: 0 } : { x, y };
+            },
+            reserveAbove(px) { above = px; },
             bounds() {
               let x0 = 1e9,
                 y0 = 1e9,
@@ -7069,7 +7196,7 @@
                 add(b.x - 20, b.y - 20, b.w + 40, b.h + 40);
               });
               if (x0 > x1) return { x: 0, y: 0, w: 900, h: 600 };
-              return { x: x0 - 40, y: y0 - 60, w: x1 - x0 + 80, h: y1 - y0 + 120 };
+              return { x: x0 - 40, y: y0 - 60 - above, w: x1 - x0 + 80, h: y1 - y0 + 120 + above };
             },
             hold(id, x, y) {
               held.add(id);
@@ -7089,7 +7216,7 @@
           };
         }
 
-        return { WORLD, EDGES, MOVES, groupH, frame, slotPitch, rowW, deckSpread, groupCornerFor, arrange, loosePlace, readingOrder, bezier, create };
+        return { WORLD, EDGES, FINDINGS, stackRoom, MOVES, groupH, frame, slotPitch, rowW, deckSpread, groupCornerFor, arrange, loosePlace, readingOrder, bezier, create };
       })();
     </script>
 
@@ -7111,6 +7238,18 @@
            FlowRouting.rounded(pts, r)    svg path through pts with rounded corners
            FlowRouting.leader(frame, left, top, w, h, moved) -> { x0, y0, d, end }   a scanner finding's leader: from the frame's
                                           bottom edge to its card (frame: FlowGeometry.frame's w and screenBottom)
+           const plan = FlowRouting.planner()     every connector at once, kept off the frames
+             plan.plan(asks, scene, { live, budget }) -> Map id -> { p0, pts, crossed, provisional }
+               asks   [{ id, from, to, a, b }]: the two frames' ids and screen rects
+               scene  { hard: [{ id?, x, y, w, h }], soft: [rects], edge }  hard: frames and decks, never crossed if there is a way;
+                      soft: titles and cards, avoided when it costs little
+               live   frames are moving: keep a route that is still clear, and search at most `budget` nodes in all. A line past
+                      the budget is drawn plainly and marked provisional; the next settled plan() replaces it.
+               crossed   no way round exists: the line goes through the fewest frames, and the page draws it differently
+             plan.searches() -> how many searches have run (cached answers don't count)
+           FlowRouting.placeLabels(items, scene) -> Map id -> { x, y, w, fits }   items [{ id, pts, w, h }], w the label's natural
+                                          width: on a clear stretch of its own line, cut to the run it has, never over a frame or another label;
+                                          fits false: nowhere to stand, so the page tucks it to a dot
          ====================================================================== */
       var FlowRouting = (function () {
         function sidePt(r, side, edge) {
@@ -7287,7 +7426,307 @@
           const pts = ortho({ x: x0, y: fr, nx: 0, ny: 1 }, { x: T[0], y: T[1], ...nB });
           return { x0, y0: fr, d: rounded(pts, 12), end: T };
         }
-        return { sidePt, pickSides, ortho, rounded, shape, route, leader };
+
+        /* ---------- round the frames ---------- */
+        const CLEAR = 14, /* a line keeps this far from a frame */
+          STUB = 26, /* it leaves a port straight for this far */
+          BEND = 60, /* a corner is worth this much extra run */
+          SOFT_COST = 800, /* crossing a title or a card, per grid step */
+          HARD_COST = 1e6, /* crossing a frame */
+          HUG = 1.1, /* a track along a frame costs a little more than one down the middle of a gutter */
+          OUTSIDE = 60, /* the way round everything */
+          LANE = 9, /* lines sharing a channel stand this far apart */
+          LIVE_BUDGET = 30000; /* nodes one frame of a slide or a drag may search, in all */
+        const pad = (r, by) => ({ x: r.x - by, y: r.y - by, w: r.w + 2 * by, h: r.h + 2 * by });
+        const strictlyIn = (lo, v, hi) => v > lo + 0.01 && v < hi - 0.01;
+        /* does this run go through the inside of r? (along its edge is outside) */
+        function runHits(a, b, r) {
+          const [x0, x1] = a.x < b.x ? [a.x, b.x] : [b.x, a.x],
+            [y0, y1] = a.y < b.y ? [a.y, b.y] : [b.y, a.y];
+          if (x0 === x1) return strictlyIn(r.x, x0, r.x + r.w) && y1 > r.y + 0.01 && y0 < r.y + r.h - 0.01;
+          if (y0 === y1) return strictlyIn(r.y, y0, r.y + r.h) && x1 > r.x + 0.01 && x0 < r.x + r.w - 0.01;
+          return x1 > r.x && x0 < r.x + r.w && y1 > r.y && y0 < r.y + r.h;
+        }
+        const pathHits = (pts, r) => pts.slice(1).some((q, i) => runHits(pts[i], q, r));
+        /* clear of everything: its own two frames only unpadded, because a port stands on the frame's edge */
+        const clearOf = (pts, ask, hard) =>
+          hard.every((r) => !pathHits(pts, r.id === ask.from || r.id === ask.to ? r : pad(r, CLEAR)));
+        const sortedUnique = (a) => {
+          const s = a.slice().sort((x, y) => x - y), out = [];
+          s.forEach((v) => { if (!out.length || v - out[out.length - 1] > 0.5) out.push(v); });
+          return out;
+        };
+        /* the index of the track at (or just before) v */
+        function at(tracks, v) {
+          let lo = 0, hi = tracks.length - 1;
+          while (lo < hi) {
+            const m = (lo + hi + 1) >> 1;
+            if (tracks[m] <= v + 0.5) lo = m;
+            else hi = m - 1;
+          }
+          return lo;
+        }
+        /* tracks down every gutter: both sides of each padded rect, the middle of each gap, and a way round the outside */
+        function tracks(lows, highs, extra) {
+          const edges = sortedUnique([...lows, ...highs]);
+          const spans = lows.map((l, i) => [l, highs[i]]).sort((a, b) => a[0] - b[0]), mids = [];
+          let reach = spans.length ? spans[0][1] : 0;
+          spans.forEach(([l, h]) => {
+            if (l > reach + 1) mids.push((reach + l) / 2);
+            reach = Math.max(reach, h);
+          });
+          const lo = edges[0] ?? 0, hi = edges[edges.length - 1] ?? 0;
+          const list = sortedUnique([...edges, ...mids, ...extra, lo - OUTSIDE, hi + OUTSIDE]);
+          const hug = new Set(edges);
+          return { list, hug: list.map((v) => hug.has(v)) };
+        }
+        /* Dijkstra over the gutters, on (point, heading), so a corner has a price. Returns { pts, crossed, nodes } */
+        function search(ask, scene) {
+          const hard = scene.hard.map((r) => pad(r, CLEAR)), soft = scene.soft || [];
+          const ports = [
+            { from: true, side: "R" }, { from: true, side: "L" },
+            { from: false, side: "L" }, { from: false, side: "R" },
+          ].map((o) => {
+            const p = sidePt(o.from ? ask.a : ask.b, o.side, scene.edge);
+            return { ...o, p, stub: { x: p.x + p.nx * STUB, y: p.y } };
+          });
+          const X = tracks(hard.map((r) => r.x), hard.map((r) => r.x + r.w), ports.map((o) => o.stub.x));
+          const Y = tracks(hard.map((r) => r.y), hard.map((r) => r.y + r.h), ports.map((o) => o.stub.y));
+          const nx = X.list.length, ny = Y.list.length, n = nx * ny;
+          /* extra cost of the step from a point to its right (hx) and to the point below (vy) */
+          const hx = new Float64Array(n), vy = new Float64Array(n);
+          const charge = (r, cost) => {
+            const i0 = at(X.list, r.x), i1 = at(X.list, r.x + r.w), j0 = at(Y.list, r.y), j1 = at(Y.list, r.y + r.h);
+            for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+              const k = i + j * nx;
+              if (i < i1 && j > j0 && strictlyIn(r.y, Y.list[j], r.y + r.h)) hx[k] += cost;
+              if (j < j1 && i > i0 && strictlyIn(r.x, X.list[i], r.x + r.w)) vy[k] += cost;
+            }
+          };
+          hard.forEach((r) => charge(r, HARD_COST));
+          soft.forEach((r) => charge(r, SOFT_COST));
+          const DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
+          const size = n * 4, dist = new Float64Array(size).fill(Infinity), prev = new Int32Array(size).fill(-1), done = new Uint8Array(size);
+          const heap = [], push = (d, s) => {
+            let i = heap.length;
+            heap.push([d, s]);
+            while (i) {
+              const p = (i - 1) >> 1;
+              if (heap[p][0] <= d) break;
+              [heap[i], heap[p]] = [heap[p], heap[i]];
+              i = p;
+            }
+          }, pop = () => {
+            const top = heap[0], last = heap.pop();
+            if (heap.length) {
+              heap[0] = last;
+              for (let i = 0; ;) {
+                let m = i;
+                const l = 2 * i + 1, r = l + 1;
+                if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+                if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+                if (m === i) break;
+                [heap[i], heap[m]] = [heap[m], heap[i]];
+                i = m;
+              }
+            }
+            return top;
+          };
+          const nodeOf = (o) => at(X.list, o.stub.x) + at(Y.list, o.stub.y) * nx;
+          const froms = ports.filter((o) => o.from), tos = ports.filter((o) => !o.from);
+          const headOf = (o) => (o.p.nx > 0 ? 0 : 2); /* the way the line is going as it leaves this port */
+          froms.forEach((o) => {
+            const s = nodeOf(o) * 4 + headOf(o);
+            dist[s] = 0;
+            push(0, s);
+          });
+          /* a target is reached at its stub, heading anywhere but straight out of the port it is about to enter */
+          const goals = new Map();
+          tos.forEach((o) => {
+            const inward = o.p.nx > 0 ? 2 : 0;
+            [0, 1, 2, 3].forEach((h) => {
+              if (h === (inward + 2) % 4) return;
+              goals.set(nodeOf(o) * 4 + h, { o, extra: h === inward ? 0 : BEND });
+            });
+          });
+          let nodes = 0, best = Infinity, end = -1;
+          while (heap.length) {
+            const [d, s] = pop();
+            if (done[s]) continue;
+            done[s] = 1;
+            if (d >= best) break;
+            nodes++;
+            const g = goals.get(s);
+            if (g && d + g.extra < best) { best = d + g.extra; end = s; }
+            const k = s >> 2, h = s & 3, i = k % nx, j = (k - i) / nx;
+            for (let t = 0; t < 4; t++) {
+              if (t === (h + 2) % 4) continue;
+              const i2 = i + DX[t], j2 = j + DY[t];
+              if (i2 < 0 || i2 >= nx || j2 < 0 || j2 >= ny) continue;
+              const k2 = i2 + j2 * nx;
+              const run = t % 2 === 0 ? Math.abs(X.list[i2] - X.list[i]) * (Y.hug[j] ? HUG : 1) : Math.abs(Y.list[j2] - Y.list[j]) * (X.hug[i] ? HUG : 1);
+              const toll = t === 0 ? hx[k] : t === 2 ? hx[k2] : t === 1 ? vy[k] : vy[k2];
+              const nd = d + run + toll + (t === h ? 0 : BEND), s2 = k2 * 4 + t;
+              if (nd < dist[s2]) {
+                dist[s2] = nd;
+                prev[s2] = s;
+                push(nd, s2);
+              }
+            }
+          }
+          if (end < 0) return { pts: null, crossed: true, nodes };
+          const trail = [];
+          for (let s = end; s >= 0; s = prev[s]) trail.unshift({ x: X.list[(s >> 2) % nx], y: Y.list[((s >> 2) - ((s >> 2) % nx)) / nx] });
+          const start = froms.find((o) => Math.abs(o.stub.x - trail[0].x) < 0.6 && Math.abs(o.stub.y - trail[0].y) < 0.6) || froms[0];
+          const finish = goals.get(end).o;
+          const raw = [{ x: start.p.x, y: start.p.y }, ...trail, { x: finish.p.x, y: finish.p.y }];
+          return { pts: tidy(raw), p0: start.p, crossed: best >= HARD_COST, nodes };
+        }
+        /* no repeats, no point on a straight run */
+        function tidy(pts) {
+          const c = [];
+          pts.forEach((q) => {
+            const l = c[c.length - 1];
+            if (!l || Math.abs(q.x - l.x) > 0.5 || Math.abs(q.y - l.y) > 0.5) c.push(q);
+          });
+          return c.filter((q, i) => {
+            if (i === 0 || i === c.length - 1) return true;
+            const a = c[i - 1], n = c[i + 1];
+            return Math.abs((q.x - a.x) * (n.y - q.y) - (q.y - a.y) * (n.x - q.x)) >= 0.5;
+          });
+        }
+        /* lines sharing a channel stand side by side. Only runs between two corners move, so a line still lands on its port;
+           a line that a shift would bring into a frame stays where it was */
+        function spread(routes, hard) {
+          const buckets = new Map();
+          routes.forEach((r, ri) => {
+            for (let i = 1; i + 2 < r.pts.length; i++) {
+              const a = r.pts[i], b = r.pts[i + 1], flat = Math.abs(a.y - b.y) < 0.5, v = flat ? a.y : a.x;
+              const key = (flat ? "h" : "v") + Math.round(v);
+              const [lo, hi] = flat ? [Math.min(a.x, b.x), Math.max(a.x, b.x)] : [Math.min(a.y, b.y), Math.max(a.y, b.y)];
+              if (!buckets.has(key)) buckets.set(key, []);
+              buckets.get(key).push({ ri, i, lo, hi, flat });
+            }
+          });
+          const shifts = routes.map(() => []);
+          buckets.forEach((runs) => {
+            if (runs.length < 2) return;
+            runs.sort((a, b) => a.lo - b.lo || a.ri - b.ri);
+            const ends = [];
+            runs.forEach((run) => {
+              let lane = ends.findIndex((e) => e <= run.lo);
+              if (lane < 0) lane = ends.length;
+              ends[lane] = run.hi + LANE;
+              run.lane = lane;
+            });
+            runs.forEach((run) => {
+              if (ends.length > 1) shifts[run.ri].push({ ...run, by: (run.lane - (ends.length - 1) / 2) * LANE });
+            });
+          });
+          return routes.map((r, ri) => {
+            if (!shifts[ri].length) return r;
+            const pts = r.pts.map((q) => ({ ...q }));
+            shifts[ri].forEach((s) => {
+              [s.i, s.i + 1].forEach((k) => {
+                if (s.flat) pts[k].y = r.pts[k].y + s.by;
+                else pts[k].x = r.pts[k].x + s.by;
+              });
+            });
+            return hard.some((h) => pathHits(pts, h)) && !r.crossed ? r : { ...r, pts };
+          });
+        }
+        function planner() {
+          const memo = new Map();
+          let count = 0;
+          const rectKey = (r) => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}`;
+          return {
+            searches: () => count,
+            plan(asks, scene, { live = false, budget = live ? LIVE_BUDGET : Infinity } = {}) {
+              const world = scene.hard.map(rectKey).join(";") + "|" + (scene.soft || []).map(rectKey).join(";");
+              const plain = (ask) => {
+                const r = route(ask.a, ask.b, scene.edge);
+                return { p0: r.p0, pts: r.pts };
+              };
+              const seen = new Set();
+              const routes = asks.map((ask) => {
+                seen.add(ask.id);
+                const ends = rectKey(ask.a) + "|" + rectKey(ask.b), was = memo.get(ask.id), sameEnds = was && was.ends === ends;
+                if (sameEnds && was.world === world && !was.route.provisional) return was.route;
+                if (sameEnds && live && !was.route.provisional && !was.route.crossed && clearOf(was.route.pts, ask, scene.hard)) return was.route;
+                const direct = plain(ask);
+                let found;
+                if (clearOf(direct.pts, ask, scene.hard)) found = { ...direct, crossed: false, provisional: false };
+                else if (budget <= 0) found = { ...direct, crossed: false, provisional: true };
+                else {
+                  const r = search(ask, scene);
+                  count++;
+                  budget -= r.nodes;
+                  found = r.pts ? { p0: r.p0, pts: r.pts, crossed: r.crossed, provisional: false } : { ...direct, crossed: true, provisional: false };
+                }
+                memo.set(ask.id, { ends, world, route: found });
+                return found;
+              });
+              memo.forEach((_, id) => { if (!seen.has(id)) memo.delete(id); });
+              const spaced = spread(routes, scene.hard);
+              return new Map(asks.map((ask, i) => [ask.id, spaced[i]]));
+            },
+          };
+        }
+        const LABEL_SPACE = 4, /* what a label keeps from a frame or another label */
+          MIN_W = 44, /* cut any shorter and a label says nothing */
+          END = 18, /* a label on an upright run stays this far from a corner or a port */
+          SHORT_RUN_MARGIN = 8; /* what a level run keeps either side of a label cut to fit it */
+        /* where each label stands: shortest lines first (they have the fewest choices), the longest runs first, the middle of a run first */
+        function placeLabels(items, scene) {
+          const hit = (c, r, by = LABEL_SPACE) =>
+            c.x - c.w / 2 - by < r.x + r.w && c.x + c.w / 2 + by > r.x && c.y - c.h / 2 - by < r.y + r.h && c.y + c.h / 2 + by > r.y;
+          const taken = [], out = new Map();
+          const length = (it) => it.pts.slice(1).reduce((s, q, i) => s + Math.hypot(q.x - it.pts[i].x, q.y - it.pts[i].y), 0);
+          items.slice().sort((a, b) => length(a) - length(b) || (a.id < b.id ? -1 : 1)).forEach((it) => {
+            const runs = it.pts.slice(1).map((q, i) => ({ a: it.pts[i], b: q, len: Math.hypot(q.x - it.pts[i].x, q.y - it.pts[i].y) })).sort((x, y) => y.len - x.len);
+            let best = null;
+            for (const run of runs) {
+              const flat = Math.abs(run.a.y - run.b.y) < 0.5;
+              const w = flat ? Math.min(it.w, run.len - SHORT_RUN_MARGIN) : it.w;
+              if (w < Math.min(MIN_W, it.w) || (!flat && run.len - END * 2 < it.h)) continue;
+              const need = flat ? w : it.h, n = Math.max(1, Math.floor((run.len - need) / (need + LABEL_SPACE)));
+              const stops = [0.5];
+              for (let k = 1; k <= Math.min(n, 12); k++) stops.push(0.5 - (k * (need + LABEL_SPACE)) / run.len, 0.5 + (k * (need + LABEL_SPACE)) / run.len);
+              /* on the line first; a level run also has the space just above and below it, for two lines sharing a gutter */
+              const beside = flat ? [0, -(it.h + LABEL_SPACE), it.h + LABEL_SPACE] : [0];
+              for (const dy of beside) {
+                for (const t of stops) {
+                  if (t * run.len < need / 2 || (1 - t) * run.len < need / 2) continue;
+                  const c = { x: run.a.x + (run.b.x - run.a.x) * t, y: run.a.y + (run.b.y - run.a.y) * t + dy, w, h: it.h };
+                  if (scene.hard.some((r) => hit(c, r)) || taken.some((r) => hit(c, r))) continue;
+                  const score = (w < it.w ? 2 : 0) + (dy ? 1 : 0) + (scene.soft || []).filter((r) => hit(c, r, 0)).length * 3;
+                  if (!best || score < best.score) best = { c, score };
+                  if (!score) break;
+                }
+                if (best && !best.score) break;
+              }
+              if (best && !best.score) break;
+            }
+            if (best) {
+              taken.push({ x: best.c.x - best.c.w / 2, y: best.c.y - best.c.h / 2, w: best.c.w, h: best.c.h });
+              out.set(it.id, { x: best.c.x, y: best.c.y, w: best.c.w, fits: true });
+            } else {
+              /* a dot still keeps off frames and other labels: try along every run, and only then give up and sit mid-line */
+              const dot = (t, run) => ({ x: run.a.x + (run.b.x - run.a.x) * t, y: run.a.y + (run.b.y - run.a.y) * t, w: 12, h: 12 });
+              let spot = dot(0.5, runs[0]);
+              spots: for (const run of runs)
+                for (const t of [0.5, 0.25, 0.75, 0.12, 0.88]) {
+                  const d = dot(t, run);
+                  if (!scene.hard.some((r) => hit(d, r, 0)) && !taken.some((r) => hit(d, r))) { spot = d; break spots; }
+                }
+              const cx = spot.x, cy = spot.y;
+              out.set(it.id, { x: cx, y: cy, w: 0, fits: false });
+              taken.push({ x: cx - 8, y: cy - 8, w: 16, h: 16 });
+            }
+          });
+          return out;
+        }
+        return { sidePt, pickSides, ortho, rounded, shape, route, leader, planner, placeLabels };
       })();
     </script>
 
@@ -8381,6 +8820,7 @@
         tokenMax: 950,
         tokenPerPixel: 0.3,
         tapLead: 180,
+        typeahead: 600,
         doubleClick: 240,
         resizeSettle: 120,
         scrollbarFade: 900,
@@ -8856,7 +9296,7 @@
           : "true";
       })();
       /* scanned text enters markup only through here (see FlowMarkup) */
-      const { esc, html, sel: cssStr } = FlowMarkup;
+      const { esc, html, raw, sel: cssStr } = FlowMarkup;
       const X_ICON =
         '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 2l6 6M8 2L2 8"/></svg>';
       const ADD_ICON = '<svg viewBox="0 0 20 20"><use href="#i-plus"/></svg>';
@@ -9275,7 +9715,11 @@
       /* what the geometry is asked to arrange: the groups, every frame, and where this device has things saved */
       const geoInput = () => {
         const v = gesture.view();
-        return { groups: v.groups.map(({ id, screens, open }) => ({ id, screens, open })), screens: ORDER, pos: v.pos };
+        /* how many findings still stand in their default stack under each frame; a group grows to hold its tallest */
+        const unmoved = new Map();
+        layout.scans.forEach((f) => { if (!FlowDevice.carried(f.pos, DEV.id)) unmoved.set(f.frame, (unmoved.get(f.frame) || 0) + 1); });
+        const stacks = Object.fromEntries(v.groups.map((g) => [g.id, Math.max(0, ...g.screens.map((id) => unmoved.get(id) || 0))]));
+        return { groups: v.groups.map(({ id, screens, open }) => ({ id, screens, open })), screens: ORDER, pos: v.pos, stacks, findY: DEV.findY };
       };
       const arrange = FlowArrange.create({ layout, geo, frames: ORDER, device: () => DEV.id, metrics: () => DEV.metrics, input: geoInput });
       const keyboard = FlowKeyboard.create({ layout, geo, frames: ORDER, device: () => DEV.id });
@@ -9444,9 +9888,32 @@
           sizeDz(L);
         });
       }
+      /* links on many screens are shared navigation, not a journey: told once, above everything */
+      const SHARED_NAV = SCAN.navigation;
+      const navNote = $("#navNote"), NAV_NOTE_RISE = 22; /* how far above everything it stands */
+      navNote.style.transform = `translateY(calc(-100% - ${NAV_NOTE_RISE}px))`;
+      function paintNavNote() {
+        if (!SHARED_NAV.length) return;
+        if (navNote.hidden) {
+          const screens = new Set(SHARED_NAV.flatMap((n) => n.from)).size;
+          navNote.innerHTML = String(html`<h3>Shared navigation</h3><p>On up to ${screens} screens, so not drawn as arrows. Buttons in a screen still follow them.</p><div class="links">${
+            SHARED_NAV.map(({ to, label: words, from }) => html`<button data-to="${to}" title="${SCREENS[to].name} · ${SCREENS[to].route}">${words}<i>${from.length}</i></button>`)}</div>`);
+          navNote.hidden = false;
+          geo.reserveAbove(navNote.offsetHeight + NAV_NOTE_RISE);
+        }
+        const at = geo.topLeft();
+        navNote.style.left = at.x + "px";
+        navNote.style.top = at.y + "px";
+      }
+      navNote.addEventListener("click", (e) => {
+        const to = e.target.closest("button")?.dataset.to;
+        if (to && SCREENS[to]) { select(to, false); focusScreen(to); }
+      });
       function relayout(opts) {
         arrangeFrames(opts);
+        paintNavNote();
         syncGroups();
+        measureTitles();
         updateBars();
         updateAllBtn();
         updateSelBox();
@@ -9466,10 +9933,11 @@
         const nth = layout.scans.filter((x) => x.frame === f.frame).findIndex((x) => x.id === f.id);
         /* the place the user gave it on this device, or carried from the one they moved it on; none means the default stack */
         const saved = FlowDevice.carried(f.pos, DEV.id);
-        const [dx, dy] = [0, DEV.findY + Math.max(0, nth) * 132];
+        const [dx, dy] = [0, DEV.findY + Math.max(0, nth) * FlowGeometry.FINDINGS.pitch];
         let left = saved ? saved[0] : dx,
           top = saved ? saved[1] : dy + geo.frame().caption,
-          moved = !!saved;
+          moved = !!saved,
+          cardH = 0;
         const st = document.createElementNS(svgNS, "svg");
         st.setAttribute("class", "stem");
         st.setAttribute("width", "1");
@@ -9483,6 +9951,7 @@
         d.tabIndex = 0;
         d.setAttribute("role", "group");
         d.setAttribute("aria-label", "Scanner finding. Arrow keys move it, Delete dismisses it.");
+        if (f.screens) d.title = "On: " + f.screens.map((x) => SCREENS[x].name).join(", ");
         d.style.width = FIND_W + "px";
         d.innerHTML = `<span class="ic"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"><path d="M6 1v2M6 9v2M1 6h2M9 6h2M2.8 2.8l1.4 1.4M7.8 7.8l1.4 1.4M2.8 9.2l1.4-1.4M7.8 4.2l1.4-1.4"/></svg></span><div>${kind.text(f)}</div><button class="sx" type="button" aria-label="Dismiss this finding" title="Dismiss (Delete)"><svg aria-hidden="true"><use href="#i-x"/></svg></button>`;
         col.appendChild(d);
@@ -9491,7 +9960,8 @@
           top = t;
           d.style.left = l + "px";
           d.style.top = t + "px";
-          const g = FlowRouting.leader(geo.frame(), l, t, d.offsetWidth, d.offsetHeight, m);
+          cardH = d.offsetHeight;
+          const g = FlowRouting.leader(geo.frame(), l, t, d.offsetWidth, cardH, m);
           st.querySelector(".sl").setAttribute("d", g.d);
           const dk = st.querySelector(".dk"),
             en = st.querySelector(".en");
@@ -9527,6 +9997,12 @@
           /* draw the leader for where the card is now, at its real size: after a cancelled drag, and after every
              layout (a card is built before its frame is attached to the page, so it measures 0 wide at first) */
           redrawLeader: () => place(left, top, moved),
+          /* the card in world px, for connectors to keep off; its height is read when it is drawn, not on every frame */
+          box: (now) => {
+            if (geo.isDeck(f.frame)) return null;
+            const r = geo.rect(f.frame, now);
+            return r && { x: r.x + left, y: r.y + top, w: FIND_W, h: cardH };
+          },
           savePos,
           erased: () => {
             tie(false);
@@ -9620,7 +10096,7 @@
           else if (command.action === "actions") openFrameActions(id);
           else editFrame(id, command);
         });
-        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${s.approximate ? '<span class="approx" title="Part of this screen was stubbed, so it only approximates the real one">Approximate</span>' : ""}${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}<button class="frame-actions" title="Frame actions (Shift+F10)" aria-label="Frame actions" aria-haspopup="dialog" aria-controls="frameActions" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"/></svg></button></div>
+        col.innerHTML = `<div class="label"><span class="lname">${esc(s.name)}</span><span class="route">${esc(s.route)}</span>${s.approximate ? '<span class="approx" title="Part of this screen was stubbed, so it only approximates the real one">Approximate</span>' : ""}${many ? `<button class="states">${stateLabel(id)}</button>` : '<span class="live"><i></i></span>'}<button class="frame-actions" title="Frame actions (Shift+F10)" aria-label="Frame actions" aria-haspopup="menu" aria-controls="frameActions" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"/></svg></button></div>
     <div class="pwrap">${many ? '<div class="stack b"></div><div class="stack a"></div>' : ""}${FrameDom.hostHTML(id)}<i class="port" data-side="R"></i><i class="port" data-side="L"></i><i class="port" data-side="T"></i><i class="port" data-side="B"></i></div>`;
         col.querySelector(".frame-actions").addEventListener("click", (e) => { e.stopPropagation(); select(id, false); openFrameActions(id); });
         if (many)
@@ -10474,8 +10950,42 @@
         connEls.set(c.id, o);
         return o;
       }
+      const connPlan = FlowRouting.planner();
+      const titleWidths = new Map();
+      /* a group's title, description and meta line: measured when the layout changes, read on every frame of a slide */
+      function measureTitles() {
+        titleWidths.clear();
+        document.querySelectorAll(".lane[data-group-id]").forEach((el) => {
+          /* the words, not their block (which is as wide as the group): a Range measures on screen, so undo the camera */
+          const widest = Math.max(0, ...[...el.querySelectorAll(".gtitle, .gsub")].map((n) => {
+            const words = document.createRange();
+            words.selectNodeContents(n);
+            return words.getBoundingClientRect().width / cam.k;
+          }));
+          if (widest) titleWidths.set(el.dataset.groupId, widest + 16);
+        });
+      }
+      /* what connectors keep off, now: the frames and decks and group titles the geometry has, and the finding cards */
+      function routeScene(now) {
+        const { hard, soft } = geo.routeScene(now);
+        /* the geometry knows a group's box; only the page knows how wide its words came out */
+        soft.forEach((r) => { if (r.group && titleWidths.has(r.group)) r.w = titleWidths.get(r.group); });
+        scanViews.forEach((v) => { const r = v.box(now); if (r) soft.push(r); });
+        return { hard, soft, edge: DEV.metrics.edge };
+      }
+      /* a label's natural width: measured from its text, so drawing a frame of a slide reads no layout */
+      const labelCtx = document.createElement("canvas").getContext("2d");
+      const labelWidths = new Map();
+      const CHIP = { h: 26, chrome: 22 }; /* a label's height, and what its padding adds to its text */
+      function labelWidth(text) {
+        if (!labelWidths.has(text)) {
+          labelCtx.font = `500 12px ${getComputedStyle(document.body).getPropertyValue("--sans") || "sans-serif"}`;
+          labelWidths.set(text, Math.ceil(labelCtx.measureText(text).width) + CHIP.chrome);
+        }
+        return labelWidths.get(text);
+      }
       function drawConns(now = performance.now()) {
-        const alive = new Set();
+        const alive = new Set(), asks = [];
         layout.conns.forEach((c) => {
           alive.add(c.id);
           const o = connEls.get(c.id) || mkConnEl(c);
@@ -10491,19 +11001,31 @@
           o.chip.dataset.from = c.from;
           if (document.activeElement !== o.lb && o.lb.textContent !== c.label)
             o.lb.textContent = c.label;
+          o.chip.title = (c.label ? c.label + " · " : "") + "Click to follow · double-click to rename";
           if (hidden) return;
           const a = geo.screenRect(c.from, now),
             b = geo.screenRect(c.to, now);
-          if (!a || !b) return;
-          const r = FlowRouting.route(a, b, DEV.metrics.edge),
-            sh = FlowRouting.shape(r);
+          if (a && b) asks.push({ id: c.id, from: c.from, to: c.to, a, b, c, o });
+        });
+        const scene = routeScene(now);
+        const routes = connPlan.plan(asks, scene, { live: !geo.settled(now) || gesture.active() });
+        const items = asks.map(({ id, c, o }) => ({
+          id, pts: routes.get(id).pts,
+          w: labelWidth(document.activeElement === o.lb ? o.lb.textContent : c.label), h: CHIP.h,
+        }));
+        const labels = FlowRouting.placeLabels(items, scene);
+        asks.forEach(({ id, o }) => {
+          const r = routes.get(id), sh = FlowRouting.shape(r), l = labels.get(id);
+          o.g.classList.toggle("through", r.crossed);
           o.ln.setAttribute("d", sh.d);
           o.hit.setAttribute("d", sh.d);
           o.dot.setAttribute("cx", r.p0.x);
           o.dot.setAttribute("cy", r.p0.y);
           o.arr.setAttribute("points", sh.arr);
-          o.chip.style.left = sh.mid.x + "px";
-          o.chip.style.top = sh.mid.y + "px";
+          o.chip.style.left = l.x + "px";
+          o.chip.style.top = l.y + "px";
+          o.chip.classList.toggle("tuck", !l.fits);
+          o.lb.style.maxWidth = l.fits ? Math.max(0, l.w - CHIP.chrome) + "px" : "";
         });
         connEls.forEach((o, id) => {
           if (!alive.has(id)) {
@@ -10643,7 +11165,7 @@
         }
         let r;
         if (tgt) {
-          r = FlowRouting.route(a, geo.screenRect(tgt, now), DEV.metrics.edge);
+          r = FlowRouting.planner().plan([{ id: "new", from: connDrag.from, to: tgt, a, b: geo.screenRect(tgt, now) }], routeScene(now)).get("new");
         } else {
           const p0 = FlowRouting.sidePt(a, connDrag.side, DEV.metrics.edge);
           r = { p0, pts: FlowRouting.ortho(p0, { x: w.x, y: w.y, nx: 0, ny: 0 }) };
@@ -10797,67 +11319,121 @@
             : "Take " + name + " out of its group before moving it. Use Control or Command+Shift+G.");
         }
       }
+      /* ---------- frame actions: a dropdown under the frame's "…" ---------- */
       const frameActions = $("#frameActions");
-      let actionFrame = null, actionMessage = null;
+      let actionFrame = null, actionView = "main", typedAt = 0, typed = "";
+      const iconTag = (symbol, style = "") => html`<svg style="${style}"><use href="#${symbol}"/></svg>`;
+      const arrowIcon = (turn) => iconTag("i-arrow", `transform:rotate(${turn}deg)`);
+      /* one row; label and value are text, so html`...` escapes them */
+      const actionItem = (action, words, { icon = "", disabled = false, value = "", after = "", cls = "" } = {}) =>
+        html`<button class="mi ${cls}" data-frame-action="${action}" data-value="${value}"${raw(disabled ? " disabled" : "")}>${icon}${words}${after}</button>`;
+      const chevron = () => html`<span>${iconTag("i-arrow", "width:12px;height:12px")}</span>`;
+      const nudgeRow = () => html`<div class="nudge" role="presentation">${[["left", 180, "Move left"], ["up", -90, "Move up"], ["down", 90, "Move down"], ["right", 0, "Move right"]]
+        .map(([move, turn, words]) => html`<button class="mi" data-frame-action="${move}" aria-label="${words}" title="${words}">${arrowIcon(turn)}</button>`)}</div>`;
+      function frameActionsHtml(id) {
+        const group = groupOf(id), index = group ? group.screens.indexOf(id) : -1;
+        const groups = layout.groups.filter((g) => g.id !== group?.id);
+        const destinations = ORDER.filter((to) => to !== id && !connBetween(id, to));
+        if (actionView === "groups")
+          return String(html`${actionItem("back", "Move to group", { icon: arrowIcon(180) })}<hr>${groups.map((g) => actionItem("join", groupName(g), { value: g.id }))}`);
+        if (actionView === "connect")
+          return String(html`${actionItem("back", "Connect to", { icon: arrowIcon(180) })}<hr>${destinations.map((to) => actionItem("connect", SCREENS[to].name, { value: to, cls: "pick", after: html`<span>${SCREENS[to].route}</span>` }))}`);
+        const place = group
+          ? html`${actionItem("earlier", "Move earlier", { icon: arrowIcon(180), disabled: index === 0 })}${actionItem("later", "Move later", { icon: arrowIcon(0), disabled: index === group.screens.length - 1 })}${actionItem("takeOut", "Take out of group", { icon: iconTag("i-ungroup") })}`
+          : nudgeRow();
+        return String(html`<div class="mhead" role="presentation">${SCREENS[id].name}</div>${place}<hr>${actionItem("choose-group", "Move to group", { icon: iconTag("i-layers"), disabled: !groups.length, after: chevron() })}${actionItem("choose-screen", "Connect to", { icon: iconTag("i-arrow"), disabled: !destinations.length, after: chevron() })}<div class="mnote" role="presentation">Undo with ⌘Z or Ctrl+Z</div>`);
+      }
+      function anchorFrameActions() {
+        const button = colOf(actionFrame)?.querySelector(".frame-actions");
+        if (!button) return;
+        const r = button.getBoundingClientRect(), h = frameActions.offsetHeight, w = frameActions.offsetWidth, m = 12;
+        const below = r.bottom + 8 + h <= innerHeight - m || r.top - 8 - h < m;
+        frameActions.classList.toggle("up", !below);
+        frameActions.style.left = Math.max(m, Math.min(r.right - w, innerWidth - w - m)) + "px";
+        frameActions.style.top = Math.max(m, Math.min(below ? r.bottom + 8 : r.top - 8 - h, innerHeight - h - m)) + "px";
+        frameActions.style.bottom = "auto";
+      }
+      /* draw the current view; focus goes to `focusOn` if it is still there and enabled, else the first thing that is */
+      function paintFrameActions(focusOn) {
+        frameActions.innerHTML = frameActionsHtml(actionFrame);
+        dressMenu(frameActions);
+        frameActions.scrollTop = 0;
+        anchorFrameActions();
+        const enabled = [...frameActions.querySelectorAll("button:not(:disabled)")];
+        (enabled.find((b) => b.dataset.frameAction === focusOn) || enabled.find((b) => b.dataset.frameAction !== "back") || enabled[0])?.focus({ preventScroll: true });
+      }
       function openFrameActions(id) {
+        const owner = colOf(id)?.querySelector(".frame-actions");
+        if (!owner) return;
+        const open = menus.frame.classList.contains("open") && actionFrame === id;
         stopPlay();
-        closeMenus();
+        closeMenus({ restore: false });
+        if (open) return;
         actionFrame = id;
-        $("#frameActionStatus").textContent = "";
-        fillFrameActions(id);
-        colOf(id)?.querySelector(".frame-actions").setAttribute("aria-expanded", "true");
-        frameActions.showModal();
+        actionView = "main";
+        frameActions.innerHTML = frameActionsHtml(id);
+        menu("frame", owner);
+        paintFrameActions();
       }
-      /* what the dialog offers for this frame as it is now: it stays open across moves, so this runs after each */
-      function fillFrameActions(id) {
-        const group = groupOf(id), index = group?.screens.indexOf(id);
-        $("#frameActionTitle").textContent = "Frame actions: " + SCREENS[id].name;
-        frameActions.querySelector('[data-frame-action="earlier"]').disabled = !group || index === 0;
-        frameActions.querySelector('[data-frame-action="later"]').disabled = !group || index === group.screens.length - 1;
-        frameActions.querySelector('[data-frame-action="takeOut"]').disabled = !group;
-        frameActions.querySelector("fieldset").disabled = !!group;
-        const groups = layout.groups.filter(g => g.id !== group?.id);
-        frameActions.querySelector('[name="group"]').innerHTML = groups.map(g => `<option value="${esc(g.id)}">${esc(groupName(g))}</option>`).join("");
-        frameActions.querySelector('[data-frame-action="join"]').disabled = !groups.length;
-        const destinations = ORDER.filter(to => to !== id && !connBetween(id, to));
-        frameActions.querySelector('[name="destination"]').innerHTML = destinations.map(to => `<option value="${esc(to)}">${esc(SCREENS[to].name)} · ${esc(SCREENS[to].route)}</option>`).join("");
-        frameActions.querySelector('[data-frame-action="connect"]').disabled = !destinations.length;
+      /* the group and connector pickers are a second view of the same menu: Right or Enter goes in, Left or Escape comes back */
+      const pickerRow = () => (actionView === "groups" ? "choose-group" : "choose-screen");
+      function frameActionsView(next, focusOn) {
+        actionView = next;
+        paintFrameActions(focusOn);
       }
-      frameActions.addEventListener("close", () => {
-        const message = actionMessage;
-        actionMessage = null;
-        if (actionFrame) {
-          colOf(actionFrame)?.querySelector(".frame-actions").setAttribute("aria-expanded", "false");
-          focusFrame(actionFrame, { select: false }); /* closing a dialog returns focus; it does not move the camera */
+      function frameMenuKey(e) {
+        /* the menu says undo works, and key events stop here: moves are undone with it open */
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+          e.preventDefault();
+          undo();
+          paintFrameActions(document.activeElement?.dataset?.frameAction);
+          return true;
         }
-        actionFrame = null;
-        if (message) toast(message); /* the status region is no longer inert after the modal closes */
-      });
+        const inPicker = actionView !== "main";
+        if (inPicker && (e.key === "Escape" || e.key === "ArrowLeft")) {
+          e.preventDefault();
+          frameActionsView("main", pickerRow());
+          return true;
+        }
+        const action = document.activeElement?.dataset?.frameAction;
+        if (e.key === "ArrowRight" && (action === "choose-group" || action === "choose-screen")) {
+          e.preventDefault();
+          document.activeElement.click();
+          return true;
+        }
+        if (inPicker && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key !== " ") {
+          /* type to jump, as the browser's own select did */
+          const t = performance.now();
+          typed = t - typedAt < TIMING.typeahead ? typed + e.key.toLowerCase() : e.key.toLowerCase();
+          typedAt = t;
+          [...frameActions.querySelectorAll('button:not(:disabled):not([data-frame-action="back"])')].find((b) => b.textContent.trim().toLowerCase().startsWith(typed))?.focus();
+          return true;
+        }
+        return false;
+      }
       frameActions.addEventListener("click", (e) => {
-        const action = e.target.closest("[data-frame-action]")?.dataset.frameAction, id = actionFrame;
+        e.stopPropagation(); /* a repaint can take the clicked row away, and the page would read that as a click outside */
+        const button = e.target.closest("[data-frame-action]"), action = button?.dataset.frameAction, id = actionFrame;
         if (!action || !id) return;
-        /* moves repeat, so the dialog stays open and says what happened; the other actions finish and close it */
+        if (action === "choose-group") return frameActionsView("groups");
+        if (action === "choose-screen") return frameActionsView("connect");
+        if (action === "back") return frameActionsView("main", pickerRow());
+        /* moves repeat, so the menu stays open and the toast says what happened; the other actions finish and close it */
         const direction = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" }[action];
         if (action === "earlier" || action === "later" || direction) {
           if (direction) editFrame(id, FlowKeyboard.command({ key: direction, shiftKey: true }));
           else editFrame(id, { action: "reorder", delta: action === "earlier" ? -1 : 1 });
-          fillFrameActions(id);
-          /* a button that has just been disabled (the first frame cannot move earlier) must not take the focus with it */
-          if (!frameActions.contains(document.activeElement) || document.activeElement.disabled)
-            frameActions.querySelector(".action-row button:not(:disabled), fieldset:not(:disabled) button")?.focus();
+          paintFrameActions(action); /* a button just disabled (the first frame cannot move earlier) gives its focus to the next */
           return;
         }
+        const value = button.dataset.value;
+        closeMenus();
         if (action === "takeOut") removeFromGroup([id]);
         if (action === "join") {
-          const groupId = frameActions.querySelector('[name="group"]').value;
-          const changed = commit(() => keyboard.join(id, groupId));
+          const changed = commit(() => keyboard.join(id, value));
           toast(changed ? `Moved ${SCREENS[id].name} to ${groupName(groupOf(id))}.` : "That group is no longer available.");
         }
-        if (action === "connect") {
-          const to = frameActions.querySelector('[name="destination"]').value;
-          if (SCREENS[to] && addConn(id, to, { noEdit: true })) toast(`Connected ${SCREENS[id].name} to ${SCREENS[to].name}.`);
-        }
-        frameActions.close();
+        if (action === "connect" && SCREENS[value] && addConn(id, value, { noEdit: true })) toast(`Connected ${SCREENS[id].name} to ${SCREENS[value].name}.`);
       });
 
       /* put the view back in order without touching what the flows are: group membership and order,
@@ -11270,7 +11846,7 @@
              that leads to its own screen has nowhere to go and needs none) */
           if (to && SCREENS[to]) {
             const from = hit.id;
-            if (from === to || layout.conns.some((c) => c.from === from && c.to === to)) setTimeout(() => go(from, to), TIMING.tapLead);
+            if (from === to || layout.conns.some((c) => c.from === from && c.to === to) || SHARED_NAV.some((n) => n.to === to && n.from.includes(from))) setTimeout(() => go(from, to), TIMING.tapLead);
             else toast(`No connector from ${shortName(from)} to ${shortName(to)}. Draw one to follow this button.`);
           }
         }
@@ -11310,15 +11886,31 @@
         views: $("#mViews"),
         add: $("#mAdd"),
         group: $("#mGroup"),
+        frame: $("#frameActions"),
       };
       let menuOwner = null;
       const menuButtons = { space: $("#btnSpace"), views: $("#btnViews"), add: $("#btnAdd") };
       function closeMenus({ restore = true } = {}) {
         const hadFocus = Object.values(menus).some(el => el.contains(document.activeElement));
+        const frameMenu = menus.frame.classList.contains("open") ? actionFrame : null;
         Object.values(menus).forEach(el => el.classList.remove("open"));
         if (menuOwner) menuOwner.setAttribute("aria-expanded", "false");
-        if (restore && hadFocus) menuOwner?.focus({ preventScroll: true });
+        if (restore && hadFocus) {
+          /* frame actions give focus back to the frame, without moving the camera */
+          if (frameMenu) focusFrame(frameMenu, { select: false });
+          else menuOwner?.focus({ preventScroll: true });
+        }
+        if (frameMenu) actionFrame = null;
         menuOwner = null;
+      }
+      function dressMenu(popup) {
+        popup.querySelectorAll("hr").forEach(el => el.setAttribute("role", "separator"));
+        popup.querySelectorAll("button").forEach(button => {
+          button.setAttribute("role", button.dataset.hide ? "menuitemcheckbox" : "menuitem");
+          if (button.dataset.hide) button.setAttribute("aria-checked", String(button.classList.contains("on")));
+          button.tabIndex = -1;
+          button.querySelectorAll("svg").forEach(svg => svg.setAttribute("aria-hidden", "true"));
+        });
       }
       function menu(n, owner = menuButtons[n]) {
         const popup = menus[n], wasOpen = popup.classList.contains("open") && menuOwner === owner;
@@ -11328,13 +11920,7 @@
         owner.setAttribute("aria-expanded", "true");
         popup.setAttribute("role", "menu");
         popup.setAttribute("aria-label", owner.getAttribute("aria-label") || owner.title);
-        popup.querySelectorAll("hr").forEach(el => el.setAttribute("role", "separator"));
-        popup.querySelectorAll("button").forEach(button => {
-          button.setAttribute("role", button.dataset.hide ? "menuitemcheckbox" : "menuitem");
-          if (button.dataset.hide) button.setAttribute("aria-checked", String(button.classList.contains("on")));
-          button.tabIndex = -1;
-          button.querySelectorAll("svg").forEach(svg => svg.setAttribute("aria-hidden", "true"));
-        });
+        dressMenu(popup);
         popup.classList.add("open");
         popup.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
       }
@@ -11351,6 +11937,7 @@
       });
       Object.values(menus).forEach(popup => popup.addEventListener("keydown", e => {
         e.stopPropagation();
+        if (popup === menus.frame && frameMenuKey(e)) return;
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
           e.preventDefault();
           closeMenus();
@@ -11452,7 +12039,6 @@
       };
       let tt;
       function toast(m) {
-        if (frameActions.open) { actionMessage = m; $("#frameActionStatus").textContent = m; return; }
         const t = $("#toast");
         t.textContent = m;
         t.classList.add("show");
