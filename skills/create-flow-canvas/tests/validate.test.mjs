@@ -75,6 +75,11 @@ test("a button that goes to a real screen with no connector to it is an error", 
   assert.match(errorsOf(html), /data-go="b"[\s\S]*connector/);
 });
 
+test("a button that follows shared navigation, with no connector drawn, is not an error", async () => {
+  const html = edit(await good(), (s) => { s.links = []; s.navigation = [{ to: s.screens[1].id, label: "Go", from: [s.screens[0].id] }]; });
+  assert.deepEqual([...validate(html).errors], []);
+});
+
 test("a connector to or from a screen that is not there is an error", async () => {
   const html = edit(await good(), (s) => { s.links[0].to = "gone"; });
   assert.match(errorsOf(html), /gone/);

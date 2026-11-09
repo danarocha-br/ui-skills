@@ -83,6 +83,11 @@ export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
       warnings.push(`${name} has no render for ${devices.filter((d) => !rendered.includes(d)).join(", ")}; those devices show a blank screen.`);
   }
   const connected = new Set((Array.isArray(json.links) ? json.links : []).filter((l) => l && ids.has(l.from) && ids.has(l.to)).map((l) => `${l.from}>${l.to}`));
+  /* shared navigation is followed by a button the same way a connector is (the engine reads both), so it counts as one here */
+  for (const n of Array.isArray(json.navigation) ? json.navigation : []) {
+    if (!n || typeof n !== "object" || !Array.isArray(n.from)) continue;
+    for (const from of n.from) if (ids.has(from) && ids.has(n.to)) connected.add(`${from}>${n.to}`);
+  }
   for (const l of Array.isArray(json.links) ? json.links : []) {
     if (!l || typeof l !== "object") continue;
     for (const end of ["from", "to"]) if (!ids.has(l[end])) errors.push(`The connector ${l.id || `${l.from}>${l.to}`} ${end === "from" ? "starts at" : "ends at"} screen "${l[end]}", which is not in the scan.`);
