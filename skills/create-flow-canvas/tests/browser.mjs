@@ -513,19 +513,20 @@ test('frame keyboard actions reorder, take out, move, regroup, connect and undo 
   assert(doc.querySelector('#toast').textContent.includes('Moved'),'loose movement is announced');
   await until(()=>loose.style.translate!==position,'loose frame did not move');
   send('F10','F10',{shiftKey:true});
-  const dialog=doc.querySelector('#frameActions');
-  assert(dialog.open,'keyboard opens frame actions');
-  const target=dialog.querySelector('[name="group"]');
-  target.value='panel'; dialog.querySelector('[data-frame-action="join"]').click();
+  const menu=doc.querySelector('#frameActions'), open=()=>menu.classList.contains('open');
+  assert(open(),'keyboard opens frame actions');
+  assert(menu.contains(doc.activeElement),'focus moves into the menu');
+  menu.querySelector('[data-frame-action="choose-group"]').click();
+  menu.querySelector('[data-frame-action="join"][data-value="panel"]').click();
   assert(!doc.querySelector('.col[data-id="entry"]').classList.contains('free'),'picker regroups frame');
-  await until(()=>!dialog.open && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','dialog close handler did not finish');
+  await until(()=>!open() && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','menu close did not finish');
   send('F10','F10',{shiftKey:true});
-  dialog.querySelector('[name="destination"]').value='next';
-  dialog.querySelector('[data-frame-action="connect"]').click();
-  await until(()=>!dialog.open && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','connector dialog close handler did not finish');
+  menu.querySelector('[data-frame-action="choose-screen"]').click();
+  menu.querySelector('[data-frame-action="connect"][data-value="next"]').click();
+  await until(()=>!open() && loose.querySelector('.frame-actions').getAttribute('aria-expanded')==='false','connector menu close did not finish');
   equal(doc.querySelectorAll('#cchips .echip').length,1,'picker creates a connector');
   assert(doc.querySelector('#toast').textContent.includes('Connected'),'connector is announced');
-  equal(doc.activeElement.dataset.id,'entry','dialog returns focus to its frame');
+  equal(doc.activeElement.dataset.id,'entry','the menu returns focus to its frame');
   send('z','KeyZ',{ctrlKey:true});
   equal(doc.querySelectorAll('#cchips .echip').length,0,'connector is one undo step');
 });
@@ -676,13 +677,38 @@ test('Frame actions stay open across moves, say what happened, and keep focus in
   const {doc,win}=await canvas(), w={contentWindow:win};
   const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
   key(w,frame,'keydown','F10','F10',{shiftKey:true});
-  const dialog=doc.querySelector('#frameActions');
-  assert(dialog.open,'keyboard opens frame actions');
-  dialog.querySelector('[data-frame-action="later"]').click();
-  assert(dialog.open,'a move leaves the dialog open');
-  assert(doc.querySelector('#frameActionStatus').textContent.length>0,'the move is announced in the dialog');
-  assert(dialog.contains(doc.activeElement),'focus stays inside the dialog');
-  dialog.close();
+  const menu=doc.querySelector('#frameActions'), open=()=>menu.classList.contains('open');
+  assert(open(),'keyboard opens frame actions');
+  const button=frame.querySelector('.frame-actions').getBoundingClientRect(), top=parseFloat(menu.style.top), height=menu.offsetHeight;
+  assert(Math.abs(top-button.bottom-8)<1||Math.abs(button.top-8-(top+height))<1,'the menu is anchored to the frame\'s button');
+  menu.querySelector('[data-frame-action="later"]').click();
+  assert(open(),'a move leaves the menu open');
+  assert(doc.querySelector('#toast').textContent.length>0,'the move is announced');
+  assert(menu.contains(doc.activeElement),'focus stays inside the menu');
+  doc.activeElement.dispatchEvent(new win.KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}));
+  assert(open(),'undo leaves the menu open');
+  assert(menu.contains(doc.activeElement),'focus survives the undo');
+  menu.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert(!open(),'Escape closes it');
+  equal(doc.activeElement,frame,'focus returns to the frame');
+});
+
+test('Frame actions pickers are a view of the menu: Right goes in, Left comes back', async () => {
+  const {doc,win}=await canvas(), w={contentWindow:win};
+  const frame=doc.querySelector('.col[data-id="entry"]'); frame.focus();
+  key(w,frame,'keydown','F10','F10',{shiftKey:true});
+  const menu=doc.querySelector('#frameActions'), press=(k)=>doc.activeElement.dispatchEvent(new win.KeyboardEvent('keydown',{key:k,bubbles:true}));
+  menu.querySelector('[data-frame-action="takeOut"]').click(); /* the fixture has one group: a loose frame has somewhere to go */
+  key(w,doc.querySelector('.col[data-id="entry"]'),'keydown','F10','F10',{shiftKey:true});
+  const row=menu.querySelector('[data-frame-action="choose-group"]');
+  row.focus(); press('ArrowRight');
+  assert(menu.querySelector('[data-frame-action="join"]'),'Right opens the picker');
+  assert(!menu.querySelector('select'),'no native controls in the menu');
+  press('ArrowLeft');
+  equal(doc.activeElement.dataset.frameAction,'choose-group','Left returns to the row it came from');
+  press('ArrowDown');
+  menu.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert(!menu.classList.contains('open'));
 });
 
 test('names follow a group rename, the chevron and Play keep one state each, and Ungroup leaves focus on a frame', async () => {

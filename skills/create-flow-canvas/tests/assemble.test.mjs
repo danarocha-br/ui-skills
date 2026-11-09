@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FlowScan, FlowDevice } from "./modules.mjs";
-import { assemble } from "../scripts/assemble.mjs";
+import { assemble, journeyLinks, mergeSharedFindings, SHARED_NAVIGATION_SCREENS } from "../scripts/assemble.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const template = fs.readFileSync(path.join(here, "../assets/flow-canvas.html"), "utf8");
@@ -97,18 +97,17 @@ test("connectors come only from captured links to known routes, with stable ids"
   const scan = scanOf((await run()).html);
   assert.deepEqual(scan.links.map((l) => [l.id, l.from, l.to, l.label]), [
     ["home>items-id:open", "home", "items-id", "Open"],
-    ["home>items-id:link", "home", "items-id", ""],
   ]);
 });
 
-test("connector ids that collide take a numeric suffix in sorted order", async () => {
+test("two links between the same screens are one connector, under the first id in sorted order", async () => {
   const c = baseCapture();
   c.screens[0].captures.default.desktop.links = [{ href: "/items/1?b", text: "Open" }, { href: "/items/1?a", text: "Open" }];
   c.screens[0].captures.default.mobile.links = [];
   c.screens[0].captures.default.tablet.links = [];
   c.screens[1].url = "/items/1";
   const ids = scanOf((await run(c)).html).links.map((l) => l.id);
-  assert.deepEqual(ids, ["home>items-id:open", "home>items-id:open~2"]);
+  assert.deepEqual(ids, ["home>items-id:open"]);
 });
 
 test("data-flow-c names become attribute selectors, and each screen lists its own", async () => {
@@ -352,12 +351,12 @@ test("a link that only a later state has still gets its connector, so its button
   assert.match(scan.screens[1].states[1].html.desktop, /data-go="home"/);
 });
 
-test("ids keep non-Latin labels apart instead of collapsing them to one slug", async () => {
+test("ids keep non-Latin labels instead of collapsing them to one slug", async () => {
   const c = baseCapture();
-  c.screens[0].captures.default.desktop.links = [{ href: "/items/1", text: "Entrar" }, { href: "/items/1", text: "Выйти" }, { href: "/items/1", text: "ログイン" }];
-  const ids = scanOf((await run(c)).html).links.map((l) => l.id);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.ok(ids.includes("home>items-id:выйти") && ids.includes("home>items-id:ログイン"));
+  c.screens[0].captures.default.desktop.links = [{ href: "/items/1", text: "Выйти" }];
+  c.screens[0].captures.default.mobile.links = [];
+  c.screens[0].captures.default.tablet.links = [];
+  assert.deepEqual(scanOf((await run(c)).html).links.map((l) => l.id), ["home>items-id:выйти"]);
 });
 
 test("a base unicode-range such as U+0020-007F is kept, and a skipped subset is recorded rather than silent", async () => {
@@ -491,4 +490,82 @@ test("scoping leaves :root rules, at-rules and nested rules in a scoped sheet wo
   const css = styleOf((await run(c)).html);
   assert.match(css, /:root, \.flow-root\{--x:1\}/, "root tokens still reach the wrapper, unscoped");
   assert.match(css, /@media \(min-width: 1px\)\{:where\(\[data-fsh~="[^"]+"\]\) \.k, \.k:where\(\[data-fsh~="[^"]+"\]\), :where\(\[data-fsh~="[^"]+"\]\) \.j, \.j:where\(\[data-fsh~="[^"]+"\]\)\{margin:0\}/);
+});
+
+/* ---------- what becomes a connector ---------- */
+const L = (from, to, label) => ({ id: `${from}>${to}:${label}`, from, to, label });
+const names = (id) => id.toUpperCase();
+
+test("a link with the same words to the same place on three screens is shared navigation, noted once and not drawn", () => {
+  assert.equal(SHARED_NAVIGATION_SCREENS, 3);
+  const { links, navigation } = journeyLinks([L("a", "h", "Home"), L("b", "h", " home "), L("c", "h", "Home"), L("a", "b", "Next")]);
+  assert.deepEqual(links.map((l) => [l.from, l.to]), [["a", "b"]]);
+  assert.deepEqual(navigation.map((n) => [n.to, n.label, n.from]), [["h", "Home", ["a", "b", "c"]]]);
+});
+
+test("two screens with the same words are still two journeys", () => {
+  const { links, navigation } = journeyLinks([L("a", "h", "Back"), L("b", "h", "Back")]);
+  assert.equal(links.length, 2);
+  assert.equal(navigation.length, 0);
+});
+
+test("a shared link that is the next step of a group's flow keeps its connector", () => {
+  const { links, navigation } = journeyLinks([L("a", "b", "Tab"), L("c", "b", "Tab"), L("d", "b", "Tab")], { groups: [["a", "b", "c"]] });
+  assert.deepEqual(links.map((l) => l.from), ["a"]);
+  assert.equal(navigation.length, 1);
+});
+
+test("a list row's record text is not a label: the connector says where it leads", () => {
+  const { links } = journeyLinks([L("a", "b", "No ar\nDemo do site"), L("a", "c", "x".repeat(41)), L("a", "d", "")], { nameOf: names });
+  assert.deepEqual(links.map((l) => [l.to, l.label]), [["b", "B"], ["c", "C"], ["d", "D"]]);
+});
+
+test("record text never counts as shared navigation, and a named link wins over a row on the same pair", () => {
+  const row = "Row\ntext";
+  const { links, navigation } = journeyLinks([L("a", "h", row), L("b", "h", row), L("c", "h", row), L("c", "h", "Open")], { nameOf: names });
+  assert.equal(navigation.length, 0);
+  assert.deepEqual(links.map((l) => [l.from, l.label]), [["a", "H"], ["b", "H"], ["c", "Open"]]);
+});
+
+test("the scan carries the shared navigation, and buttons on those screens keep their destination", async () => {
+  const c = baseCapture();
+  const flows = baseFlows();
+  c.screens.push(screen("third", "/third", "/third", { default: cap() }), screen("fourth", "/fourth", "/fourth", { default: cap() }));
+  flows.screens.push({ id: "third", name: "Third", file: "t.tsx" }, { id: "fourth", name: "Fourth", file: "f.tsx" });
+  flows.groups = [];
+  const link = [{ href: "/items/1", text: "Items" }];
+  for (const i of [0, 2, 3]) for (const d of DEV) c.screens[i].captures.default[d].links = link;
+  const scan = scanOf((await run(c, flows)).html);
+  assert.deepEqual(scan.links, []);
+  assert.deepEqual(scan.navigation, [{ to: "items-id", label: "Items", from: ["fourth", "home", "third"] }]);
+});
+
+test("the same words about the same thing on several screens are one finding that says where", () => {
+  const f = (frame, text = "The link to /x has no accessible name.") => ({ kind: "unnamed-link", frame, target: "/x", text });
+  const out = mergeSharedFindings(["a", "b", "c", "d", "e"].map((x) => f(x)), { nameOf: names });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].frame, "a");
+  assert.deepEqual(out[0].screens, ["a", "b", "c", "d", "e"]);
+  assert.equal(out[0].text, "The link to /x has no accessible name. It is on 5 screens: A, B, C and 2 more.");
+});
+
+test("findings about different things, or without text of their own, stay apart", () => {
+  const a = { kind: "unnamed-link", frame: "a", target: "/x", text: "T" }, b = { ...a, frame: "b", target: "/y" };
+  assert.equal(mergeSharedFindings([a, b]).length, 2);
+  const u = (frame) => ({ kind: "unreachable-states", frame, target: "" });
+  assert.equal(mergeSharedFindings([u("a"), u("b")]).length, 2);
+});
+
+test("a count in a label does not make it another link, and an icon-only sidebar link is shared too", () => {
+  const counts = journeyLinks([L("a", "i", "Inbox 3"), L("b", "i", "Inbox 12"), L("c", "i", "Inbox")]);
+  assert.equal(counts.links.length, 0);
+  assert.equal(counts.navigation.length, 1);
+  const icons = journeyLinks([L("a", "h", ""), L("b", "h", ""), L("c", "h", "")], { nameOf: names });
+  assert.equal(icons.links.length, 0);
+  assert.deepEqual(icons.navigation.map((n) => n.label), ["H"]);
+});
+test("a link marked as a record elsewhere is not shared navigation", () => {
+  const { navigation, links } = journeyLinks(["a", "b", "c"].map((f) => ({ ...L(f, "h", "One line"), record: true })), { nameOf: names });
+  assert.equal(navigation.length, 0);
+  assert.deepEqual(links.map((l) => l.label), ["H", "H", "H"]);
 });

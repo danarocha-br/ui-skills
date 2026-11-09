@@ -14,7 +14,8 @@ How `assets/flow-canvas.html` works inside. Read this only when changing the eng
 ## What the canvas does
 
 - **Frames and flows:** screens as frames, grouped into flows that open as a row or close into a stack. Drag frames to reorder, regroup or free them. Marquee-select, group, ungroup, rename.
-- **Connectors:** straight runs with rounded corners between frames, drawn from where each frame is at that moment, so they follow every slide. Drag from a frame's edge dot to create one. Labels are editable.
+- **Connectors:** straight runs with rounded corners between frames, routed through the gutters so they do not cross a frame, drawn from where each frame is at that moment, so they follow every slide. Drag from a frame's edge dot to create one. Labels are editable, stand on a clear stretch of their line, and are cut to fit or tucked to a dot rather than overlap.
+- **Shared navigation:** links on many screens (a sidebar, a header) are noted once above everything instead of being drawn per screen.
 - **Annotations:** flow titles and descriptions, notes (one kind, saved with the layout, attached to a frame by dropping them on it), and scanner findings that point at the frame or component they describe.
 - **Inspect panel:** route, source file, components (hover to spotlight on the frame, click to find every screen that uses it), states, notes.
 - **Devices:** the same scan rendered at mobile, tablet or desktop size.
@@ -48,7 +49,8 @@ The shape is documented in the header of `<script id="scan-module">`. The engine
 - A screen with more than one rendered state gets the state switcher.
 - `approximate: true` puts a badge on the frame and a line in Inspect. `unrendered: "reason"` gives a placeholder with the reason where the screen has no render. A state missing a device gets a placeholder saying it does not exist there; the screen's first state, stored in `screen.html`, does not, and shows blank on that device. A state's `failed: { device: reason }` (the assembler writes it from capture errors) gives "Capture failed on <device>" with the reason instead, first state included, and the validator treats it as an error.
 - The strip under a frame takes the background of a `.flow-root` element at the top of the screen when there is one and it is painted, otherwise the body's.
-- A button inside a screen (`data-go="<screen id>"`) only follows a connector that exists, so a link in the scan is the one answer to "A leads to B".
+- A button inside a screen (`data-go="<screen id>"`) follows a connector that exists or the scan's `navigation`, so those two are the answer to "A leads to B".
+- `navigation: [{ to, label, from }]` is what the assembler took out of the connectors (`journeyLinks` in `scripts/assemble.mjs`): the same words to the same screen on `SHARED_NAVIGATION_SCREENS` (3) or more screens. It keeps a connector only where it is the next step of a group's flow. A pair of screens gets one connector. A list row's record text (line breaks, over 40 characters, or the same link with line breaks on another device) is not a label; the connector takes the target's name. A finding with the same words about the same thing on several screens is one finding on the first, with `screens` (shown in full on the card's tooltip) and a sentence naming the first three (`mergeSharedFindings`).
 
 ### Identity
 
@@ -70,7 +72,7 @@ Each subject has one owner, in its own `<script id="…">` block. Most have no D
 | `FlowGesture` | `gesture-module` | Dragging frames or a group |
 | `FlowArrange` | `arrange-module` | Tidy, taking out, dissolving |
 | `FlowGeometry` | `geometry-module` | Every extent and drop area |
-| `FlowRouting` | `routing-module` | Connector routes and a finding's leader line |
+| `FlowRouting` | `routing-module` | Connector routes round the frames, label places, and a finding's leader line |
 | `FlowSelection` | `selection-module` | Selected frames, the primary one, the selected connector |
 | `FlowPointer` | `pointer-module` | What a press, move and release mean |
 | `FlowDevice` | `device-module` | Each device's sizes, classes, button and key |
@@ -93,6 +95,10 @@ Each subject has one owner, in its own `<script id="…">` block. Most have no D
 **Arrange.** Writes to the layout through its mutators, worked out from where the geometry has things; the page wraps them in a commit and says what happened. `tests/arrange.test.mjs` runs it on the real layout and geometry.
 
 **Geometry.** How big a frame, a row, a deck or a group is, and the area where a dragged frame joins a group, is answered once (`frame`, `rowW`, `deckSpread`, `slotPlace`, `exitX`, `dropZone`, `dropBand`, `slotAt`, `closedTitle`, with every offset named in `EDGES`). `tests/extents-owner.test.mjs` fails if any other module or the page names the device's frame, row and deck sizes (`colW`, `phTop`, `phH`, `cap`, `deckW`, `peekX`, `peekY`, `collH`, `closedW`) or the world's gap and head. `FlowGeometry.readingOrder` gives reading order, and `geo.worldOf` turns a point on a frame into a world point.
+
+**Routing.** `FlowRouting.planner()` answers for every connector at once. A connector keeps its plain route when that is clear of the frames; otherwise a search over the gutters' tracks (both sides of every frame and the middle of each gap, side ports only, so a line stays off captions and titles) finds the cheapest right-angle path, and lines sharing a channel are spread into lanes. `geo.routeScene(now)` says what to keep off: frames and closed decks are hard, group titles and finding cards are soft. While frames move or a gesture is live, a route still clear is kept and searches share a budget, so a slide stays smooth; a line past the budget is drawn plainly and marked provisional until the next settled draw. If no way round exists, as when a frame is walled in by others, the route takes the fewest frames, is marked `crossed` and is drawn dotted. `placeLabels` puts each label on the longest clear run of its line, then just above or below, then cut to the run, then tucked to a dot that shows the label on hover and focus.
+
+**Findings and Frame actions.** A finding's stack makes its group taller (`stackRoom`), so cards end before the next title; a group the user placed themselves does not push what is below it. Frame actions is a `.menu` anchored to the frame's "…", redrawn in place for its pickers.
 
 **Selection.** Never frames and a connector together. `FlowSelection.follows` makes the panel follow the primary frame however the selection changed; the page only paints. `tests/selection.test.mjs` runs it with the real panel.
 
