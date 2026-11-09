@@ -104,3 +104,28 @@ test("Playwright is found through .flow-canvas/playwright-path, so it survives b
   assert.deepEqual(loadPlaywright({ env: {}, roots: [], cwd: dir }), { fromFile: true });
   assert.throws(() => loadPlaywright({ env: {}, roots: [], cwd: os.tmpdir() }), /not found/i);
 });
+
+/* ---------- text colours: what pixel diff cannot see ---------- */
+import { colorDrift, textColors } from "../scripts/lib/colors.mjs";
+
+test("colour drift is the share of characters that changed colour, with the colours that lost the most", () => {
+  const expected = { "rgb(255, 0, 0)": 40, "rgb(0, 0, 0)": 60 };
+  assert.deepEqual(colorDrift(expected, expected), { pct: 0, detail: [] });
+  const d = colorDrift(expected, { "rgb(128, 0, 128)": 40, "rgb(0, 0, 0)": 60 });
+  assert.equal(d.pct, 40);
+  assert.deepEqual(d.detail[0], { color: "rgb(255, 0, 0)", expected: 40, actual: 0 });
+  assert.deepEqual(colorDrift({}, { "rgb(1, 1, 1)": 5 }), { pct: 0, detail: [] }, "nothing expected, nothing to drift from");
+});
+
+test("textColors counts visible characters by their computed colour", async (t) => {
+  let pw;
+  try { pw = loadPlaywright(); } catch { return t.skip("no Playwright on this machine"); }
+  const { launchBrowser } = await import("../scripts/lib/playwright.mjs");
+  const browser = await launchBrowser(pw);
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<body style="color:rgb(10,10,10)"><p>abc</p><span style="color:rgb(255,0,0)">de f</span><span style="display:none">hidden</span><script>1</script><style>p{}</style></body>`);
+    const got = await page.evaluate(`(${textColors})()`);
+    assert.deepEqual(got, { "rgb(255, 0, 0)": 4, "rgb(10, 10, 10)": 3 });
+  } finally { await browser.close(); }
+});

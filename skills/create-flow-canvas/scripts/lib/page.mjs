@@ -3,6 +3,7 @@
 import { selectorProbe, walkRules } from "./css-rules.mjs";
 import { componentName } from "./components.mjs";
 import { fitsBudget } from "./budget.mjs";
+import { textColors } from "./colors.mjs";
 
 /* Tags each component's first DOM node with data-flow-c. Reads React's private fields, so anything unexpected,
    a production build or another framework leaves the capture untagged and otherwise whole. */
@@ -176,6 +177,7 @@ async function capturePage({ names, budgets }) {
     families: [...new Set([...document.querySelectorAll("*")].flatMap((element) => getComputedStyle(element).fontFamily.split(",").map((name) => name.trim().replace(/['"]/g, ""))))],
     links: [...document.querySelectorAll("a[href]")].map((link) => ({ href: link.getAttribute("href"), text: (link.innerText || link.getAttribute("aria-label") || "").trim().slice(0, 40) })),
     scrollH: document.documentElement.scrollHeight,
+    textColors: textColors(),
     title: document.title,
     components,
     inlined: { images: inlinedImages, canvases: canvasImages.filter(Boolean).length, bytes: Math.round(inlinedBytes), dropped },
@@ -194,7 +196,7 @@ function clearDevOverlays() {
 
 /* The source text for page.evaluate: the helpers, then a call to capturePage. */
 export function pageExpression(options) {
-  const helpers = [selectorProbe, walkRules, componentName, fitsBudget, tagComponents, readSheets, signalFacts, capturePage];
+  const helpers = [textColors, selectorProbe, walkRules, componentName, fitsBudget, tagComponents, readSheets, signalFacts, capturePage];
   return `(() => { ${helpers.join("\n")}\n return capturePage(${JSON.stringify(options)}); })()`;
 }
 

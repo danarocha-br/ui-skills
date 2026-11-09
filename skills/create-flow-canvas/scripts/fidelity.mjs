@@ -2,7 +2,7 @@
 /* Pixel-diffs an assembled canvas against the reference screenshots from capture.mjs. Each screen is rendered the way
    the canvas renders it: in the engine's screen document with the scan's styles, no scripts, no network.
 
-     node fidelity.mjs --canvas flows.html --refs .flow-canvas/capture [--out fidelity.json] [--max-pct 1]
+     node fidelity.mjs --canvas flows.html --refs .flow-canvas/capture [--out fidelity.json] [--max-pct 1] [--max-color-pct 5]
 
    Exits 1 when a screen differs by more than --max-pct, or a reference is missing. A match says only that the snapshot
    equals the running copy: if the mock was wrong, both are wrong in the same way. Read report.json from the capture too. */
@@ -13,6 +13,7 @@ import { loadPlaywright, launchBrowser } from "./lib/playwright.mjs";
 import { slug } from "./lib/scenarios.mjs";
 import { refScreenId } from "./lib/refs.mjs";
 import { diffPixels } from "./lib/pixels.mjs";
+import { colorDrift, textColors } from "./lib/colors.mjs";
 import { DEVICES, screenDocument } from "./lib/devices.mjs";
 
 const RENDER_SETTLE_MS = 400;
@@ -21,6 +22,19 @@ function readBlock(html, pattern, what) {
   const match = html.match(pattern);
   if (!match) throw new Error(`the canvas has no ${what} block`);
   return match[1];
+}
+
+/* the page as the canvas will show it, its text counted by colour */
+async function colorsOf(browser, { width, height }, document) {
+  const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", colorScheme: "light" });
+  try {
+    await context.route(/^https?:/, (route) => route.abort());
+    const page = await context.newPage();
+    await page.setContent(document, { waitUntil: "load" });
+    return await page.evaluate(`(${textColors})()`);
+  } finally {
+    await context.close();
+  }
 }
 
 async function comparePngs(page, reference, snapshot) {
@@ -46,13 +60,15 @@ async function comparePngs(page, reference, snapshot) {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { canvas: { type: "string" }, refs: { type: "string" }, out: { type: "string" }, "max-pct": { type: "string", default: "1" } } });
+  const { values } = parseArgs({ options: { canvas: { type: "string" }, refs: { type: "string" }, out: { type: "string" }, "max-pct": { type: "string", default: "1" }, "max-color-pct": { type: "string", default: "5" } } });
   if (!values.canvas || !values.refs) throw new Error("usage: fidelity.mjs --canvas file --refs dir [--out file] [--max-pct n]");
   const html = fs.readFileSync(values.canvas, "utf8");
   const scan = JSON.parse(readBlock(html, /<script type="application\/json" id="flow-scan">\s*([\s\S]*?)\s*<\/script>/, "flow-scan"));
   const css = readBlock(html, /<style id="flow-scan-styles"[^>]*>([\s\S]*?)<\/style>/, "flow-scan-styles");
   const maxPct = Number(values["max-pct"]);
   if (!Number.isFinite(maxPct)) throw new Error(`--max-pct must be a number, got ${values["max-pct"]}`);
+  const maxColorPct = Number(values["max-color-pct"]);
+  if (!Number.isFinite(maxColorPct)) throw new Error(`--max-color-pct must be a number, got ${values["max-color-pct"]}`);
   const outFile = values.out ?? path.join(values.refs, "fidelity.json");
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
 
@@ -86,7 +102,14 @@ async function main() {
           fs.writeFileSync(path.join(path.dirname(outFile), `snap-${name}.png`), snapshot);
           const row = { name, ...(await comparePngs(comparer, fs.readFileSync(refFile), snapshot)) };
           rows.push(row);
-          console.log(`${name}: ${row.pct}%${row.minY === null ? "" : ` (rows ${row.minY}-${row.maxY})`}`);
+          /* the pixels can agree while the words are another colour; count the words by colour in both */
+          const expected = captured?.find((c) => c.id === refScreenId(screen, captured))?.captures?.[state.name]?.[device]?.textColors;
+          if (expected) {
+            const drift = colorDrift(expected, await colorsOf(browser, { width, height }, screenDocument(renders[device], css, scan.icons ?? "", cls)));
+            row.colorPct = drift.pct;
+            if (drift.pct > maxColorPct) row.colorDetail = drift.detail;
+          }
+          console.log(`${name}: ${row.pct}%${row.minY === null ? "" : ` (rows ${row.minY}-${row.maxY})`}${row.colorPct > maxColorPct ? ` TEXT COLOURS differ on ${row.colorPct}% of characters: ${row.colorDetail.map((c) => `${c.color} ${c.expected} -> ${c.actual}`).join("; ")}` : ""}`);
         }
       }
     }
@@ -94,7 +117,7 @@ async function main() {
     await browser.close();
   }
   fs.writeFileSync(outFile, JSON.stringify(rows, null, 1));
-  const failing = rows.filter((row) => row.missing || row.pct > maxPct);
+  const failing = rows.filter((row) => row.missing || row.pct > maxPct || row.colorPct > maxColorPct);
   console.log(`\n${rows.length - failing.length} of ${rows.length} within ${maxPct}%. ${outFile}`);
   if (failing.length || rows.length === 0) process.exitCode = 1;
 }
