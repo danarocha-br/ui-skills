@@ -34,6 +34,72 @@ An API with the right types can still strand the UI. On Jolly Code the editor wa
 
 Return the error shape the real client returns, too. A missing row should look like the real "no rows" error, so the app's own handling runs.
 
+## Recipes
+
+These worked on Sonara, a real pnpm monorepo on Next 16 with Turbopack.
+
+### Replace an npm package everywhere (Clerk, PostHog)
+
+When imports of a package are spread across the app, redirect the package rather than chasing callers. Add `paths` to the app's `tsconfig.json`, as a mock. Turbopack honours them, and the most specific entry goes first:
+
+```json
+"paths": {
+  "@clerk/nextjs/server": ["./src/flow-mock/clerk-server"],
+  "@clerk/nextjs": ["./src/flow-mock/clerk-client"]
+}
+```
+
+`paths` covers only code compiled with that tsconfig. A sibling workspace package that imports the same library has its own tsconfig, so give it the same entries or mock its seam. Export everything the app imports: a missing export is a build error that names it.
+
+Make the provider a **server** component that reads the persona cookie and passes the fake user to a client provider. A provider that only runs in the browser renders signed-out on the server, and hydration fails. A real `ClerkProvider` usually sits in the root layout, so that means a mock of `layout.tsx` with the one import changed. Mark it with a `/* flow-canvas: */` comment. Keep the real `proxy.ts` running on the fake `clerkMiddleware`, so redirects are the product's own.
+
+### Prisma on an in-memory Postgres
+
+The real queries run, from the app's own migrations. Add two packages in the copy only, then keep them out of the bundle:
+
+```bash
+pnpm add @electric-sql/pglite pglite-prisma-adapter
+```
+
+In `next.config`, set `serverExternalPackages: ["@electric-sql/pglite", "pglite-prisma-adapter"]`. The install changes the copy's `package.json` and lockfile, so do it after the frozen install, and note it on a regeneration. Network must be on for that one command, before the server starts. Then replace the module that creates the client:
+
+```ts
+/* flow-canvas: Prisma on an in-memory Postgres, built from the repo's migrations. All rows are invented. */
+const g = globalThis as unknown as { __flowDb?: Promise<PrismaClient> };
+async function build() {
+  const pg = new PGlite();
+  const dir = path.resolve(process.cwd(), "prisma/migrations");
+  for (const name of fs.readdirSync(dir).sort()) {
+    const file = path.join(dir, name, "migration.sql");
+    if (fs.existsSync(file)) await pg.exec(fs.readFileSync(file, "utf8"));
+  }
+  const client = new PrismaClient({ adapter: new PrismaPGlite(pg) as any });
+  await seed(client);
+  return client;
+}
+g.__flowDb ??= build();
+export const db = await g.__flowDb;
+```
+
+The adapter sends no array literal for enum arrays, so a `{ has: X }` filter (SQL `col @> $1`) fails. Wrap `pg.query` and, only on statements containing `@>`, turn the parameter into a Postgres array literal such as `{"ADMIN"}`. Check that against your own enums, since a blanket rewrite would also change ordinary string parameters.
+
+### Route handlers and cookies
+
+`cookies()` from `next/headers` can throw "outside a request scope" inside a route handler when work outlives Next's request scope. tRPC's fetch adapter does this. It surfaces as a 500 on a client query and draws as a stuck skeleton: capture reports it as `failed-requests`. Read the cookie from the `Request` instead, with a one-line wrapper in the route file and an `AsyncLocalStorage` your fake auth checks first:
+
+```ts
+/* in the fake auth */
+export const requestCookies = (globalThis.__flowCookies ??= new AsyncLocalStorage());
+const read = (name: string) => requestCookies.getStore()?.(name) ?? null; /* then fall back to next/headers */
+
+/* in the route: only this wrapper is added */
+const wrapped = (req: Request) => requestCookies.run(
+  (name) => new RegExp(`(?:^|; )${name}=([^;]*)`).exec(req.headers.get("cookie") ?? "")?.[1],
+  () => handler(req),
+);
+export { wrapped as GET, wrapped as POST };
+```
+
 ## Personas and scenarios
 
 Capture sets two cookies per state, `flow-persona` and `flow-scenario` by default. They are readable on the server and in the browser, so one fake serves both. A persona is who is looking (guest, member, admin, a paid plan). A scenario is what the data looks like (empty, error, over quota, paid). Read each cookie with a default so a page with no cookie still renders.
@@ -44,9 +110,13 @@ After any change to a mock or its seed data, restart the dev server. Module stat
 
 ## Dates and clocks
 
-Capture freezes `Date` at `freeze.now` (2026-01-15 by default). Invented rows dated later are "in the future" to a "last 7 days" panel and the panel is empty. Date the seed relative to `freeze.now`, or set `freeze.now` to fit the seed.
+Capture freezes `Date` at `freeze.now` (2026-01-15 by default), in the browser and, through `server-preload.cjs`, on the server, so server-rendered text ("2 hours ago") matches what the browser computes. The server's `Date` stands still even with `"clock": "run"`, and its random numbers stay random. Invented rows dated later are "in the future" to a "last 7 days" panel and the panel is empty. Date the seed relative to `freeze.now`, or set `freeze.now` to fit the seed.
 
 A frozen clock stops anything that animates by time. GSAP-style timelines never advance, so a state that waits for an animation to finish times out on every device. Set `"freeze": { "clock": "run" }` in scenarios.json: the clock starts at `freeze.now` and then runs, and random numbers stay seeded. `"freeze": false` turns both off, for a page that cannot be captured otherwise; the picture is then not repeatable.
+
+## Static files and middleware
+
+A mock file served from `public/` still passes through middleware (`proxy.ts`, `middleware.ts`) unless its extension is in the matcher's skip list. On Sonara, a fake `.wav` came back as sign-in HTML with status 200, so the player broke with no error. Use an extension the matcher already skips, or mock the matcher.
 
 ## Environment
 

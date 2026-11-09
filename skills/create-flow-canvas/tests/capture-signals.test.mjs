@@ -27,6 +27,31 @@ test("spinners are found by class, role and aria-busy", () => {
   assert.deepEqual(kinds({ candidates: [el({ cls: "lucide lucide-loader-circle" })] }), ["spinner"]);
 });
 
+test("a progress bar showing a value is a meter, not something loading", () => {
+  assert.deepEqual(kinds({ candidates: [el({ role: "progressbar", determinate: true })] }), []);
+});
+
+test("a signal with no text says which element raised it", () => {
+  const [signal] = suspectSignals({ ...healthy, candidates: [el({ tag: "div", role: "progressbar", cls: "h-1 bg-muted" })] });
+  assert.deepEqual(signal.samples, ['<div role=progressbar class="h-1 bg-muted">']);
+});
+
+test("a page served as an error is reported, whatever it looks like", () => {
+  const [signal] = suspectSignals({ ...healthy, document: { status: 404, path: "/a/b" } });
+  assert.deepEqual(signal, { kind: "http-error", count: 1, samples: ["404 /a/b"] });
+  assert.deepEqual(kinds({ document: { status: 200, path: "/a" } }), []);
+});
+
+test("a 404 is expected on a screen that stands for the not-found page", () => {
+  assert.deepEqual(kinds({ document: { status: 404, path: "/nope" }, route: "(404)" }), []);
+  assert.deepEqual(kinds({ document: { status: 500, path: "/nope" }, route: "(404)" }), ["http-error"]);
+});
+
+test("client requests answered with a server error are counted, naming the endpoints once each", () => {
+  const failedRequests = [{ status: 500, path: "/api/trpc/a" }, { status: 500, path: "/api/trpc/a" }, { status: 503, path: "/api/b" }];
+  assert.deepEqual(suspectSignals({ ...healthy, failedRequests }), [{ kind: "failed-requests", count: 3, samples: ["500 /api/trpc/a", "503 /api/b"] }]);
+});
+
 test("a Tailwind variant only says what would happen in another state, so it is not a signal", () => {
   assert.deepEqual(kinds({ candidates: [el({ cls: "data-[loading=true]:animate-spin group-hover:animate-pulse" })] }), []);
 });

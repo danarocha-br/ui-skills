@@ -11,15 +11,15 @@
 
    Writes capture.json (what the assembler reads), report.json (the same run without the page bodies) and one reference
    screenshot per capture, ref-<screen>-<state>-<device>.png. Exits 1 if any capture failed. Run it against the throwaway
-   copy only; start that copy's server with block-network.cjs (see that file). */
+   copy only; start that copy's server with server-preload.cjs (see that file). */
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadPlaywright, launchBrowser } from "./lib/playwright.mjs";
-import { readScenarios, stateCookies, slug, isLocalBase } from "./lib/scenarios.mjs";
+import { readScenarios, stateCookies, stateStorage, slug, isLocalBase } from "./lib/scenarios.mjs";
 import { networkDecision } from "./lib/network.mjs";
 import { declaredComponents } from "./lib/components.mjs";
-import { freezeClockAndRandom } from "./lib/determinism.mjs";
+import { freezeClockAndRandom, seedLocalStorage } from "./lib/determinism.mjs";
 import { suspectSignals, acknowledged, identicalStates, redirectOf } from "./lib/signals.mjs";
 import { mergeResume, isBrowserGone } from "./lib/resume.mjs";
 import { pageExpression, clearOverlaysExpression } from "./lib/page.mjs";
@@ -95,9 +95,17 @@ async function captureOne(browser, { base, config, screen, state, device, names,
     await context.addCookies(stateCookies(state, config.cookies).map((cookie) => ({ ...cookie, url: base })));
     tally.socketsGuarded = await guardNetwork(context, base, tally);
     if (config.freeze !== false) await context.addInitScript(freezeClockAndRandom, { ...DEFAULTS.freeze, ...config.freeze });
+    const storage = stateStorage(state, config);
+    if (Object.keys(storage).length) await context.addInitScript(seedLocalStorage, storage);
     const page = await context.newPage();
     page.on("pageerror", (error) => pageErrors.add(String(error.message).slice(0, 200)));
-    await page.goto(base + screen.url, { waitUntil: "load", timeout: loadTimeout });
+    /* a client query answered with a 500 renders as a skeleton, which is otherwise indistinguishable from a slow page */
+    const failedRequests = [];
+    page.on("response", (response) => {
+      const type = response.request().resourceType();
+      if (response.status() >= 500 && (type === "fetch" || type === "xhr") && response.url().startsWith(base)) failedRequests.push({ status: response.status(), path: new URL(response.url()).pathname });
+    });
+    const response = await page.goto(base + screen.url, { waitUntil: "load", timeout: loadTimeout });
     await page.waitForTimeout(state.settleMs ?? config.settleMs ?? DEFAULTS.settleMs);
     /* a client-side redirect (a router.push after load) leaves a page that is not the one asked for, with no error */
     const redirect = redirectOf(screen.url, page.url());
@@ -107,7 +115,7 @@ async function captureOne(browser, { base, config, screen, state, device, names,
     const devOverlayError = await page.evaluate(clearOverlaysExpression);
     await page.screenshot({ path: path.join(outDir, `ref-${screen.id}-${slug(state.name)}-${device}.png`) });
     const { facts, ...capture } = await page.evaluate(pageExpression({ names, budgets: { ...DEFAULTS.budgets, ...config.budgets } }));
-    return { ...capture, finalUrl: redirect ? redirect.final : screen.url, pageErrors: [...pageErrors], signals: acknowledged(suspectSignals({ ...facts, devOverlayError, redirect }), state.acknowledge) };
+    return { ...capture, finalUrl: redirect ? redirect.final : screen.url, pageErrors: [...pageErrors], signals: acknowledged(suspectSignals({ ...facts, devOverlayError, redirect, failedRequests, route: screen.route, document: response ? { status: response.status(), path: screen.url } : undefined }), state.acknowledge) };
   } catch (error) {
     error.pageErrors = [...pageErrors];
     throw error;

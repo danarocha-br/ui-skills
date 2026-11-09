@@ -15,6 +15,8 @@ function stepProblem(step) {
   return null;
 }
 
+const isStringMap = (value) => typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
+
 /* Returns the file with its cookie names defaulted, or throws naming every problem so one edit can fix them all. */
 export function readScenarios(file) {
   const problems = [];
@@ -41,6 +43,7 @@ export function readScenarios(file) {
       files.add(slug(state.name));
       if ("settleMs" in state && !(Number.isFinite(state.settleMs) && state.settleMs >= 0)) problems.push(`screen ${name}, state "${state.name}": settleMs must be a number of milliseconds`);
       if ("acknowledge" in state && !(Array.isArray(state.acknowledge) && state.acknowledge.every((k) => typeof k === "string"))) problems.push(`screen ${name}, state "${state.name}": acknowledge must be a list of signal kinds`);
+      if ("localStorage" in state && !isStringMap(state.localStorage)) problems.push(`screen ${name}, state "${state.name}": localStorage must map keys to strings`);
       for (const device of state.devices ?? []) {
         if (!(device in DEVICES)) problems.push(`screen ${name}, state "${state.name}": unknown device ${device}`);
       }
@@ -52,9 +55,15 @@ export function readScenarios(file) {
   }
   if ("freeze" in file && file.freeze !== false && (typeof file.freeze !== "object" || file.freeze === null || Array.isArray(file.freeze))) problems.push("freeze must be false or an object");
   else if (file.freeze && file.freeze.clock !== undefined && !["frozen", "run"].includes(file.freeze.clock)) problems.push('freeze.clock must be "frozen" or "run"');
+  if ("localStorage" in file && !isStringMap(file.localStorage)) problems.push("localStorage must map keys to strings");
   if ("loadTimeoutMs" in file && !(Number.isFinite(file.loadTimeoutMs) && file.loadTimeoutMs > 0)) problems.push("loadTimeoutMs must be a positive number of milliseconds");
   if (problems.length) throw new Error(`scenarios:\n  ${problems.join("\n  ")}`);
   return { ...file, cookies: { persona: "flow-persona", scenario: "flow-scenario", ...file.cookies } };
+}
+
+/* What a state finds in localStorage: the file's entries, then its own on top. */
+export function stateStorage(state, file) {
+  return { ...file.localStorage, ...state.localStorage };
 }
 
 export function stateCookies(state, names) {

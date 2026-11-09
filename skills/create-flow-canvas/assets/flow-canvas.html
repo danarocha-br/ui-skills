@@ -9202,6 +9202,7 @@
           text(f) {
             const s = SCREENS[f.frame],
               only = s.states.filter((x) => !x.reachable).length;
+            if (f.reason) return `<small>Scanner · not captured</small><code>${esc(f.source || s.file)}</code>: ${only} of ${s.states.length} states could not be captured. ${esc(f.reason)}. <button class="hop" data-act="go">View them</button>`;
             return `<small>Scanner · unreachable</small><code>${esc(f.source || s.file)}</code> has <em>no entry point</em> in the UI. ${only} of ${s.states.length} states are only reachable in code. <button class="hop" data-act="go">View them</button>`;
           },
           tie(f, col, on) {

@@ -136,6 +136,9 @@ test("states only reachable in code, an approximate screen and a screen that cou
   const f1 = scan.findings.find((x) => x.kind === "unreachable-states");
   assert.equal(f1.id, "unreachable-states:items-id");
   assert.equal(f1.source, "src/Paid.tsx");
+  assert.equal(f1.reason, "");
+  f.screens[1].unreachable = [{ name: "paid", reason: "needs a microphone" }];
+  assert.equal(scanOf((await run(baseCapture(), f)).html).findings.find((x) => x.kind === "unreachable-states").reason, "needs a microphone");
   const pay = scan.screens[2];
   assert.equal(pay.unrendered, "needs a payment session");
   assert.match(pay.html.desktop, /needs a payment session/);

@@ -36,6 +36,7 @@ Only `screens` is required; the other top-level keys show their defaults.
 | --- | --- |
 | `cookies` | Names of the two cookies capture sets. Your mock reads them. |
 | `freeze` | `Date` is frozen at `now` and `Math.random` seeded, so regenerating gives the same picture. `"clock": "run"` starts the clock at `now` but lets it advance, for animation libraries that stall on a clock that stands still. `false` turns freezing off. |
+| `localStorage` | Keys and string values in `localStorage` before the page's first script, for every state. Use it for a first-visit banner or a saved preference, instead of a click step. |
 | `loadTimeoutMs` | How long a page may take to load, 90 seconds by default. Capture first requests each URL once, outside this limit, so a cold dev-server compile doesn't count; `--timeout` overrides it. |
 | `budgets` | Bytes of inlined media in the page: `item` per image, `total` per capture. Over budget, an image is dropped and listed. |
 | `settleMs` | Wait after page load before any step. Raise it for a screen that is still loading in its reference. |
@@ -47,6 +48,7 @@ Only `screens` is required; the other top-level keys show their defaults.
 | `states[].scenario` | Value of the scenario cookie. |
 | `states[].settleMs` | Wait for this state instead of the top-level `settleMs`. Use a short one to capture a transient page before it redirects, and the default to capture where it ends up. |
 | `states[].acknowledge` | Signal kinds (`near-empty`, `skeleton`, ...) you checked and accept for this state, such as `near-empty` on a page that really is just "Redirecting...". They stop showing under "to look at". |
+| `states[].localStorage` | Added on top of the top-level `localStorage` for this state, a key here winning. |
 | `states[].devices` | Limit to some of `mobile` (390×844), `tablet` (768×1024), `desktop` (1200×772). Default: all three. |
 | `states[].steps` | Run in order after settling, each `{ "click": sel }`, `{ "hover": sel }`, `{ "fill": sel, "value": text }`, `{ "press": key }`, `{ "wait": ms }` or `{ "waitFor": sel }`. Each selector step waits at most 10 seconds. |
 
@@ -87,7 +89,7 @@ It becomes its own frame, with a scan id made from that route. Don't reuse the e
 
 - `product.id` and `product.name` are required. `product.id` scopes the reader's saved layout, so it never changes, even through a rename.
 - Every captured screen needs an entry here with `name` and `file`, using its `id` from scenarios.json.
-- `unreachable` is described in SKILL.md step 4, `approximate` and `unrendered` in step 5. An `unrendered` screen with no capture also needs `route`.
+- `unreachable` is described in SKILL.md step 4 (`reason`, optional, replaces "no entry point" on the canvas when the state exists but couldn't be reproduced), `approximate` and `unrendered` in step 5. An `unrendered` screen with no capture also needs `route`.
 - A screen is in at most one group. A screen in none is a loose frame; assemble and validate list these.
 - Set a group's `id`. Without one it comes from the title up to the first colon, so a retitled group would lose the reader's edits. A group id must differ from every screen id.
 - `group.meta` defaults to the source folders of its screens. `open: false` starts it closed.

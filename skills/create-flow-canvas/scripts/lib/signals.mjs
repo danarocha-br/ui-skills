@@ -30,12 +30,16 @@ export function identicalStates(states, captures) {
   return out;
 }
 
-export function suspectSignals({ candidates, textLength, elementCount, mediaCount, bodyText, devOverlayError, redirect }) {
+/* A route written as "(404)" is a screen that stands for the not-found page, so its 404 is the point. */
+const notFoundExpected = (route, status) => status === 404 && /^\(.*\)$/.test(route ?? "");
+
+export function suspectSignals({ candidates, textLength, elementCount, mediaCount, bodyText, devOverlayError, redirect, document, failedRequests = [], route }) {
   /* a token with a colon is a Tailwind variant: it describes another state, not this one */
   const tokens = (cls) => cls.split(/\s+/).filter((token) => token && !token.includes(":"));
   const anyToken = (cls, pattern) => tokens(cls).some((token) => pattern.test(token));
   const isSkeleton = (el) => anyToken(el.cls, /skeleton|shimmer|^animate-pulse$/i) || /skeleton/i.test(el.slot);
-  const isSpinner = (el) => el.busy || el.role === "progressbar" || anyToken(el.cls, /^animate-spin$|spinner|loader|loading/i);
+  /* a bar showing a value (a usage meter, a step count) has finished loading; only one with no value is waiting */
+  const isSpinner = (el) => el.busy || (el.role === "progressbar" && !el.determinate) || anyToken(el.cls, /^animate-spin$|spinner|loader|loading/i);
   const isErrorToast = (el) => {
     if (!el.text.trim()) return false;
     if (el.role === "alert") return true;
@@ -47,7 +51,9 @@ export function suspectSignals({ candidates, textLength, elementCount, mediaCoun
     const found = candidates.filter(test);
     if (!found.length) return;
     const signal = { kind, count: found.length };
-    const samples = found.map((el) => el.text.trim().slice(0, 120)).filter(Boolean).slice(0, 3);
+    /* an element with no text (a bar, an icon) is named by its markup, or the report could not say what raised this */
+    const describe = (el) => el.text.trim().slice(0, 120) || (el.tag ? `<${el.tag}${el.role ? ` role=${el.role}` : ""}${el.cls ? ` class="${el.cls.slice(0, 80)}"` : ""}>` : "");
+    const samples = found.map(describe).filter(Boolean).slice(0, 3);
     if (samples.length) signal.samples = samples;
     signals.push(signal);
   };
@@ -59,5 +65,7 @@ export function suspectSignals({ candidates, textLength, elementCount, mediaCoun
   if (textLength < 20 && elementCount < 15 && mediaCount === 0) signals.push({ kind: "near-empty", count: 1 });
   if (devOverlayError) signals.push({ kind: "dev-overlay", count: 1 });
   if (redirect) signals.push({ kind: "redirected", count: 1, samples: [`${redirect.requested} -> ${redirect.final}`] });
+  if (document && document.status >= 400 && !notFoundExpected(route, document.status)) signals.push({ kind: "http-error", count: 1, samples: [`${document.status} ${document.path}`] });
+  if (failedRequests.length) signals.push({ kind: "failed-requests", count: failedRequests.length, samples: [...new Set(failedRequests.map((r) => `${r.status} ${r.path}`))].slice(0, 3) });
   return signals;
 }

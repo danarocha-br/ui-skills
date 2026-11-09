@@ -1,3 +1,11 @@
+/* Runs in the page before any of its scripts, so a first-visit banner or a saved preference is already settled.
+   Serialised with toString(). A frame that refuses storage (about:blank) is left alone. */
+export function seedLocalStorage(entries) {
+  try {
+    for (const [key, value] of Object.entries(entries)) localStorage.setItem(key, value);
+  } catch { /* no storage in this frame */ }
+}
+
 /* Runs in the page before any of its scripts, so two captures of a screen see the same random numbers and the same
    time. Serialised with toString(): it may use only its argument and globals. */
 export function freezeClockAndRandom({ now, seed, clock }) {

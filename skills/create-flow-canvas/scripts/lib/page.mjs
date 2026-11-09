@@ -67,6 +67,9 @@ function signalFacts() {
   const bodyText = body.innerText || "";
   return {
     candidates: [...document.querySelectorAll(CANDIDATES)].filter(visible).map((element) => ({
+      tag: element.localName,
+      /* shadcn's Progress gives the value only to its indicator, so the root says "indeterminate" on every usage meter */
+      determinate: element.hasAttribute("aria-valuenow") || [...element.children].some((child) => /translate|scale/.test(child.style?.transform || "") || /%$/.test(child.style?.width || "")),
       cls: element.getAttribute("class") || "",
       role: element.getAttribute("role") || "",
       busy: element.getAttribute("aria-busy") === "true",
@@ -83,6 +86,13 @@ function signalFacts() {
 }
 
 async function capturePage({ names, budgets }) {
+  const SHADOW_STYLES = ["display", "position", "top", "right", "bottom", "left", "z-index", "box-sizing", "width", "height", "min-width", "min-height", "max-width", "max-height",
+    "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top", "padding-right", "padding-bottom", "padding-left", "overflow-x", "overflow-y",
+    "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis", "align-items", "justify-content", "gap", "grid-template-columns", "grid-template-rows",
+    "color", "background-color", "background-image", "background-size", "background-position", "background-repeat", "opacity", "visibility", "transform", "clip-path", "mix-blend-mode",
+    "border-top-width", "border-right-width", "border-bottom-width", "border-left-width", "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "border-radius", "box-shadow",
+    "font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "text-align", "text-transform", "text-decoration-line", "white-space", "fill", "stroke"];
   const sheets = readSheets();
   const components = tagComponents(names);
   const facts = signalFacts();
@@ -102,32 +112,76 @@ async function capturePage({ names, budgets }) {
   });
 
   /* canvases become images; a PNG too large for the budget gets one chance as a smaller lossy image */
-  const liveCanvases = [...document.querySelectorAll("canvas")];
-  const canvasImages = liveCanvases.map((canvas) => {
+  let canvasCount = 0;
+  const canvasImage = (canvas) => {
     try {
       for (const url of [canvas.toDataURL(), canvas.toDataURL("image/webp", 0.8)]) {
-        if (reserve(url.length * 0.75)) return url;
+        if (reserve(url.length * 0.75)) { canvasCount++; return url; }
       }
     } catch { /* a tainted canvas cannot be read */ }
     dropped.push("canvas");
     return null;
-  });
+  };
+  const imageOf = (canvas, url) => {
+    const image = document.createElement("img");
+    if (url) image.src = url;
+    else image.style.background = PLACEHOLDER;
+    image.style.cssText += canvas.style.cssText;
+    image.className = canvas.className;
+    image.width = canvas.width;
+    image.height = canvas.height;
+    return image;
+  };
+  const liveCanvases = [...document.querySelectorAll("canvas")];
+  const canvasImages = liveCanvases.map(canvasImage);
 
   /* cloned before any await, so the live lists and the copy still line up one to one */
   const clone = document.body.cloneNode(true);
   const liveImages = [...document.querySelectorAll("img")];
   const clonedImages = [...clone.querySelectorAll("img")];
+  const clonedElements = [...clone.querySelectorAll("*")];
+  const shadowHosts = [...document.body.querySelectorAll("*")].flatMap((live, i) => (live.shadowRoot ? [[live, clonedElements[i]]] : []));
   [...clone.querySelectorAll("canvas")].forEach((copy, i) => {
-    const image = document.createElement("img");
-    if (canvasImages[i]) image.src = canvasImages[i];
-    else image.style.background = PLACEHOLDER;
-    image.style.cssText += liveCanvases[i].style.cssText;
-    image.className = liveCanvases[i].className;
-    image.width = liveCanvases[i].width;
-    image.height = liveCanvases[i].height;
+    const image = imageOf(liveCanvases[i], canvasImages[i]);
     if (copy.hasAttribute("data-flow-c")) image.setAttribute("data-flow-c", copy.getAttribute("data-flow-c"));
     copy.replaceWith(image);
   });
+  /* cloneNode leaves shadow roots behind, and the page's scripts do not run on the canvas, so an open root is written
+     out as ordinary elements. Its stylesheet cannot follow, so what it computed is written on each element instead. */
+  const copyShadow = (live, copy) => {
+    const computed = getComputedStyle(live);
+    for (const name of SHADOW_STYLES) copy.style.setProperty(name, computed.getPropertyValue(name));
+  };
+  const flatten = (node, slotted) => {
+    if (node.nodeType === Node.TEXT_NODE) return [node.cloneNode()];
+    if (node.nodeType !== Node.ELEMENT_NODE || /^(STYLE|SCRIPT|LINK)$/.test(node.tagName)) return [];
+    if (node.tagName === "SLOT") {
+      const assigned = node.assignedNodes().map(slotted).filter(Boolean);
+      return assigned.length ? assigned : [...node.childNodes].flatMap((child) => flatten(child, slotted));
+    }
+    if (node.tagName === "CANVAS") {
+      const image = imageOf(node, canvasImage(node));
+      copyShadow(node, image);
+      return [image];
+    }
+    const copy = node.cloneNode(false);
+    copyShadow(node, copy);
+    if (node.tagName === "IMG") {
+      liveImages.push(node);
+      clonedImages.push(copy);
+    }
+    if (node.shadowRoot) writeShadow(node, copy);
+    else copy.append(...[...node.childNodes].flatMap((child) => flatten(child, slotted)));
+    return [copy];
+  };
+  const writeShadow = (host, copy) => {
+    const light = [...copy.childNodes];
+    const hostChildren = [...host.childNodes];
+    const slotted = (node) => light[hostChildren.indexOf(node)] ?? null;
+    copy.replaceChildren(...[...host.shadowRoot.childNodes].flatMap((child) => flatten(child, slotted)));
+    copyShadow(host, copy);
+  };
+  shadowHosts.forEach(([host, copy]) => writeShadow(host, copy));
   const liveFields = [...document.querySelectorAll("input,textarea,select")];
   [...clone.querySelectorAll("input,textarea,select")].forEach((copy, i) => {
     const field = liveFields[i];
@@ -180,7 +234,7 @@ async function capturePage({ names, budgets }) {
     textColors: textColors(),
     title: document.title,
     components,
-    inlined: { images: inlinedImages, canvases: canvasImages.filter(Boolean).length, bytes: Math.round(inlinedBytes), dropped },
+    inlined: { images: inlinedImages, canvases: canvasCount, bytes: Math.round(inlinedBytes), dropped },
     facts,
   };
 }

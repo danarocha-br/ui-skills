@@ -15,7 +15,7 @@
      "start"?: "<screen id>",
      "screens": [{ "id": "<id in capture.json>", "name", "file", "note"?, "approximate"?: true,
                    "caption"?: { "title", "body", "on" },
-                   "unreachable"?: [{ "name": "state", "source"?, "evidence"? }],     states only reachable in code
+                   "unreachable"?: [{ "name": "state", "source"?, "evidence"?, "reason"? }],     states only reachable in code, or (with reason) not reproducible here
                    "route"?, "unrendered"?: "reason" }],      a screen with no capture: needs route and reason, shows a placeholder
      "groups": [{ "id"?, "title", "sub"?, "meta"?, "open"?, "screens": ["<screen id>"] }],
      "findings"?: [{ "kind", "screen", "target"?, "source"?, "text"?, "evidence", ...facts }],
@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { droppedFontLines } from "./lib/font-report.mjs";
 
 export const DEFAULT_BUDGETS = {
   fontBytes: 1.6e6, /* one font file */
@@ -480,7 +481,8 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
   for (const e of entries) {
     const id = idOf(e.key), un = unreachableOf(e.flow);
     if (un.length) raw.push({ kind: "unreachable-states", frame: id, target: "", source: text(un[0].source) || e.flow.file,
-      evidence: un.map((u) => text(u.evidence) || `${u.name}: nothing in the UI leads to it`).join("; ") });
+      reason: un.map((u) => text(u.reason).trim()).filter(Boolean).join("; "),
+      evidence: un.map((u) => text(u.evidence) || `${u.name}: ${text(u.reason) || "nothing in the UI leads to it"}`).join("; ") });
     if (e.cap) {
       const seen = new Set();
       for (const c of Object.values(Object.values(e.cap.captures || {})[0] || {})) for (const l of c.links || []) {
@@ -565,7 +567,7 @@ async function main(argv) {
   fs.writeFileSync(path.join(path.dirname(out), "assemble-report.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(`Wrote ${out} (${report.sizesKB.file} KB): ${report.screens} screens, ${report.links} connectors, ${report.findings} findings.`);
   console.log(`Inlined ${report.fonts.inlined} fonts and ${report.images.inlined} images.`);
-  for (const d of report.dropped.fonts) console.log(`  dropped font ${d.family}: ${d.reason}`);
+  for (const line of droppedFontLines(report.dropped.fonts)) console.log(line);
   for (const d of report.dropped.images) console.log(`  dropped image ${d.url}: ${d.reason}`);
   if (report.looseScreens.length) console.log(`  not in any group: ${report.looseScreens.join(", ")}`);
   if (report.htmlImagesNotInlined) console.log(`  ${report.htmlImagesNotInlined} <img> sources in the markup are not inlined and will not load from the file.`);

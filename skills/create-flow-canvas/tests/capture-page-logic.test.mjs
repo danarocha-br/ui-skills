@@ -6,7 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import vm from "node:vm";
-import { freezeClockAndRandom } from "../scripts/lib/determinism.mjs";
+import { freezeClockAndRandom, seedLocalStorage } from "../scripts/lib/determinism.mjs";
+import { droppedFontLines } from "../scripts/lib/font-report.mjs";
+import { readScenarios, stateStorage } from "../scripts/lib/scenarios.mjs";
 import { componentName, declaredComponents } from "../scripts/lib/components.mjs";
 import { fitsBudget } from "../scripts/lib/budget.mjs";
 import { diffPixels } from "../scripts/lib/pixels.mjs";
@@ -48,6 +50,30 @@ test("explicit dates and subclasses still work", () => {
   assert.equal(inFrozenWorld("new Date(2000, 0, 1) instanceof Date"), true);
   assert.equal(inFrozenWorld("class D extends Date { hi() { return 1; } }; new D().hi()"), 1);
   assert.equal(inFrozenWorld("Date.UTC(1970, 0, 1)"), 0);
+});
+
+test("localStorage is seeded before the page runs, and a page that refuses storage is left alone", () => {
+  const seeded = vm.runInNewContext(`const store = {}; globalThis.localStorage = { setItem: (k, v) => { store[k] = v; } }; (${seedLocalStorage})({ consent: "1", b: "x" }); JSON.stringify(store)`);
+  assert.deepEqual(JSON.parse(seeded), { consent: "1", b: "x" });
+  assert.doesNotThrow(() => vm.runInNewContext(`Object.defineProperty(globalThis, "localStorage", { get() { throw new Error("denied"); } }); (${seedLocalStorage})({ a: "1" });`));
+});
+
+test("skipped font subsets are one line with guidance, and a real drop keeps its own line", () => {
+  const subset = "a unicode-range subset, not the base family";
+  const lines = droppedFontLines([{ family: "Geist", reason: subset }, { family: "Geist", reason: subset }, { family: "Mono", reason: subset }, { family: "Big", reason: "over budget" }]);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /dropped font Big: over budget/);
+  assert.match(lines[1], /3 .*Geist, Mono.*check/);
+  assert.deepEqual(droppedFontLines([]), []);
+});
+
+test("a scenarios file seeds localStorage per state, and rejects anything but strings", () => {
+  const screen = (state) => ({ screens: [{ id: "a", route: "/", url: "/", states: [{ name: "One", ...state }] }] });
+  assert.deepEqual(stateStorage({ localStorage: { b: "2", c: "3" } }, { localStorage: { a: "1", b: "x" } }), { a: "1", b: "2", c: "3" });
+  assert.deepEqual(stateStorage({}, {}), {});
+  assert.doesNotThrow(() => readScenarios({ ...screen({ localStorage: { a: "1" } }), localStorage: { b: "2" } }));
+  assert.throws(() => readScenarios(screen({ localStorage: { a: 1 } })), /localStorage/);
+  assert.throws(() => readScenarios({ ...screen({}), localStorage: "x" }), /localStorage/);
 });
 
 test("a component's name is read from each shape React gives it", () => {
