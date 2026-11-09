@@ -49,7 +49,7 @@ Read `package.json` and the lockfile. **Next.js is the tested path.** Other Reac
 
 Install from the lockfile with lifecycle scripts off, since this is code you are about to run with no review: `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, or for Yarn `yarn install --immutable --mode=skip-build` (Yarn 1: `yarn install --frozen-lockfile --ignore-scripts`). If a native package then fails to load, rebuild only that one.
 
-If Playwright isn't available: `npm i --no-save playwright`, here in the copy, never in the original. In a pnpm or Yarn workspace, install it into an empty temp folder instead and set `FLOW_PLAYWRIGHT` to its `node_modules/playwright`.
+If Playwright isn't available, install it into an empty temp folder, not into the copy: `P="$(mktemp -d)"; (cd "$P" && npm init -y >/dev/null && npm i playwright)`, then record where it is so every later command finds it: `mkdir -p .flow-canvas && echo "$P/node_modules/playwright" > .flow-canvas/playwright-path`. (A plain `npm i --no-save playwright` inside a pnpm project fails, and an exported `FLOW_PLAYWRIGHT` doesn't survive to the next command; the scripts read the file, and `FLOW_PLAYWRIGHT` still wins if set.)
 
 ### 3. Find routes and write mocks
 
@@ -63,11 +63,15 @@ cp -R .flow-canvas/mocks/. ./
 cp .flow-canvas/env.fake .env.local
 ```
 
+**Where mocks go in a monorepo.** Mocks mirror paths from the app folder. A seam that lives in a sibling package (`packages/auth`, `packages/database`) is outside it, so keep those under `.flow-canvas/mocks/_root/`, mirroring paths from the workspace root, and copy them with a second command (`cp -R .flow-canvas/mocks/_root/. ../../`, from the app folder, adjusting the number of levels). The first command would otherwise create a literal `_root` folder in the app, so exclude it: `rsync -a --exclude _root .flow-canvas/mocks/ ./` does both jobs.
+
 Keeping them apart from the source is what makes them reusable on the next regeneration. Start the server, with the outside network blocked and on a port you pick:
 
 ```bash
 NODE_OPTIONS="--require $SKILL/scripts/block-network.cjs" npm run dev -- --port 3210
 ```
+
+If the project's `dev` script isn't plain Node (`bun --bun next dev`, `turbo dev`), run the framework directly under Node so the preload applies: `NODE_OPTIONS=... npx next dev --port 3210` (Vite: `npx vite --port 3210`). If a `predev` or env check rejects the fake values, use the project's own skip flag (`SKIP_ENV_VALIDATION=true` for t3-env) rather than editing the check. Both are choices to mention in your report.
 
 Run it in the background and watch its log. `[flow-canvas] refused outbound connection to <host>` names something you haven't mocked: mock it. If the app fetches fonts at build time from JavaScript, let those hosts through with `FLOW_ALLOW_HOSTS=fonts.googleapis.com,fonts.gstatic.com`. Use the dev server, not a production build, because component names come from React's development fibers. Native code such as a Rust bundler doesn't go through Node and isn't covered by the preload, which is one more reason the keys have to be fake.
 
@@ -84,6 +88,8 @@ Ways a state can fall short:
 - **Exists in code, can't be reproduced.** List it under the screen's `unreachable` in flows.json with evidence. It shows as a state marked `reachable:false` in the scan, and assemble writes the finding. Also list a state you did capture if nothing in the real UI leads to it. The canvas words every such finding as "no entry point in the UI", which overstates a state you merely couldn't mock, so try a scenario first and say which it was in your report.
 - **Exists on only some devices** (a hover menu, a desktop-only panel). Give it `devices`. The other devices get a "doesn't exist on this device" placeholder automatically. Don't list such a state first: the first state is the screen's default render and has no placeholder.
 
+**Capture what a person lands on.** A page that redirects after load (a checkout-success page that sends the customer home after a moment) is captured wherever it ends, and capture says so: the capture's signals carry `redirected` with where it ended. Decide what the frame is for. To show the page itself, give that state a short `settleMs` so it is caught before the redirect, name it for what it is ("Redirecting"), and add a second state or screen for where the customer ends up. Don't stub the redirect out to get a prettier picture of a page that is only "Redirecting...": that frame is honest but uninformative, so write in the screen's `note` what the customer then sees. If you can't reproduce the landing (it needs a provider's answer), list it under `unreachable` with the line of code.
+
 In-screen tap reactions are not generated in this version. Don't write a `behaviour.js`; assemble would pick one up, but states come from real captures. Taps on links still follow connectors.
 
 ### 5. Capture, and repair what's wrong
@@ -92,9 +98,9 @@ In-screen tap reactions are not generated in this version. Don't write a `behavi
 node "$SKILL/scripts/capture.mjs" http://localhost:3210
 ```
 
-It only accepts a local address. It captures each screen × state × device in a fresh browser context, with the clock and random numbers frozen, and writes `.flow-canvas/capture/`: `capture.json`, `report.json` and one `ref-<screen>-<state>-<device>.png` per capture. Options: `--scenarios`, `--out`, and `--src` (the folder scanned for component names; default `src/`, or the project root).
+It only accepts a local address. It captures each screen × state × device in a fresh browser context, with the clock and random numbers frozen, and writes `.flow-canvas/capture/`: `capture.json`, `report.json` and one `ref-<screen>-<state>-<device>.png` per capture. Options: `--scenarios`, `--out`, `--src` (the folder scanned for component names; default `src/`, or the project root), `--only id,id` (recapture just those screens, keep the rest), and `--timeout ms`. Expect several minutes: it first requests each URL once so a dev server compiles cold routes outside the page-load limit, then takes about 5 to 15 seconds per capture. A browser that dies mid-run is relaunched and the capture retried once.
 
-**A clean exit doesn't mean right screens.** Read `report.json`, where each capture has `signals` (skeleton, spinner, error-toast, error-text, near-empty, dev-overlay) and `pageErrors`. Then open the reference PNGs and look at them. A mock can produce a perfectly rendered error page, and every later check will agree with it.
+**A clean exit doesn't mean right screens.** Read `report.json`, where each capture has `signals` (skeleton, spinner, error-toast, error-text, near-empty, dev-overlay, redirected), `finalUrl` and `pageErrors`, and the top-level `warnings`. Then open the reference PNGs and look at them. A mock can produce a perfectly rendered error page, and every later check will agree with it. Signals are suspicions: a state you looked at and accept lists them under `acknowledge`, and they stop showing. A `WARNING ... render the same` line means a persona or scenario changed nothing: the mock isn't reading its cookie.
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
@@ -103,6 +109,10 @@ It only accepts a local address. It captures each screen × state × device in a
 | Skeleton or spinner | A callback or subscription in a mock never fires | Mock the behaviour, raise `settleMs` only if it was merely slow |
 | Error toast, "Missing API key" | Fake env value missing, or a mock returning an error | Add it |
 | `escaped` hosts in the output | The app redirected somewhere outside | Mock the route that redirects |
+| `redirected` signal | A client-side redirect after load; the capture is where the page ended, not the page you asked for | Decide which one the frame is for (step 4, "Capture what a person lands on") |
+| Every page is the Next or Vite error overlay | The dev server's compiler or a subprocess died (a SIGTERM in its log) | Restart the server, then recapture |
+| `FAILED` with a timeout on a state that waits for an animation | A frozen clock stops time-based animation | `"freeze": { "clock": "run" }` in scenarios.json |
+| Mock or seed data changed, picture didn't | A module cached state on `globalThis` | Restart the server, then recapture |
 | `no component names` | Not React, or not a dev build | Expected off React; otherwise use the dev server |
 
 Exit code 1 means at least one capture failed. Don't assemble over a failure: the canvas would show a "Capture failed" placeholder, and validate rejects it. Repair each page in this order, and stop when you reach the bounds. A long tail of mock-fixing on one page costs more than an honest placeholder:
@@ -111,7 +121,7 @@ Exit code 1 means at least one capture failed. Don't assemble over a failure: th
 2. **Render the page without its layout.** If a shell or provider is what breaks, stub that layout in `.flow-canvas/mocks/` so the page body renders and the stub survives a regeneration. Mark the screen `approximate: true`.
 3. **Placeholder plus finding.** Remove it from scenarios, add it to flows.json with `route` and `unrendered: "<the actual reason>"`, and add a finding saying what's missing.
 
-Use `approximate: true` for any screen with a stubbed part someone could mistake for real: a replaced widget, a canned chart, an edited page. Use `unrendered` only when there's no render at all. If a mock changes, rerun capture for everything; it's cheap next to a mismatched canvas.
+Use `approximate: true` for any screen with a stubbed part someone could mistake for real: a replaced widget, a canned chart, an edited page. Use `unrendered` only when there's no render at all. If a mock changes, recapture the screens that use it with `--only`, or everything when it is a shared seam: a mismatched canvas costs more than a rerun. To drop one state, remove it from scenarios.json and recapture its screen with `--only`.
 
 ### 6. Name groups, and state findings
 
@@ -137,13 +147,13 @@ Fidelity reads the assembled canvas, so assembly comes first. The server can sto
 
 **Assemble** writes `.flow-canvas/flow-canvas.html` and `assemble-report.json`, always from the skill's current template. Options: `--capture`, `--flows`, `--out`, `--template`. It stops with a list of problems when flows.json and the capture disagree; fix each one. Check the report's `dropped` fonts and images. A dropped font visibly changes the screen, and a font over budget can be allowed with `budgets` in flows.json if the file size can bear it.
 
-**Fidelity** renders each capture as the canvas will and compares it to its reference, writing `fidelity.json` and `snap-*.png`. Default threshold 1%; options `--max-pct` and `--out`. Over threshold, compare `snap-<name>.png` with `ref-<name>.png` at the rows it names. Causes are usually a dropped font or a stylesheet that didn't make it across. Fix the cause and don't raise the threshold to pass: a raised threshold hides exactly what this check exists to find. If a difference is real but small and you can't remove it, keep the threshold and report that screen. `MISSING` means no reference exists for a render. A match only proves the capture equals the running copy, not that the mock was right.
+**Fidelity** renders each capture as the canvas will and compares it to its reference, writing `fidelity.json` and `snap-*.png`. Default threshold 1%; options `--max-pct` and `--out`. Over threshold, compare `snap-<name>.png` with `ref-<name>.png` at the rows it names. Causes are usually a dropped font or a stylesheet that didn't make it across. Besides pixels, fidelity counts the page's text by colour in the reference and in the canvas, and fails when more than 5% of the characters changed colour (`--max-color-pct`): that is how a wrong stylesheet shows up, since the words are a sliver of the picture. Other causes seen: a WebGL canvas (its pixels aren't in the markup; the capture stores a still, which can differ), a `<video>` with no source (the canvas shows native controls), and a scrolled container (the reference had scrolled to the bottom of a chat). Fix the cause and don't raise the threshold to pass: a raised threshold hides exactly what this check exists to find. If a difference is real but small and you can't remove it, keep the threshold and report that screen. `MISSING` means no reference exists for a render. A match only proves the capture equals the running copy, not that the mock was right.
 
 **Validate** reads the finished file with the canvas's own scan reader. Option: `--max-bytes`. Errors mean the page would open broken; each message names what to fix. Re-run from assemble after changing flows.json, and from capture after changing scenarios.json. Read warnings too: a "blank screen" warning means a device has no render for a screen's first state, usually because of a device-limited first state. A failed capture is an error.
 
 ### 8. Open it and look
 
-The scripts can't tell you it reads well. Open the canvas in a visible browser tab (frames away from the view mount lazily; a background tab can look frozen). Check:
+The scripts can't tell you it reads well. `node "$SKILL/scripts/screenshot.mjs"` writes `.flow-canvas/canvas.png` and lists console errors, which is the way to look when no browser will open a `file://` page. Otherwise open the canvas in a visible browser tab (frames away from the view mount lazily; a background tab can look frozen). Check:
 
 - Every group's frames show real screens, not skeletons or error pages.
 - Switch mobile, tablet and desktop. Use the state switcher on a screen with several states.
@@ -159,7 +169,7 @@ Copy the reusable part back into the original repository. This new folder is the
 
 ```bash
 mkdir -p "$REPO/.flow-canvas"
-cp -R .flow-canvas/mocks .flow-canvas/env.fake .flow-canvas/scenarios.json .flow-canvas/flows.json .flow-canvas/flow-canvas.html "$REPO/.flow-canvas/"
+cp -R .flow-canvas/mocks .flow-canvas/env.fake .flow-canvas/scenarios.json .flow-canvas/flows.json .flow-canvas/flow-canvas.html "$REPO/.flow-canvas/"   # mocks/_root comes with mocks
 ```
 
 Scan `mocks/` and `env.fake` for anything real before running this. In a monorepo, use the app's folder under `$REPO`, the same level you ran the scripts from. Don't commit unless asked. Recommend committing `mocks/`, `env.fake`, `scenarios.json` and `flows.json`, and adding `.flow-canvas/capture/` to `.gitignore`: it is large and rebuilt each run. Delete the throwaway copy when you're done, and stop the dev server.

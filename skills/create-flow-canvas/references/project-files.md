@@ -7,7 +7,8 @@ Read this while writing `.flow-canvas/scenarios.json` (step 4) or `.flow-canvas/
 ```json
 {
   "cookies": { "persona": "flow-persona", "scenario": "flow-scenario" },
-  "freeze": { "now": "2026-01-15T12:00:00.000Z", "seed": 42 },
+  "freeze": { "now": "2026-01-15T12:00:00.000Z", "seed": 42, "clock": "frozen" },
+  "loadTimeoutMs": 90000,
   "budgets": { "item": 150000, "total": 1500000 },
   "settleMs": 4000,
   "screens": [
@@ -32,7 +33,8 @@ Only `screens` is required; the other top-level keys show their defaults.
 | Field | Meaning |
 | --- | --- |
 | `cookies` | Names of the two cookies capture sets. Your mock reads them. |
-| `freeze` | `Date` is frozen at `now` and `Math.random` seeded, so regenerating gives the same picture. |
+| `freeze` | `Date` is frozen at `now` and `Math.random` seeded, so regenerating gives the same picture. `"clock": "run"` starts the clock at `now` but lets it advance, for animation libraries that stall on a clock that stands still. `false` turns freezing off. |
+| `loadTimeoutMs` | How long a page may take to load, 90 seconds by default. Capture first requests each URL once, outside this limit, so a cold dev-server compile doesn't count; `--timeout` overrides it. |
 | `budgets` | Bytes of inlined media in the page: `item` per image, `total` per capture. Over budget, an image is dropped and listed. |
 | `settleMs` | Wait after page load before any step. Raise it for a screen that is still loading in its reference. |
 | `screens[].id` | Letters, digits, `_`, `-`; unique. Derive it from the route pattern and keep it for good. |
@@ -41,6 +43,8 @@ Only `screens` is required; the other top-level keys show their defaults.
 | `states[].name` | Shown on the canvas. The first state is the screen's default render, so list one that exists on every device first: only later states get the "doesn't exist on this device" placeholder. |
 | `states[].persona` | Value of the persona cookie. |
 | `states[].scenario` | Value of the scenario cookie. |
+| `states[].settleMs` | Wait for this state instead of the top-level `settleMs`. Use a short one to capture a transient page before it redirects, and the default to capture where it ends up. |
+| `states[].acknowledge` | Signal kinds (`near-empty`, `skeleton`, ...) you checked and accept for this state, such as `near-empty` on a page that really is just "Redirecting...". They stop showing under "to look at". |
 | `states[].devices` | Limit to some of `mobile` (390×844), `tablet` (768×1024), `desktop` (1200×772). Default: all three. |
 | `states[].steps` | Run in order after settling, each `{ "click": sel }`, `{ "hover": sel }`, `{ "fill": sel, "value": text }`, `{ "press": key }`, `{ "wait": ms }` or `{ "waitFor": sel }`. Each selector step waits at most 10 seconds. |
 

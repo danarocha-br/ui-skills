@@ -17,6 +17,17 @@ Look for the smallest number of files that everything passes through, and replac
 
 Prefer a seam high enough that one fake covers many callers. Editing individual pages is a last resort, and a page edited that way is `approximate: true`.
 
+Not every seam is a client. These came up on real apps, and each needs its own move:
+
+- **A query builder that is the data layer (Drizzle, Kysely, raw SQL).** A Proxy fake can't answer joins and aggregates. Replace the one module that creates the database handle with an in-memory Postgres (PGlite) migrated from the repo's own migration files and filled with invented rows. The real queries then run, so the screens show what the code computes. Seed dates must sit inside the frozen clock's "last 7 days" (see Dates and clocks).
+- **An admin or service-role client**, next to the user client. List it as its own seam: pages that read it for counts and membership otherwise render empty or crash.
+- **Realtime (Liveblocks and the like).** Stub the room provider and the presence component so they render children and emit nothing. Removing presence avatars changes the picture: say so in the screen's `note`, and mark the screen `approximate` when the missing part is large.
+- **A hosted widget (Clerk's sign-in, an embedded third-party iframe, a map).** It won't load with the network blocked. Replace it with a labelled stand-in, and mark the screen `approximate: true`. A blank hole reads as a product bug.
+- **Build-time seams.** A `next.config` that validates env, imports a font from the network, or wraps the config in a vendor plugin can stop the server before any page loads. Mock the config file too.
+- **Providers that live in a sibling workspace package** (`packages/auth`, `packages/database`). The mock goes at that path: see Where mocks go in a monorepo in SKILL.md step 3.
+
+**One function in a large file.** The Stripe call is one function inside a 360-line module whose other exports must stay real. A mock replaces a whole file, so either copy the file with only that function changed, or add a thin module the page already imports and swap that. Mark the copy in a comment (`/* flow-canvas: only retrieveSession is changed */`) so the next regeneration can compare it with the upstream file, which may have moved on.
+
 ## Mock behaviour, not only shape
 
 An API with the right types can still strand the UI. On Jolly Code the editor was captured as a loading skeleton because the fake `onAuthStateChange` never called back. Callbacks must fire, subscriptions must emit their initial value, and promises must resolve. When a screen is stuck loading, look for the event it is waiting on.
@@ -26,6 +37,16 @@ Return the error shape the real client returns, too. A missing row should look l
 ## Personas and scenarios
 
 Capture sets two cookies per state, `flow-persona` and `flow-scenario` by default. They are readable on the server and in the browser, so one fake serves both. A persona is who is looking (guest, member, admin, a paid plan). A scenario is what the data looks like (empty, error, over quota, paid). Read each cookie with a default so a page with no cookie still renders.
+
+After any change to a mock or its seed data, restart the dev server. Module state kept on `globalThis` (a seeded database, a cached client) survives hot reloads, so a rerun against the old process captures the old data and sends you looking for a bug that is already fixed.
+
+**Check that a persona actually changes something.** A mock that fails to read its cookie gives every state the same result, and the screen still looks fine: on Orbix the admin and member captures were byte-identical, so admin pages rendered read-only for everyone. Give each persona one thing visibly its own (a name in the header, an admin-only control), and read capture's `WARNING ... render the same` line: it names two states that ask for different personas or scenarios but produce identical markup on a device.
+
+## Dates and clocks
+
+Capture freezes `Date` at `freeze.now` (2026-01-15 by default). Invented rows dated later are "in the future" to a "last 7 days" panel and the panel is empty. Date the seed relative to `freeze.now`, or set `freeze.now` to fit the seed.
+
+A frozen clock stops anything that animates by time. GSAP-style timelines never advance, so a state that waits for an animation to finish times out on every device. Set `"freeze": { "clock": "run" }` in scenarios.json: the clock starts at `freeze.now` and then runs, and random numbers stay seeded. `"freeze": false` turns both off, for a page that cannot be captured otherwise; the picture is then not repeatable.
 
 ## Environment
 
@@ -106,5 +127,7 @@ Most missed states sit behind something the mock did not provide. For each page,
 - Calls to a provider whose answer decides what renders: `stripe.checkout.sessions.retrieve`, an OAuth callback code, an invite token.
 - Conditionals on plan, role, quota, flag or dates.
 - `loading.tsx`, `error.tsx`, `not-found.tsx`, and `if (!data)` or `redirect(` near the top of a page.
+
+Redirect-only routes (a page whose only job is `redirect()`) are not screens: capture follows them, so list them in your report instead. `error.tsx` boundaries need a thrown error: add a scenario value your mock turns into a throw for one data call, capture it as a state, or report the boundary as not reached.
 
 For Jolly Code's checkout-success page (SKILL.md step 4), the fix is a Stripe mock that returns a paid session for a known id, and a second scenarios entry whose `url` carries that id (`project-files.md` has the exact shape). Where you can't reach a branch that way, record it under `unreachable` in flows.json, with the line of code as evidence, so the reader knows it exists.
