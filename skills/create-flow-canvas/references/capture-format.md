@@ -13,7 +13,7 @@ Rule is { s, t, u } (style rule: selector, text, used), { g, c: [Rule] } (groupi
 `html` carries `data-flow-c="Name Name"` and `data-flow-href`.
 
 Each capture (`captures[state][device]`) also has:
-- `scrollH` (number), as the spike had
+- `scrollH` (number)
 - `pageErrors: [string]`, uncaught page errors, at most 5
 - `signals: [{ kind, count, samples?: [string] }]`, suspected wrong mock. kind is skeleton | spinner | error-toast | error-text | near-empty | dev-overlay
 - `components: { source: "react-fiber" | "none", tagged: number, error?: string }`. With "none", `html` has no `data-flow-c`

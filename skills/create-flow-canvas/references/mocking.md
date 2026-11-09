@@ -29,7 +29,7 @@ Capture sets two cookies per state, `flow-persona` and `flow-scenario` by defaul
 
 ## Environment
 
-Don't copy `.env`. Put a file of invented values at `.flow-canvas/mocks/.env.local`, one per key the app requires, shaped like the real thing and pointing nowhere (`sk_test_flowcanvas`, `http://localhost:9`). Both matter when validation is involved: set the validator's skip flag (t3-env has one) and still give every key a fake value, because SDKs such as `new Resend()` throw at module load on a missing key.
+Don't copy `.env`. Put invented values in `.flow-canvas/env.fake` (a name most `.gitignore` files don't exclude, and SKILL.md step 3 copies it to `.env.local`), one per key the app requires, shaped like the real thing and pointing nowhere (`sk_test_flowcanvas`, `http://localhost:9`). Both matter when validation is involved: set the validator's skip flag (t3-env has one) and still give every key a fake value, because SDKs such as `new Resend()` throw at module load on a missing key.
 
 This file is committed, so it holds nothing real, ever.
 
@@ -44,7 +44,7 @@ Two things to watch, because the data ends up in the picture:
 
 ## A worked shape
 
-The Jolly Code spike replaced four files in `src/utils/supabase/` with one fake client, and stubbed `Room` and `users-presence` (Liveblocks). Every route rendered.
+On Jolly Code, a real Next.js app, the first version replaced four files in `src/utils/supabase/` with one fake client, and stubbed `Room` and `users-presence` (Liveblocks). Every route rendered.
 
 ```ts
 /* All data here is invented. */
@@ -107,4 +107,4 @@ Most missed states sit behind something the mock did not provide. For each page,
 - Conditionals on plan, role, quota, flag or dates.
 - `loading.tsx`, `error.tsx`, `not-found.tsx`, and `if (!data)` or `redirect(` near the top of a page.
 
-Jolly Code's checkout-success page is the example to learn from. Captured at its bare URL it showed only the no-`session_id` branch, which is the screen almost nobody sees. The real path needs a `session_id` and a Stripe session to look up. The fix is a Stripe mock that returns a paid session for a known id, and a second scenarios entry whose `url` carries that id. Where you can't reach a branch that way, record it under `unreachable` in flows.json, with the line of code as evidence, so the reader knows it exists.
+For Jolly Code's checkout-success page (SKILL.md step 4), the fix is a Stripe mock that returns a paid session for a known id, and a second scenarios entry whose `url` carries that id (`project-files.md` has the exact shape). Where you can't reach a branch that way, record it under `unreachable` in flows.json, with the line of code as evidence, so the reader knows it exists.

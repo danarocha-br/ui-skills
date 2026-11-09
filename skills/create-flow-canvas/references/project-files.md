@@ -42,16 +42,16 @@ Only `screens` is required; the other top-level keys show their defaults.
 | `states[].persona` | Value of the persona cookie. |
 | `states[].scenario` | Value of the scenario cookie. |
 | `states[].devices` | Limit to some of `mobile` (390×844), `tablet` (768×1024), `desktop` (1200×772). Default: all three. |
-| `states[].steps` | Run in order after settling, each `{ "click": sel }`, `{ "hover": sel }`, `{ "fill": sel, "value": text }`, `{ "press": key }`, `{ "wait": ms }` or `{ "waitFor": sel }`. Each waits at most 10 seconds. |
+| `states[].steps` | Run in order after settling, each `{ "click": sel }`, `{ "hover": sel }`, `{ "fill": sel, "value": text }`, `{ "press": key }`, `{ "wait": ms }` or `{ "waitFor": sel }`. Each selector step waits at most 10 seconds. |
 
-A state cannot change the URL. A branch that depends on the URL is a second entry in `screens`, with the same `route`, its own `id` and its own `url`:
+A state cannot change the URL. A branch that depends on the URL is a second entry in `screens`, with its own `id`, `url` and a `route` that names the branch:
 
 ```json
-{ "id": "checkout-success-paid", "route": "/checkout/success", "url": "/checkout/success?session_id=cs_flow_1",
+{ "id": "checkout-success-session-id", "route": "/checkout/success?session_id", "url": "/checkout/success?session_id=cs_flow_1",
   "states": [{ "name": "Paid", "persona": "member" }] }
 ```
 
-It becomes its own frame. The two frames share a route, so the scan ids become the bare route id and `~2`, in order of the `id` values here; a link to that path goes to whichever of the two comes first in `flows.json`.
+It becomes its own frame, with a scan id made from that route. Don't reuse the exact same `route` string: the fidelity check then can't find the entry's reference and reports `MISSING`, and the ids become position-dependent (`~2`), which can move a reader's saved edits. A link to that path goes to whichever entry comes first in `flows.json`.
 
 ## flows.json: what you know about the product
 
@@ -81,12 +81,12 @@ It becomes its own frame. The two frames share a route, so the scan ids become t
 
 - `product.id` and `product.name` are required. `product.id` scopes the reader's saved layout, so it never changes, even through a rename.
 - Every captured screen needs an entry here with `name` and `file`, using its `id` from scenarios.json.
-- `approximate`, `unrendered` and `unreachable` are described in SKILL.md, step 5. An `unrendered` screen with no capture also needs `route`.
+- `unreachable` is described in SKILL.md step 4, `approximate` and `unrendered` in step 5. An `unrendered` screen with no capture also needs `route`.
 - A screen is in at most one group. A screen in none is a loose frame; assemble and validate list these.
 - Set a group's `id`. Without one it comes from the title up to the first colon, so a retitled group would lose the reader's edits. A group id must differ from every screen id.
 - `group.meta` defaults to the source folders of its screens. `open: false` starts it closed.
 - `caption` defaults to the screen's name over its route. `on: false` hides it.
-- `findings[].kind` and `evidence` are required. `text` is what the card says, and the only wording shown for any kind other than the two below. `evidence` stays in the scan and is not drawn, so make `text` state the claim.
+- `findings[].kind`, `screen` and `evidence` are required. `text` is what the finding says, and the only wording shown for any kind other than the two below. `evidence` stays in the scan and is not drawn, so make `text` state the claim.
 
 | Finding kind | Facts it needs | Notes |
 | --- | --- | --- |
@@ -95,6 +95,6 @@ It becomes its own frame. The two frames share a route, so the scan ids become t
 | `unnamed-link` | none of yours | Written by assemble for a captured link with no accessible name. |
 | anything else | `text` | Shown as written. |
 
-`budgets` may set `fontBytes` (1.6 MB), `fontTotalBytes` (3 MB), `imageBytes` (150 KB), `imageTotalBytes` (1.5 MB) and `fileBytes` (12 MB). Validate has its own `--max-bytes` for the file limit and does not read this field, so a raised `fileBytes` needs the flag too.
+In flows.json, `budgets` covers what assembly inlines (different from the `budgets` in scenarios.json) and may set `fontBytes` (1.6 MB), `fontTotalBytes` (3 MB), `imageBytes` (150 KB), `imageTotalBytes` (1.5 MB) and `fileBytes` (12 MB). Validate has its own `--max-bytes` for the file limit and does not read this field, so a raised `fileBytes` needs the flag too.
 
-There is no field for connectors, on purpose: see "Groups, connectors and findings" in SKILL.md.
+There is no field for connectors, on purpose: see step 6 of SKILL.md.
