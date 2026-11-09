@@ -418,6 +418,7 @@ test("a failed capture is recorded on its state, so the canvas can say it failed
   const capture = baseCapture();
   const a = capture.screens[0];
   a.captures.Open = { desktop: a.captures[Object.keys(a.captures)[0]].desktop };
+  a.captures.Lost = {}; /* capture.mjs creates the state before its first device is tried */
   a.states = [...a.states, { name: "Open" }, { name: "Lost" }];
   capture.errors = [
     { screen: a.id, state: "Open", device: "mobile", message: "Timeout waiting for #x", pageErrors: [] },
@@ -427,5 +428,5 @@ test("a failed capture is recorded on its state, so the canvas can say it failed
   const open = scan.screens.find((s) => s.states.some((st) => st.name === "Open")).states.find((st) => st.name === "Open");
   assert.deepEqual(open.failed, { mobile: "Timeout waiting for #x" });
   const lost = scan.screens.flatMap((s) => s.states).find((st) => st.name === "Lost");
-  assert.deepEqual(lost.failed, { desktop: "Navigation failed" }, "a state that failed everywhere is not silently dropped");
+  assert.deepEqual(lost.failed, { desktop: "Navigation failed" }, "a state that failed everywhere is kept, with the failure");
 });

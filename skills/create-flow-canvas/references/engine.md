@@ -46,7 +46,7 @@ The shape is documented in the header of `<script id="scan-module">`. The engine
 
 - Findings: the engine knows `unreachable-states` and `reused-component` and writes their wording from the facts the scan gives. Any other kind shows its `text`.
 - A screen with more than one rendered state gets the state switcher.
-- `approximate: true` puts a badge on the frame and a line in Inspect. `unrendered: "reason"` gives a placeholder with the reason where the screen has no render. A state missing a device gets a placeholder saying it does not exist there; the screen's first state, stored in `screen.html`, does not, and shows blank on that device.
+- `approximate: true` puts a badge on the frame and a line in Inspect. `unrendered: "reason"` gives a placeholder with the reason where the screen has no render. A state missing a device gets a placeholder saying it does not exist there; the screen's first state, stored in `screen.html`, does not, and shows blank on that device. A state's `failed: { device: reason }` (the assembler writes it from capture errors) gives "Capture failed on <device>" with the reason instead, first state included, and the validator treats it as an error.
 - The strip under a frame takes the background of a `.flow-root` element at the top of the screen when there is one and it is painted, otherwise the body's.
 - A button inside a screen (`data-go="<screen id>"`) only follows a connector that exists, so a link in the scan is the one answer to "A leads to B".
 

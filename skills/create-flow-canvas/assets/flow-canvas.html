@@ -5379,12 +5379,6 @@
               html: perDev(s.html),
             });
           });
-          /* a screen that could not render gets a placeholder where a render is missing, saying why */
-          screens.forEach((s) => {
-            if (!s.unrendered) return;
-            const markup = `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>This screen could not be rendered</strong><span>${escapeText(s.unrendered)}</span></div>`;
-            devices.forEach((d) => { if (!s.html[d]) s.html[d] = markup; });
-          });
           /* a capture that failed says so, apart from a state the product deliberately lacks on a device (below) */
           const placeholder = (title, why) => `<div style="flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#555;background:#f1f1ee"><strong>${title}</strong><span>${why}</span></div>`;
           screens.forEach((s) => s.states.forEach((st, i) => {
@@ -5395,6 +5389,12 @@
               if (!into[d]) into[d] = placeholder(`Capture failed on ${escapeText(d)}`, `This is a failure, not a product choice: ${escapeText(st.failed[d])}`);
             });
           }));
+          /* a screen that could not render gets a placeholder where a render is missing, saying why */
+          screens.forEach((s) => {
+            if (!s.unrendered) return;
+            const markup = placeholder("This screen could not be rendered", escapeText(s.unrendered));
+            devices.forEach((d) => { if (!s.html[d]) s.html[d] = markup; });
+          });
           /* a state the product only has on some devices: the others say so, rather than showing a blank frame */
           screens.forEach((s) => s.states.forEach((st) => {
             if (!st.html) return;

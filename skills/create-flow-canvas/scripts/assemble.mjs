@@ -340,7 +340,6 @@ export async function assemble({ capture, flows, template, fetchBytes: getBytes 
       for (const c of Object.values(e.cap.captures[n])) namesIn(c.html).forEach((x) => comps.add(x));
       return { name: n, reachable: !unreachNames.has(n), ...failedField(n), ...(i ? { html: perDevice(e.cap.captures[n], id) } : {}) };
     });
-    for (const n of failedOf.keys()) if (!names.includes(n)) states.push({ name: n, reachable: !unreachNames.has(n), ...failedField(n) });
     for (const u of unreachable) if (!states.some((st) => st.name === u.name)) states.push({ name: u.name, reachable: false });
     const first = names.length ? perDevice(e.cap.captures[names[0]], id) : {};
     screens.push({

@@ -105,7 +105,7 @@ It only accepts a local address. It captures each screen × state × device in a
 | `escaped` hosts in the output | The app redirected somewhere outside | Mock the route that redirects |
 | `no component names` | Not React, or not a dev build | Expected off React; otherwise use the dev server |
 
-Exit code 1 means at least one capture failed. Don't assemble over a failure: a device that failed looks exactly like a device-limited state, and the canvas would say the state doesn't exist there. Repair each page in this order, and stop when you reach the bounds. A long tail of mock-fixing on one page costs more than an honest placeholder:
+Exit code 1 means at least one capture failed. Don't assemble over a failure: the canvas would show a "Capture failed" placeholder, and validate rejects it. Repair each page in this order, and stop when you reach the bounds. A long tail of mock-fixing on one page costs more than an honest placeholder:
 
 1. **Repair the mock**, up to about three attempts per page, each aimed at a specific error.
 2. **Render the page without its layout.** If a shell or provider is what breaks, stub that layout in `.flow-canvas/mocks/` so the page body renders and the stub survives a regeneration. Mark the screen `approximate: true`.
@@ -139,7 +139,7 @@ Fidelity reads the assembled canvas, so assembly comes first. The server can sto
 
 **Fidelity** renders each capture as the canvas will and compares it to its reference, writing `fidelity.json` and `snap-*.png`. Default threshold 1%; options `--max-pct` and `--out`. Over threshold, compare `snap-<name>.png` with `ref-<name>.png` at the rows it names. Causes are usually a dropped font or a stylesheet that didn't make it across. Fix the cause and don't raise the threshold to pass: a raised threshold hides exactly what this check exists to find. If a difference is real but small and you can't remove it, keep the threshold and report that screen. `MISSING` means no reference exists for a render. A match only proves the capture equals the running copy, not that the mock was right.
 
-**Validate** reads the finished file with the canvas's own scan reader. Option: `--max-bytes`. Errors mean the page would open broken; each message names what to fix. Re-run from assemble after changing flows.json, and from capture after changing scenarios.json. Read warnings too: a "blank screen" warning means a device has no render for a screen's first state, usually because of a failed capture or a device-limited first state.
+**Validate** reads the finished file with the canvas's own scan reader. Option: `--max-bytes`. Errors mean the page would open broken; each message names what to fix. Re-run from assemble after changing flows.json, and from capture after changing scenarios.json. Read warnings too: a "blank screen" warning means a device has no render for a screen's first state, usually because of a device-limited first state. A failed capture is an error.
 
 ### 8. Open it and look
 

@@ -416,6 +416,15 @@ test("a failed first state, or a state that failed everywhere, still gets a plac
   for (const d of ["mobile", "tablet", "desktop"]) assert.match(scan.screens[0].states[1].html[d], new RegExp("Capture failed on " + d));
 });
 
+test("a failure on a screen that is also unrendered still reads as a failure", () => {
+  const raw = JSON.parse(tinyRaw);
+  delete raw.screens[0].html.mobile;
+  raw.screens[0].unrendered = "no route";
+  raw.screens[0].states = [{ name: "Default", failed: { mobile: "boom" } }];
+  const { scan } = readScan(raw);
+  assert.match(scan.screens[0].html.mobile, /Capture failed on mobile/);
+});
+
 test("a state placeholder leaves the first state and a state with no html of its own alone", () => {
   const { scan } = readScan(withDesktopOnlyState());
   assert.equal(scan.screens[0].states[0].html, undefined, "the first state is the screen's own render");

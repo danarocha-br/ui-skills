@@ -75,7 +75,7 @@ export function validate(html, { budgets = {}, scriptTimeoutMs = 5000 } = {}) {
     if (!s || typeof s !== "object") continue;
     const name = `screen "${s.id}" (route ${s.route || "none"})`;
     for (const st of Array.isArray(s.states) ? s.states : []) if (st && st.failed && typeof st.failed === "object")
-      for (const [d, why] of Object.entries(st.failed)) errors.push(`${name}, state "${st.name}": the capture failed on ${d} (${why}). The canvas shows a failure placeholder there. Repair the capture and re-run, or give the screen an "unrendered" reason.`);
+      for (const [d, why] of Object.entries(st.failed)) errors.push(`${name}, state "${st.name}": the capture failed on ${d} (${why}). The canvas shows a failure placeholder there. Repair the capture and re-run.`);
     const rendered = devices.filter((d) => typeof htmls(s.html)[d] === "string" && htmls(s.html)[d].trim());
     if (!rendered.length && !(typeof s.unrendered === "string" && s.unrendered.trim()))
       errors.push(`${name} has no frame: no render on any device and no "unrendered" reason to give it a placeholder.`);
